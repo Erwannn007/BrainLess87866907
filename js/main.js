@@ -125,7 +125,8 @@ let tod = 0.3;
 let time = 0;
 const player = { x: 0, y: 0, z: 0, dir: 2, anim: 'idle', t: 0, action: null, actionT: 0, hitDone: false, dustT: 0, stamina: 1, tired: false, sprinting: false,
   jz: 0, vz: 0, air: false, charging: false, charge: 0, slamPower: 0, runFrame: -1,
-  slide: null, mv: null, idleT: 0, water: 0, rippleT: 0 };
+  slide: null, mv: null, idleT: 0, water: 0, rippleT: 0,
+  chargeKind: null, punchHoldT: 0, punchPower: 0, combo: 0, lastPunch: -1, punchBuf: false };
 let windT = 0; // rafale après une frappe au sol : la végétation s'agite
 const hits = new Map();
 const particles = [];
@@ -184,6 +185,7 @@ function held(k) {
 }
 const sprintHeld = () => held('s') || keys.has('ShiftLeft') || keys.has('ShiftRight');
 const chargeHeld = () => held('b') || keys.has('KeyK') || keys.has('KeyE');
+const punchHeld = () => held('a') || keys.has('KeyJ');
 
 function buttonAt(x, y, slack) {
   let best = null, bd = 1e9;
@@ -387,7 +389,19 @@ function damage(tx, ty, dmg) {
   return true;
 }
 
-function doPunchHit() {
+// Enchaînement de boxeur : direct gauche, direct droit, crochet, et ça recommence.
+const JABS = ['jabL', 'jabR', 'hook'];
+const HIT_AT = { jabL: 0.32, jabR: 0.32, hook: 0.42, bigpunch: 0.22, slam: 0.44 };
+
+function startJab() {
+  if (!JABS.includes(player.action) && time - player.lastPunch > 0.45) player.combo = 0; // trop lent : on repart du direct gauche
+  const a = JABS[player.combo % JABS.length];
+  player.combo++;
+  player.punchBuf = false;
+  startAction(a);
+}
+
+function doPunchHit(strong) {
   const [dx, dy] = dirWorld(player.dir);
   const hx = player.x + dx * 0.85, hy = player.y + dy * 0.85;
   let best = null, bestD = 0.8;
@@ -401,7 +415,7 @@ function doPunchHit() {
     }
   }
   const gz = player.z;
-  if (best) { damage(best[0], best[1], 1); shake = Math.max(shake, 1.5); }
+  if (best) { damage(best[0], best[1], strong ? 2 : 1); shake = Math.max(shake, strong ? 2.5 : 1.5); }
   else { burst(hx, hy, gz + 18, ['#ffffff', '#d8e0f0'], 5, { up: 10, g: 0, life: 0.25, speed: 1.2 }); sfx.punchAir(); }
 }
 
@@ -420,6 +434,41 @@ function trample(vx, vy) {
       if (info.solid) shake = Math.max(shake, 3);
     }
   }
+}
+
+// Gros coup chargé : une bourrasque part droit devant et rase tout dans un cône.
+function doBigPunch(power) {
+  const [dx, dy] = dirWorld(player.dir);
+  const R = 2.2 + power * 4.5, half = 0.45 + power * 0.15;
+  sfx.bigPunch(power);
+  shake = Math.min(15, 5 + power * 9);
+  windT = 1 + power * 1.5;
+  fx.push({ kind: 'cone', x: player.x + dx * 0.5, y: player.y + dy * 0.5, z: player.z + 16, dx, dy, half, r: R, t: 0 });
+  fx.push({ kind: 'cone', x: player.x + dx * 0.5, y: player.y + dy * 0.5, z: player.z + 16, dx, dy, half: half * 0.7, r: R * 0.8, t: -0.1 });
+  const base = Math.atan2(dy, dx);
+  for (let i = 0; i < 50 + power * 120; i++) {
+    const a = base + (Math.random() * 2 - 1) * half, sp = 6 + Math.random() * (5 + power * 8);
+    particles.push({
+      x: player.x + dx * 0.6, y: player.y + dy * 0.6, z: player.z + 6 + Math.random() * 22,
+      vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, vz: (Math.random() - 0.5) * 10, g: 0, drag: 1.4,
+      life: 0.3 + Math.random() * 0.45, col: Math.random() < 0.75 ? '#ffffff' : '#d8ecff', size: Math.random() < 0.2 ? 2 : 1, streak: true,
+    });
+  }
+  burst(player.x + dx * 0.4, player.y + dy * 0.4, player.z, DUST_COLS, 20 + power * 30, { up: 20, speed: 3 + power * 3, g: 70, life: 0.8, spread: 1 });
+  // tout ce qui vole déjà est soufflé vers l'avant
+  for (const p of particles) {
+    const rx = p.x - player.x, ry = p.y - player.y, d = Math.hypot(rx, ry) || 1;
+    if (d < R * 1.5 && (rx * dx + ry * dy) / d > Math.cos(half * 1.3)) { p.vx += dx * 7; p.vy += dy * 7; p.vz += 10; }
+  }
+  const dmg = 2 + Math.round(power * 8);
+  for (let ty = Math.floor(player.y - R); ty <= Math.floor(player.y + R); ty++) {
+    for (let tx = Math.floor(player.x - R); tx <= Math.floor(player.x + R); tx++) {
+      const rx = tx + 0.5 - player.x, ry = ty + 0.5 - player.y, d = Math.hypot(rx, ry);
+      if (d > R || !world.objAt(tx, ty)) continue;
+      if (d < 0.9 || (rx * dx + ry * dy) / d > Math.cos(half)) damage(tx, ty, dmg);
+    }
+  }
+  for (const f of flyers) if ((f.x - player.x) * dx + (f.y - player.y) * dy > 0) f.scared = 3;
 }
 
 // Frappe au sol après la charge : plus la charge est longue, plus c'est violent.
@@ -461,16 +510,16 @@ function doSlam(power) {
 const CHARGE_COLS = [['#fff3b0', '#ffe28a'], ['#ffb347', '#ff9a3c'], ['#ff5a5a', '#ff2e63']];
 function chargeCols() { return CHARGE_COLS[Math.min(2, Math.floor(player.charge * 3))]; }
 
-function chargeEffects(dt) {
+function chargeEffects(dt, cx = player.x, cy = player.y, cz = player.z) {
   const c = player.charge;
   shake = Math.max(shake, 0.6 + c * 2);
   // énergie aspirée vers Brainless
   const n = (25 + c * 70) * dt;
   for (let i = 0; i < n + (Math.random() < n % 1 ? 1 : 0); i++) {
     const a = Math.random() * Math.PI * 2, d = 1.3 + Math.random() * 1.2, life = 0.35 + Math.random() * 0.2;
-    const x = player.x + Math.cos(a) * d, y = player.y + Math.sin(a) * d;
+    const x = cx + Math.cos(a) * d, y = cy + Math.sin(a) * d;
     particles.push({
-      x, y, z: player.z + Math.random() * 22, vx: -Math.cos(a) * d / life, vy: -Math.sin(a) * d / life, vz: 8,
+      x, y, z: cz + Math.random() * 22 - (cz - player.z) * 0.5, vx: -Math.cos(a) * d / life, vy: -Math.sin(a) * d / life, vz: 8,
       g: 0, drag: 0, life, col: chargeCols()[(Math.random() * 2) | 0], size: Math.random() < 0.3 ? 2 : 1, streak: true,
     });
   }
@@ -536,20 +585,53 @@ function update(dt) {
 
   // --- charge (maintenir B) puis frappe au sol au relâchement
   if (!player.action && !player.air && !player.slide && player.water < 2) {
-    if (chargeHeld()) {
-      if (!player.charging) { player.charging = true; player.charge = 0; player.sprinting = false; setAnim('charge'); chargeStart(); }
+    if (chargeHeld() && player.chargeKind !== 'punch') {
+      if (!player.charging) { player.charging = true; player.chargeKind = 'slam'; player.charge = 0; player.sprinting = false; setAnim('charge'); chargeStart(); }
       player.charge = Math.min(1, player.charge + dt / 1.6);
       chargeEffects(dt);
       chargeUpdate(player.charge);
-    } else if (player.charging) {
+    } else if (player.charging && player.chargeKind === 'slam') {
       player.charging = false;
+      player.chargeKind = null;
       chargeStop();
       sfx.roar(player.charge);
       player.slamPower = player.charge;
       startAction('slam');
     }
   }
-  if (input.punch && !player.action && !player.charging && !player.air && !player.slide && player.water < 2) startAction('punch');
+
+  // --- coups : tapoter = enchaînement, maintenir = il arme un gros coup
+  const canPunch = !player.air && !player.slide && player.water < 2 && player.chargeKind !== 'slam';
+  player.punchHoldT = punchHeld() ? player.punchHoldT + dt : 0;
+  if (canPunch) {
+    if (player.charging && player.chargeKind === 'punch') {
+      if (punchHeld()) {
+        player.charge = Math.min(1, player.charge + dt / 1.3);
+        const [dx, dy] = dirWorld(player.dir), [rx, ry] = dirWorld((player.dir + 2) % 8);
+        chargeEffects(dt, player.x - dx * 0.35 + rx * 0.3, player.y - dy * 0.35 + ry * 0.3, player.z + 18);
+        chargeUpdate(player.charge);
+      } else {
+        player.charging = false;
+        player.chargeKind = null;
+        chargeStop();
+        sfx.roar(player.charge * 0.6);
+        player.punchPower = player.charge;
+        startAction('bigpunch');
+      }
+    } else if (player.punchHoldT > 0.25 && !player.charging &&
+      (!player.action || (JABS.includes(player.action) && player.actionT > 0.5))) {
+      player.action = null;
+      player.charging = true;
+      player.chargeKind = 'punch';
+      player.charge = 0;
+      player.sprinting = false;
+      setAnim('pcharge');
+      chargeStart();
+    } else if (input.punch && !player.charging) {
+      if (!player.action) startJab();
+      else if (JABS.includes(player.action)) player.punchBuf = true; // le coup suivant part dès que possible
+    }
+  }
   input.punch = input.jump = false;
 
   if (player.slide) {
@@ -559,15 +641,23 @@ function update(dt) {
     const dur = A.frames / A.fps;
     const prev = player.actionT;
     player.actionT += dt / dur;
-    const hitAt = player.action === 'punch' ? 0.4 : 0.44;
+    const act = player.action;
+    const hitAt = HIT_AT[act] ?? 0.4;
     if (prev < hitAt && player.actionT >= hitAt) {
-      if (player.action === 'punch') doPunchHit(); else doSlam(player.slamPower);
+      if (JABS.includes(act)) doPunchHit(act === 'hook');
+      else if (act === 'bigpunch') doBigPunch(player.punchPower);
+      else doSlam(player.slamPower);
     }
-    if (player.action === 'punch' && player.actionT > 0.3 && player.actionT < 0.45) {
-      const [dx, dy] = dirWorld(player.dir);
-      tryMove(dx * dt * 2.5, dy * dt * 2.5);
+    // petit pas en avant à chaque coup, grosse fente pour le coup chargé
+    const [dx, dy] = dirWorld(player.dir);
+    if (JABS.includes(act) && player.actionT > 0.1 && player.actionT < hitAt) tryMove(dx * dt * 1.6, dy * dt * 1.6);
+    if (act === 'bigpunch' && player.actionT < 0.3) tryMove(dx * dt * 4.5, dy * dt * 4.5);
+    if (JABS.includes(act) && player.punchBuf && player.actionT >= 0.5) startJab();
+    else if (player.actionT >= 1) {
+      if (JABS.includes(act)) player.lastPunch = time;
+      player.action = null;
+      player.t = 0;
     }
-    if (player.actionT >= 1) { player.action = null; player.t = 0; }
     player.sprinting = false;
   } else if (!player.charging) {
     // Sprint à quatre pattes (bouton SPRINT) : vide la barre ; vide, il faut qu'elle remonte à 35 %.
@@ -645,7 +735,7 @@ function update(dt) {
       burst(ex, ey, f.gz, DUST_COLS, 14, { up: 25, speed: 2 });
       shake = Math.max(shake, 3);
     }
-    if ((f.kind === 'ring' && f.t > 0.6) || (f.kind === 'fall' && f.t > 0.95) || (f.kind === 'ripple' && f.t > 1.1)) fx.splice(i, 1);
+    if ((f.kind === 'ring' && f.t > 0.6) || (f.kind === 'fall' && f.t > 0.95) || (f.kind === 'ripple' && f.t > 1.1) || (f.kind === 'cone' && f.t > 0.5)) fx.splice(i, 1);
   }
 }
 
@@ -787,7 +877,7 @@ function addSkidMarks(s, cx, cy) {
 }
 
 function startAction(a) {
-  if (a === 'punch') sfx.whoosh();
+  if (JABS.includes(a)) sfx.jab(a === 'hook');
   player.action = a;
   player.actionT = 0;
   player.anim = a;
@@ -1078,6 +1168,22 @@ function drawFx(f, ox, oy) {
     for (let i = 0; i < n; i++) {
       const a = i / n * Math.PI * 2;
       ctx.fillRect(Math.round(sx + Math.cos(a) * r), Math.round(sy + Math.sin(a) * r * 0.5), 1, 1);
+    }
+    ctx.globalAlpha = 1;
+    return;
+  }
+  if (f.kind === 'cone') {
+    // arcs de choc qui filent vers l'avant
+    if (f.t < 0) return;
+    const sx = ox + isoX(f.x, f.y), sy = oy + isoY(f.x, f.y) - f.z;
+    const r = 4 + (f.t / 0.5) * f.r * 22;
+    const sdx = (f.dx - f.dy) * 16, sdy = (f.dx + f.dy) * 8, base = Math.atan2(sdy * 2, sdx);
+    ctx.globalAlpha = Math.max(0, 1 - f.t / 0.5);
+    ctx.fillStyle = '#fff6d8';
+    const n = Math.round(r * f.half * 2);
+    for (let i = 0; i <= n; i++) {
+      const a = base + (i / n * 2 - 1) * f.half;
+      ctx.fillRect(Math.round(sx + Math.cos(a) * r), Math.round(sy + Math.sin(a) * r * 0.5), 2, 1);
     }
     ctx.globalAlpha = 1;
     return;

@@ -233,6 +233,21 @@ export const sfx = {
     noise({ type: 'lowpass', f: 1200, f2: 400, gain: 0.25, a: 0.04, dec: 0.25 });
     for (let i = 0; i < 3; i++) tone({ f: rnd(500, 1000), f2: rnd(1200, 2000), gain: 0.03, dec: 0.05, delay: 0.1 + Math.random() * 0.2 }); // bulles
   },
+  jab(hook) {
+    if (!ready() || !gate('jab', 0.05)) return;
+    const f = rnd(700, 1000) * (hook ? 0.75 : 1);
+    noise({ f, f2: f * 3, q: 1.6, gain: hook ? 0.3 : 0.22, a: 0.03, dec: hook ? 0.15 : 0.1 });
+    tone({ f: hook ? 130 : 160, f2: 110, type: 'sawtooth', gain: 0.05, dec: 0.08, lp: 600 }); // souffle du boxeur
+  },
+  bigPunch(power) {
+    if (!ready()) return;
+    noise({ f: 300, f2: 3000, q: 1, gain: 0.5, a: 0.05, dec: 0.15 }); // le bras fend l'air
+    tone({ f: 90, f2: 28, gain: 0.9 + power * 0.1, dec: 0.6 + power * 0.6, rev: 0.5, delay: 0.05 });
+    noise({ type: 'lowpass', f: 2000, f2: 150, gain: 0.6, dec: 0.5 + power * 0.6, rev: 0.5, delay: 0.05 });
+    noise({ type: 'highpass', f: 2500, gain: 0.3, dec: 0.1, delay: 0.05 }); // claquement
+    // rafale qui part au loin
+    noise({ f: 1600, f2: 300, q: 0.6, gain: 0.3 + power * 0.3, a: 0.05, dec: 0.8 + power * 0.8, delay: 0.08 });
+  },
   ui() {
     if (!ready()) return;
     tone({ f: 660, f2: 880, type: 'square', gain: 0.06, dec: 0.06 });
