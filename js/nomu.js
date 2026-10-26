@@ -3,19 +3,23 @@
 // Debout quand il marche, à quatre pattes quand il sprinte.
 import { renderModel, ramp, rotZ, add, ik, hash } from './raster.js';
 
-const SKIN = ramp('#08090e', '#161925', '#272c3f', '#3f4864');
-const BRAIN = ramp('#6a2140', '#a33c5e', '#d8678a', '#f6a6bd');
-const PANTS = ramp('#1d1914', '#352e26', '#4f4535', '#6a5e49');
+const SKIN = ramp('#090a20', '#151848', '#22276b', '#343b8e');
+const BRAIN = ramp('#5e2716', '#9a4a2c', '#c97249', '#e9a173');
+const PANTS = ramp('#6e5124', '#a9853f', '#d4b062', '#efd08a');
+const STRIPE = ramp('#4e0c18', '#9c1628', '#d22838', '#ff5a5e');
+const BONE = ramp('#55575e', '#8d9097', '#c4c6cb', '#eceef0');
+const GOLD = ramp('#6b4a10', '#b0851e', '#e0b23a', '#ffe07a');
+const MOUTH_IN = [10, 8, 26];
 const TEETH = ramp('#77746a', '#bbb6a4', '#e9e4d2', '#fffdf2');
 const EYE = ramp('#7c6a1c', '#c9b44a', '#eee298', '#fffbe0');
 const BEAK = ramp('#7a5208', '#c98f12', '#f2c230', '#ffe680');
 const BEAK_LOW = ramp('#5e3e06', '#a8760e', '#d9a924', '#f2cf5a');
-const CLAW = ramp('#6b6355', '#a39a86', '#d8d0bc', '#f4efe2');
+const CLAW = ramp('#3a3f78', '#585ea0', '#8086c4', '#aab0e0');
 const MOUTH = [22, 6, 12];
 const PUPIL = [6, 4, 4];
 
-export const SPRITE_W = 64, SPRITE_H = 68, ORIGIN_X = 32, ORIGIN_Y = 62;
-export const SCALE = 0.72;
+export const SPRITE_W = 64, SPRITE_H = 76, ORIGIN_X = 32, ORIGIN_Y = 62;
+export const SCALE = 0.75;
 
 export const ANIMS = {
   idle: { frames: 6, fps: 6, loop: true },
@@ -162,6 +166,18 @@ export function poseFor(anim, t) {
   return basePose();
 }
 
+// Rayures rouges en travers d'un membre (positions le long de l'os).
+const stripes = (...ts) => (p) => {
+  for (const c of ts) if (Math.abs(p.t - c) < 0.09 && p.shade > 0 && p.nx > -0.6) return STRIPE[Math.min(3, p.shade)];
+  return p.shade;
+};
+// Rayure en diagonale sur une boule (épaules, dos).
+const slash = (off) => (p) => {
+  const d = (p.ex * 0.6 + p.ey * 0.8) / p.r - off;
+  if (Math.abs(d) < 0.16 && p.shade > 0) return STRIPE[Math.min(3, p.shade)];
+  return p.shade;
+};
+
 export function nomuParts(P) {
   const tw = P.twist;
   const ub = [0, P.lean * 0.6, P.bob + P.lift - P.crouch * 0.8];
@@ -175,89 +191,95 @@ export function nomuParts(P) {
   const U = (p) => pitch(add(rotZ(p, tw), ub)); // point du haut du corps
   const parts = [];
 
-  // --- jambes ---
+  // --- jambes : pantalon beige aux genoux, bandes-crânes grises sur les tibias, grands pieds ---
   for (const side of [-1, 1]) {
     const f = side < 0 ? P.fL : P.fR;
     const g = side < 0 ? 8 : 9;
-    const hipJ = add(hip, [side * 4, 0, 0]);
+    const hipJ = add(hip, [side * 4.2, 0, 0]);
     const ankle = [f[0], f[1], 3 + f[2] + P.lift];
     const knee = ik(hipJ, ankle, 9.5, 9, [0, 1, 0.15]);
-    const mid = lerpV(knee, ankle, 0.5);
-    parts.push({ a: hipJ, b: knee, r1: 4, r2: 3.5, ramp: PANTS, group: g });
+    parts.push({ a: hipJ, b: knee, r1: 4.5, r2: 4, ramp: PANTS, group: g,
+      tex: (p) => (Math.abs(p.ex) < 0.5 && p.t < 0.5 && p.shade > 0 ? p.shade - 1 : p.shade) }); // couture
+    parts.push({ a: knee, r1: 4, ramp: PANTS, group: g,
+      tex: (p) => (p.ey > p.r * 0.45 && hash(p.x, p.y, side) < 0.5 ? null : p.shade) }); // revers déchiré
+    parts.push({ a: knee, b: ankle, r1: 3.1, r2: 2.6, ramp: SKIN, group: g });
+    const b0 = lerpV(knee, ankle, 0.22 + (side > 0 ? 0.18 : 0)), b1 = lerpV(knee, ankle, 0.45 + (side > 0 ? 0.18 : 0));
     parts.push({
-      a: knee, b: mid, r1: 3.5, r2: 3.2, ramp: PANTS, group: g,
-      tex: (p) => (p.t > 0.65 && hash(p.x, p.y, side) < 0.45 ? null : p.shade), // bas déchiré
+      a: b0, b: b1, r1: 3.6, ramp: BONE, group: 16 + side,
+      tex: (p) => {
+        // petite tête de mort : deux orbites et un nez
+        const u = p.ex / p.r, v = p.ey / p.r;
+        if (p.nz > 0.45 && Math.abs(Math.abs(u) - 0.32) < 0.17 && Math.abs(v + 0.05) < 0.22) return [20, 20, 26];
+        if (p.nz > 0.6 && Math.abs(u) < 0.08 && v > 0.25 && v < 0.5) return [40, 40, 48];
+        return p.shade;
+      },
     });
-    parts.push({ a: mid, b: ankle, r1: 2.7, r2: 2.3, ramp: SKIN, group: g });
-    parts.push({ a: ankle, b: add(ankle, [side * 0.5, 3.8, -1.8]), r1: 2.2, r2: 1.9, ramp: SKIN, group: g });
+    const toe = add(ankle, [side * 0.6, 4.6, -2]);
+    parts.push({ a: ankle, b: toe, r1: 2.9, r2: 2.5, ramp: SKIN, group: g });
+    for (const k of [-1, 0, 1]) {
+      parts.push({ a: add(toe, [k * 1.5, 0, 0]), b: add(toe, [k * 1.9, 2.4, -0.6]), r1: 1.05, r2: 0.8, ramp: SKIN, group: g });
+    }
   }
-  parts.push({ a: hip, r1: 5.6, ramp: PANTS, group: 10 });
+  parts.push({ a: hip, r1: 5.9, ramp: PANTS, group: 10,
+    tex: (p) => (p.ey < -p.r * 0.55 && p.shade > 0 ? p.shade - 1 : p.shade) }); // ceinture
 
-  // --- torse sec et musclé ---
+  // --- torse : taille fine, épaules et trapèzes énormes, rayures rouges ---
   const br = P.breathe * 0.3;
-  parts.push({ a: pitch(add(hip, [0, 1.2, 3])), b: U([0, 0.5, 29]), r1: 5.8, r2: 6.8, ramp: SKIN, group: 1 });
-  parts.push({ a: U([-5.5, -0.5, 32.5]), b: U([5.5, -0.5, 32.5]), r1: 5.5, ramp: SKIN, group: 1 });
-  parts.push({ a: U([0, -2.5, 35.5 + br]), r1: 6, ramp: SKIN, group: 1 });
-  parts.push({ a: U([-3.8, 3.4, 30.5 + br]), r1: 4.3, ramp: SKIN, group: 11 });
-  parts.push({ a: U([3.8, 3.4, 30.5 + br]), r1: 4.3, ramp: SKIN, group: 12 });
-  // abdos
+  parts.push({ a: pitch(add(hip, [0, 1.2, 3])), b: U([0, 0.5, 29]), r1: 5.6, r2: 7.2, ramp: SKIN, group: 1 });
+  parts.push({ a: U([-6.5, -0.5, 32.5]), b: U([6.5, -0.5, 32.5]), r1: 6, ramp: SKIN, group: 1 });
+  parts.push({ a: U([0, -5.2, 33 + br]), r1: 6.3, ramp: SKIN, group: 1, tex: slash(0.35) }); // dos voûté, derrière le cerveau
+  parts.push({ a: U([-4, 3.4, 30 + br]), r1: 4.6, ramp: SKIN, group: 11 });
+  parts.push({ a: U([4, 3.4, 30 + br]), r1: 4.6, ramp: SKIN, group: 12 });
   for (const x of [-1.8, 1.8]) {
     parts.push({ a: pitch(add(hip, [x, 4.6, 6.5])), b: U([x, 4.3, 25]), r1: 2.1, ramp: SKIN, group: 13 });
   }
 
-  // --- bras longs ---
+  // --- bras très longs, grandes mains à doigts griffus ---
   for (const side of [-1, 1]) {
     const h = side < 0 ? P.hL : P.hR;
     const hand = P.handsAbs ? h : pitch(add(h, ub));
     const g = side < 0 ? 6 : 7;
-    const sh = U([side * 8.6, -1, 34.5 + P.breathe * 0.4]);
+    const sh = U([side * 9.4, -1, 35 + P.breathe * 0.4]);
     const ed = P.elbowDown;
     const elbow = ik(sh, hand, 11, 10.5, [side * (0.7 - ed * 0.3), -0.7 + ed * 0.5, -0.2 - ed * 1.2]);
-    parts.push({ a: sh, r1: 4.6, ramp: SKIN, group: g });
-    parts.push({ a: sh, b: elbow, r1: 4, r2: 3.4, ramp: SKIN, group: g });
-    parts.push({ a: elbow, b: hand, r1: 3.6, r2: 3, ramp: SKIN, group: g });
-    parts.push({ a: hand, r1: 3.2, ramp: SKIN, group: g });
-    // doigts griffus : prolongent l'avant-bras, s'écartent et se recourbent
+    parts.push({ a: U([side * 9.4, -1.5, 36.5]), r1: 5.4, ramp: SKIN, group: g, tex: side > 0 ? slash(0.3) : slash(-0.2) });
+    parts.push({ a: sh, b: elbow, r1: 4.4, r2: 3.6, ramp: SKIN, group: g, tex: side < 0 ? stripes(0.6) : undefined });
+    parts.push({ a: elbow, b: hand, r1: 3.9, r2: 3.2, ramp: SKIN, group: g, tex: stripes(side < 0 ? 0.35 : 0.25) });
+    parts.push({ a: hand, r1: 3.7, ramp: SKIN, group: g });
+    // longs doigts recourbés
     let dx = hand[0] - elbow[0], dy = hand[1] - elbow[1], dz = hand[2] - elbow[2];
     const dl = Math.hypot(dx, dy, dz) || 1;
     dx /= dl; dy /= dl; dz /= dl;
-    for (const k of [-1, 0, 1]) {
-      const base = [hand[0] + dx * 2.2 + k * 1.4, hand[1] + dy * 2.2 + 0.6, hand[2] + dz * 2.2];
-      const tip = [base[0] + dx * 2.4 + k * 0.7, base[1] + dy * 2.4 + 1.2 + P.curl * 1.2, base[2] + dz * 2.4 - P.curl * 0.6];
-      parts.push({
-        a: base, b: tip, r1: 1.15, r2: 0.6, ramp: SKIN, group: g,
-        tex: (p) => (p.t > 0.55 ? CLAW[Math.min(3, p.shade + 1)] : p.shade),
-      });
+    for (const k of [-1.5, -0.5, 0.5, 1.5]) {
+      const base = [hand[0] + dx * 2.4 + k * 1.1, hand[1] + dy * 2.4 + 0.8, hand[2] + dz * 2.4];
+      const mid = [base[0] + dx * 2.2 + k * 0.4, base[1] + dy * 2.2 + 0.8, base[2] + dz * 2.2];
+      const tip = [mid[0] + dx * 1.2, mid[1] + dy * 1.2 + 1 + P.curl * 1.2, mid[2] + dz * 1.2 - 1 - P.curl * 0.4];
+      parts.push({ a: base, b: mid, r1: 1.2, r2: 1, ramp: SKIN, group: g });
+      parts.push({ a: mid, b: tip, r1: 1, r2: 0.55, ramp: SKIN, group: g,
+        tex: (p) => (p.t > 0.6 ? CLAW[Math.min(3, p.shade + 1)] : p.shade) });
     }
   }
 
-  // --- tête : cerveau à l'air, gros yeux, bec jaune plein de dents ---
-  const head = add(U([0, 4, 38 + P.nod * 0.4]), [0, P.lean * 0.35, P.headUp]);
+  // --- tête enfoncée entre les épaules : gros cerveau, petits yeux, bec doré en V ---
+  // à quatre pattes, la tête sort devant les épaules au lieu de rester enfoncée
+  const head = add(U([0, 4.2 + P.pitch * 6, 35 + P.nod * 0.4]), [0, P.lean * 0.35, P.headUp + P.pitch * 3]);
   const H = (p) => add(head, rotZ(p, tw));
   const jaw = P.jaw;
-  parts.push({ a: head, r1: 4.2, ramp: SKIN, group: 2 });
-  parts.push({ a: H([0, 2.4, -0.4]), b: H([0, 7.2, -1.4]), r1: 2.6, r2: 0.9, ramp: BEAK, group: 14 });
-  parts.push({ a: H([0, 2.2, -2.6 - jaw]), b: H([0, 6, -2.9 - jaw * 1.4]), r1: 1.9, r2: 0.8, ramp: BEAK_LOW, group: 15 });
-  parts.push({
-    a: H([-1.7, 3.8, -1.9 - jaw * 0.5]), b: H([1.7, 3.8, -1.9 - jaw * 0.5]), r1: 1.25 + jaw * 0.3, ramp: TEETH, group: 5,
-    tex: (p) => {
-      if (Math.abs(p.ey) < 0.35 + jaw * 0.3) return MOUTH;
-      return (p.x & 1) && p.shade > 1 ? p.shade - 1 : p.shade;
-    },
-  });
+  parts.push({ a: head, r1: 3.9, ramp: SKIN, group: 2 });
+  // intérieur sombre du bec, qui s'ouvre avec la mâchoire
+  parts.push({ a: H([0, 3, -0.8]), b: H([0, 4.4, -4.6 - jaw]), r1: 2 + jaw * 0.4, r2: 0.8, ramp: [MOUTH_IN, MOUTH_IN, MOUTH_IN, MOUTH_IN], group: 5,
+    tex: (p) => (p.t > 0.15 && p.t < 0.6 && Math.abs(p.ex) > p.r * 0.55 && (p.y & 1) ? [230, 225, 210] : MOUTH_IN) });
   for (const side of [-1, 1]) {
-    parts.push({
-      a: H([side * 2.9, 2.4, 1]), r1: 1.8, ramp: EYE, group: 4,
-      tex: (p) => (p.nx * p.fc[0] + p.ny * p.fc[1] + p.nz * p.fc[2] > 0.82 ? PUPIL : p.shade),
-    });
+    parts.push({ a: H([side * 2.9, 2.5, -0.2]), b: H([0, 4.9, -5.4 - jaw]), r1: 0.95, r2: 0.7, ramp: GOLD, group: 14 });
+    parts.push({ a: H([side * 2.6, 2.3, 1.2]), r1: 1.25, ramp: EYE, group: 4,
+      tex: (p) => (p.nx * p.fc[0] + p.ny * p.fc[1] + p.nz * p.fc[2] > 0.85 ? PUPIL : p.shade) });
   }
   parts.push({
-    a: H([0, -0.8, 4]), r1: 5.1, ramp: BRAIN, group: 3,
+    a: H([0, 0.4, 3.6]), r1: 5.2, ramp: BRAIN, group: 3,
     tex: (p) => {
       const u = p.ex / p.r, v = p.ey / p.r;
-      const fold = Math.sin(u * 8.5 + Math.sin(v * 7) * 1.6) * Math.cos(v * 6 - u * 2);
-      if (Math.abs(fold) < 0.22) return Math.max(0, p.shade - 1);
-      if (Math.abs(u) < 0.09 && v < 0.2) return 0; // scissure centrale
+      const fold = Math.sin(u * 9 + Math.sin(v * 7) * 1.6) * Math.cos(v * 6.5 - u * 2);
+      if (Math.abs(fold) < 0.24) return Math.max(0, p.shade - 1);
       return p.shade;
     },
   });
