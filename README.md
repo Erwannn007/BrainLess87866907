@@ -11,6 +11,7 @@ s'installe sur l'écran d'accueil (PWA, marche hors-ligne).
 - **A COUP** : coup de poing. **^ SAUT** : saut (permet de grimper une marche de plus).
 - **B CHARGE** (maintenir) : il se met sur les coudes et gonfle ; au relâchement il lève les bras et frappe le sol. Plus la charge est longue, plus la zone détruite est grande.
 - Clavier : flèches/ZQSD, Maj = sprint, Espace = saut, J = coup, K (maintenir) = charge.
+- Son : tout est synthétisé en direct (pas, galop, coups, arbres qui craquent et tombent, rochers, charge, cri, frappe au sol, vent, eau, oiseaux le jour, grillons la nuit). Icône haut-parleur en haut à droite (ou M) pour couper.
 - La position, les arbres abattus et l'heure sont sauvegardés automatiquement.
 
 ## Comment c'est fait
@@ -19,6 +20,7 @@ Aucune image : tout est dessiné par code au lancement.
 - `js/nomu.js` : squelette de Brainless + poses (repos, marche, course, coup, smash), cuites en frames × 8 directions.
 - `js/sprites.js` : arbres, rochers, fleurs, herbes, eau animée, tuiles.
 - `js/world.js` : monde infini généré par chunks (lacs, rivières, forêts, montagnes enneigées).
+- `js/audio.js` : tous les sons, générés par Web Audio.
 - `js/main.js` : boucle de jeu, caméra, rendu iso, contrôles tactiles, jour/nuit, particules.
 - `tools/make-icons.mjs` : régénère les icônes depuis le sprite (`node tools/make-icons.mjs`).
 

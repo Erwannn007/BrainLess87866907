@@ -226,8 +226,8 @@ export function nomuParts(P) {
   // --- torse : taille fine, épaules et trapèzes énormes, rayures rouges ---
   const br = P.breathe * 0.3;
   parts.push({ a: pitch(add(hip, [0, 1.2, 3])), b: U([0, 0.5, 29]), r1: 5.6, r2: 7.2, ramp: SKIN, group: 1 });
-  parts.push({ a: U([-6.5, -0.5, 32.5]), b: U([6.5, -0.5, 32.5]), r1: 6, ramp: SKIN, group: 1 });
-  parts.push({ a: U([0, -5.2, 33 + br]), r1: 6.3, ramp: SKIN, group: 1, tex: slash(0.35) }); // dos voûté, derrière le cerveau
+  parts.push({ a: U([-5.6, -0.5, 32.5]), b: U([5.6, -0.5, 32.5]), r1: 5.3, ramp: SKIN, group: 1 });
+  parts.push({ a: U([0, -5, 32.5 + br]), r1: 5.6, ramp: SKIN, group: 1, tex: slash(0.35) }); // dos voûté, derrière le cerveau
   parts.push({ a: U([-4, 3.4, 30 + br]), r1: 4.6, ramp: SKIN, group: 11 });
   parts.push({ a: U([4, 3.4, 30 + br]), r1: 4.6, ramp: SKIN, group: 12 });
   for (const x of [-1.8, 1.8]) {
@@ -239,10 +239,10 @@ export function nomuParts(P) {
     const h = side < 0 ? P.hL : P.hR;
     const hand = P.handsAbs ? h : pitch(add(h, ub));
     const g = side < 0 ? 6 : 7;
-    const sh = U([side * 9.4, -1, 35 + P.breathe * 0.4]);
+    const sh = U([side * 8.2, -1, 34.5 + P.breathe * 0.4]);
     const ed = P.elbowDown;
     const elbow = ik(sh, hand, 11, 10.5, [side * (0.7 - ed * 0.3), -0.7 + ed * 0.5, -0.2 - ed * 1.2]);
-    parts.push({ a: U([side * 9.4, -1.5, 36.5]), r1: 5.4, ramp: SKIN, group: g, tex: side > 0 ? slash(0.3) : slash(-0.2) });
+    parts.push({ a: U([side * 8.2, -1.2, 35]), r1: 4.6, ramp: SKIN, group: g, tex: side > 0 ? slash(0.3) : slash(-0.2) });
     parts.push({ a: sh, b: elbow, r1: 4.4, r2: 3.6, ramp: SKIN, group: g, tex: side < 0 ? stripes(0.6) : undefined });
     parts.push({ a: elbow, b: hand, r1: 3.9, r2: 3.2, ramp: SKIN, group: g, tex: stripes(side < 0 ? 0.35 : 0.25) });
     parts.push({ a: hand, r1: 3.7, ramp: SKIN, group: g });
@@ -262,7 +262,7 @@ export function nomuParts(P) {
 
   // --- tête enfoncée entre les épaules : gros cerveau, petits yeux, bec doré en V ---
   // à quatre pattes, la tête sort devant les épaules au lieu de rester enfoncée
-  const head = add(U([0, 4.2 + P.pitch * 6, 35 + P.nod * 0.4]), [0, P.lean * 0.35, P.headUp + P.pitch * 3]);
+  const head = add(U([0, 4 + P.pitch * 6, 38.5 + P.nod * 0.4]), [0, P.lean * 0.35, P.headUp + P.pitch * 3]);
   const H = (p) => add(head, rotZ(p, tw));
   const jaw = P.jaw;
   parts.push({ a: head, r1: 3.9, ramp: SKIN, group: 2 });

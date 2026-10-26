@@ -3,6 +3,7 @@ import { renderNomu, ANIMS, ORIGIN_X, ORIGIN_Y } from './nomu.js';
 import * as SP from './sprites.js';
 import { hash, makeBuffer } from './raster.js';
 import { drawText, textWidth } from './font.js';
+import { sfx, unlockAudio, toggleMute, isMuted, chargeStart, chargeUpdate, chargeStop, updateAmbience } from './audio.js';
 
 const SEED = 87866907;
 const SAVE_KEY = 'brainless-save-v1';
@@ -179,11 +180,15 @@ const chargeHeld = () => held('b') || keys.has('KeyK') || keys.has('KeyE');
 
 const toGame = (t) => [t.clientX / cssPerPx, t.clientY / cssPerPx];
 
+const muteBtn = { x: 0, y: 0, r: 7 };
+
 function onTouchStart(e) {
   e.preventDefault();
+  unlockAudio();
   for (const t of e.changedTouches) {
     const [x, y] = toGame(t);
     let used = false;
+    if (Math.hypot(x - muteBtn.x, y - muteBtn.y) < muteBtn.r + 6) { toggleMute(); sfx.ui(); continue; }
     for (const k in buttons) {
       const b = buttons[k];
       if (!used && Math.hypot(x - b.x, y - b.y) < b.r + 6) {
@@ -225,10 +230,13 @@ document.addEventListener('gesturestart', (e) => e.preventDefault());
 window.addEventListener('keydown', (e) => {
   if (e.repeat) return;
   keys.add(e.code);
+  unlockAudio();
+  if (e.code === 'KeyM') toggleMute();
   if (e.code === 'KeyJ') input.punch = true;
   if (e.code === 'Space') input.jump = true;
 });
 window.addEventListener('keyup', (e) => keys.delete(e.code));
+window.addEventListener('mousedown', unlockAudio);
 
 function keyboardVector() {
   let x = 0, y = 0;
@@ -308,9 +316,10 @@ function damage(tx, ty, dmg) {
   const st = hits.get(key) || { n: 0, shake: 0 };
   st.n += dmg; st.shake = 0.35;
   hits.set(key, st);
-  if (info.tree) burst(cx, cy, gz + 22, leafColsFor(o), 8, { leaf: true, up: 10, g: 25, drag: 2, life: 1.6, spread: 14 });
-  else if (info.rock) burst(cx, cy, gz + 4, ROCK_COLS, 6, { up: 50 });
-  else if (info.wood) burst(cx, cy, gz + 3, WOOD_COLS, 5);
+  if (info.tree) { burst(cx, cy, gz + 22, leafColsFor(o), 8, { leaf: true, up: 10, g: 25, drag: 2, life: 1.6, spread: 14 }); sfx.hitWood(); }
+  else if (info.rock) { burst(cx, cy, gz + 4, ROCK_COLS, 6, { up: 50 }); sfx.hitRock(); }
+  else if (info.wood) { burst(cx, cy, gz + 3, WOOD_COLS, 5); sfx.hitWood(); }
+  else if (info.leafy) sfx.rustle();
 
   if (st.n < Math.max(1, info.hp)) return true;
   hits.delete(key);
@@ -321,8 +330,10 @@ function damage(tx, ty, dmg) {
     const spr = objSprites[o][0];
     const side = isoX(cx, cy) >= isoX(player.x, player.y) ? 1 : -1; // tombe à l'opposé de Brainless
     fx.push({ kind: 'fall', img: spr, x: cx, y: cy, gz, t: 0, side, leaves: leafColsFor(o) });
+    sfx.treeCreak();
   } else if (info.rock) {
     next = o === O.ROCK_L ? O.ROCK : O.PEBBLES;
+    sfx.rockBreak();
     stats.rocks++;
     burst(cx, cy, gz + 4, ROCK_COLS, 22, { up: 70, speed: 2.5, big: 0.6 });
     shake = Math.max(shake, 2);
@@ -330,8 +341,10 @@ function damage(tx, ty, dmg) {
     burst(cx, cy, gz + 6, LEAF_COLS, 18, { leaf: true, up: 30, g: 30, life: 1.4 });
     if (o === O.BERRY) burst(cx, cy, gz + 6, ['#d8283c', '#ff5a6e'], 8, { up: 50 });
   } else if (info.wood) {
+    sfx.rockBreak();
     burst(cx, cy, gz + 3, WOOD_COLS, 14, { up: 60, speed: 2 });
   } else {
+    sfx.pluck();
     const cols = o === O.FLOWER_R ? ['#e2453c'] : o === O.FLOWER_Y ? ['#f2c230'] : o === O.FLOWER_B ? ['#5a78e6'] : o === O.FLOWER_W ? ['#ffffff'] : LEAF_COLS;
     burst(cx, cy, gz + 2, cols.concat(LEAF_COLS), 6, { leaf: true, up: 25, g: 30 });
   }
@@ -354,7 +367,7 @@ function doPunchHit() {
   }
   const gz = player.z;
   if (best) { damage(best[0], best[1], 1); shake = Math.max(shake, 1.5); }
-  else burst(hx, hy, gz + 18, ['#ffffff', '#d8e0f0'], 5, { up: 10, g: 0, life: 0.25, speed: 1.2 });
+  else { burst(hx, hy, gz + 18, ['#ffffff', '#d8e0f0'], 5, { up: 10, g: 0, life: 0.25, speed: 1.2 }); sfx.punchAir(); }
 }
 
 // En sprint, Brainless pulvérise tout ce qui se trouve devant lui.
@@ -377,6 +390,7 @@ function trample(vx, vy) {
 // Frappe au sol après la charge : plus la charge est longue, plus c'est violent.
 function doSlam(power) {
   stats.smash++;
+  sfx.slam(power);
   const R = 1.8 + power * 3.7;
   shake = Math.min(16, 6 + power * 10);
   windT = 1.2 + power * 1.8;
@@ -432,7 +446,13 @@ function chargeEffects(dt) {
   }
 }
 
+function surfaceAt(x, y) {
+  const t = world.typeAt(Math.floor(x), Math.floor(y));
+  return t === T.SAND ? 'sand' : t === T.SNOW ? 'snow' : t === T.STONE ? 'stone' : 'grass';
+}
+
 function land() {
+  sfx.land(player.sprinting);
   player.air = false;
   player.jz = 0;
   player.vz = 0;
@@ -467,6 +487,7 @@ function update(dt) {
   if (input.jump && !player.air && !player.action && !player.charging) {
     player.air = true;
     player.vz = JUMP_V * (player.sprinting ? 1.1 : 1);
+    sfx.jump();
     burst(player.x, player.y, player.z, DUST_COLS, 6, { up: 15, speed: 1.2, g: 60, life: 0.5, spread: 1 });
   }
   if (player.air) {
@@ -478,11 +499,14 @@ function update(dt) {
   // --- charge (maintenir B) puis frappe au sol au relâchement
   if (!player.action && !player.air) {
     if (chargeHeld()) {
-      if (!player.charging) { player.charging = true; player.charge = 0; player.sprinting = false; setAnim('charge'); }
+      if (!player.charging) { player.charging = true; player.charge = 0; player.sprinting = false; setAnim('charge'); chargeStart(); }
       player.charge = Math.min(1, player.charge + dt / 1.6);
       chargeEffects(dt);
+      chargeUpdate(player.charge);
     } else if (player.charging) {
       player.charging = false;
+      chargeStop();
+      sfx.roar(player.charge);
       player.slamPower = player.charge;
       startAction('slam');
     }
@@ -507,7 +531,7 @@ function update(dt) {
     player.sprinting = false;
   } else if (!player.charging) {
     // Sprint à quatre pattes (bouton SPRINT) : vide la barre ; vide, il faut qu'elle remonte à 35 %.
-    if (player.stamina <= 0) player.tired = true;
+    if (player.stamina <= 0 && !player.tired) { player.tired = true; sfx.tired(); }
     if (player.tired && player.stamina >= 0.35) player.tired = false;
     const run = sprintHeld() && !player.tired && mag > 0.15;
     if (!player.air) player.sprinting = run;
@@ -519,6 +543,7 @@ function update(dt) {
       tryMove(vx * speed * dt, vy * speed * dt);
       player.dir = ((Math.round(Math.atan2(ct, cx) / (Math.PI / 4)) % 8) + 8) % 8;
       setAnim(player.sprinting ? 'run' : 'walk');
+      if (!player.sprinting && !player.air) walkSteps();
       if (player.sprinting && !player.air) sprintImpacts(vx, vy);
     } else {
       setAnim('idle');
@@ -536,12 +561,14 @@ function update(dt) {
   for (const [k, st] of hits) { st.shake = Math.max(0, st.shake - dt); }
 
   updateParticles(dt);
+  updateAmbience(dt, { night: darkness() > 0.5, water: waterNearby(), height: world.hAt(Math.floor(player.x), Math.floor(player.y)) });
   updateFlyers(dt);
   for (let i = fx.length - 1; i >= 0; i--) {
     const f = fx[i];
     f.t += dt;
     if (f.kind === 'fall' && f.t > 0.75 && !f.done) {
       f.done = true;
+      sfx.treeCrash();
       const ex = f.x + f.side * 1.2, ey = f.y - f.side * 1.2;
       burst(ex, ey, f.gz + 6, f.leaves, 26, { leaf: true, up: 25, g: 30, life: 1.6, spread: 10 });
       burst(ex, ey, f.gz, DUST_COLS, 14, { up: 25, speed: 2 });
@@ -552,6 +579,14 @@ function update(dt) {
 }
 
 // Chaque fois que les mains puis les pattes frappent le sol pendant le galop : secousse + poussière.
+// Bruits de pas quand il marche : au moment où chaque pied touche le sol.
+function walkSteps() {
+  const fi = Math.floor(player.t) % ANIMS.walk.frames;
+  if (fi === player.runFrame) return;
+  player.runFrame = fi;
+  if (fi === 2 || fi === 6) sfx.step(surfaceAt(player.x, player.y));
+}
+
 function sprintImpacts(vx, vy) {
   const fi = Math.floor(player.t) % ANIMS.run.frames;
   if (fi === player.runFrame) return;
@@ -563,9 +598,23 @@ function sprintImpacts(vx, vy) {
   const t = world.typeAt(Math.floor(player.x), Math.floor(player.y));
   const cols = t === T.SNOW ? ['#ffffff', '#dfe8f0'] : t === T.SAND ? DUST_COLS : ['#c9b58f', '#8fb86a', '#6b4a2e'];
   burst(player.x + vx * d, player.y + vy * d, player.z, cols, front ? 7 : 4, { up: 25, speed: 1.2, g: 70, life: 0.5, spread: 1 });
+  sfx.gallop(front, surfaceAt(player.x, player.y));
+  if (front && Math.random() < 0.35) sfx.breath();
+}
+
+// Proportion d'eau autour de Brainless (pour le clapotis).
+let waterCache = { t: -1, v: 0 };
+function waterNearby() {
+  if (time - waterCache.t < 0.5) return waterCache.v;
+  let n = 0;
+  const px = Math.floor(player.x), py = Math.floor(player.y);
+  for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) if (!world.walkable(px + dx, py + dy)) n++;
+  waterCache = { t: time, v: Math.min(1, n / 25) };
+  return waterCache.v;
 }
 
 function startAction(a) {
+  if (a === 'punch') sfx.whoosh();
   player.action = a;
   player.actionT = 0;
   player.anim = a;
@@ -891,6 +940,23 @@ function drawSprintBar(x, y) {
   ctx.fillRect(bx + 1, y, fill, 1);
 }
 
+function drawMuteButton() {
+  muteBtn.x = VW - 12 - safe.r;
+  muteBtn.y = 11 + safe.t;
+  const x = muteBtn.x - 5, y = muteBtn.y - 4;
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.fillRect(x - 3, y - 3, 17, 14);
+  ctx.fillStyle = '#ffffff';
+  // haut-parleur pixel
+  ctx.fillRect(x, y + 2, 2, 4); ctx.fillRect(x + 2, y + 1, 1, 6); ctx.fillRect(x + 3, y, 1, 8);
+  if (isMuted()) {
+    ctx.fillStyle = '#ff5a5e';
+    for (let i = 0; i < 5; i++) { ctx.fillRect(x + 6 + i, y + 1 + i, 1, 1); ctx.fillRect(x + 10 - i, y + 1 + i, 1, 1); }
+  } else {
+    ctx.fillRect(x + 5, y + 2, 1, 4); ctx.fillRect(x + 7, y + 1, 1, 6); ctx.fillRect(x + 9, y, 1, 8);
+  }
+}
+
 function drawHUD() {
   layoutButtons();
   const x0 = 6 + safe.l, y0 = 6 + safe.t;
@@ -898,6 +964,7 @@ function drawHUD() {
   const night = darkness() > 0.5;
   drawText(ctx, (night ? 'NUIT' : 'JOUR') + '  ARBRES ' + stats.trees + '  ROCHERS ' + stats.rocks, x0, y0 + 8, '#e8f0ff');
   drawSprintBar(x0, y0 + 17);
+  drawMuteButton();
 
   if (hintT > 0) {
     ctx.globalAlpha = Math.min(1, hintT / 1.5);
