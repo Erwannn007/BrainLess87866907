@@ -42,6 +42,7 @@ export const ANIMS = {
   down: { frames: 8, fps: 8, loop: false }, // à bout de forces, il s'effondre
   sniff: { frames: 12, fps: 8, loop: false }, // tête levée, il renifle l'air
   eat: { frames: 12, fps: 6, loop: false }, // penché sur sa proie, il dévore
+  hurt: { frames: 6, fps: 12, loop: false }, // un gros coup : il encaisse et recule
 };
 
 const smooth = (u) => u * u * (3 - 2 * u);
@@ -235,6 +236,15 @@ export function poseFor(anim, t) {
     p.bob = k * 0.4;
     p.twist = -0.12 + j * 0.04;
     return p;
+  }
+  if (anim === 'hurt') {
+    // projeté en arrière : buste rejeté, bras qui battent, il se rattrape
+    return keyed([
+      { t: 0, p: {} },
+      { t: 0.2, p: { lean: -3.5, pitch: -0.35, headUp: 3, jaw: 1.4, hL: [-14, -4, 26], hR: [13, -3, 24], fL: [-5, 4, 1], fR: [5, 2, 0], swell: 0.03 } },
+      { t: 0.6, p: { crouch: 4, lean: 1.5, jaw: 0.8, hL: [-11, 5, 12], hR: [11, 5, 12], fL: [-5, 2, 0], fR: [5, -3, 0] } },
+      { t: 1, p: {} },
+    ], t);
   }
   if (anim === 'eat') {
     // Accroupi, mains plaquées sur la proie, la tête plonge et arrache à chaque bouchée.

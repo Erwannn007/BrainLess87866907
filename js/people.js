@@ -67,8 +67,11 @@ export const PEOPLE_ANIMS = {
     dead: { frames: 1, fps: 1 }, crushed: { frames: 1, fps: 1 },
   },
   hero: {
-    idle: { frames: 4, fps: 5 }, walk: { frames: 6, fps: 9 }, run: { frames: 6, fps: 13 },
+    idle: { frames: 4, fps: 6 }, walk: { frames: 6, fps: 9 }, run: { frames: 6, fps: 13 },
     attack: { frames: 6, fps: 14 }, special: { frames: 6, fps: 10 }, hurt: { frames: 2, fps: 8 },
+    // enchaînements de combat
+    jab: { frames: 5, fps: 15 }, cross: { frames: 5, fps: 14 }, upper: { frames: 6, fps: 12 },
+    kick: { frames: 6, fps: 12 }, block: { frames: 2, fps: 6 },
     ko: { frames: 1, fps: 1 }, dead: { frames: 1, fps: 1 }, crushed: { frames: 1, fps: 1 },
   },
 };
@@ -157,7 +160,50 @@ function heroPose(D, anim, t) {
   const p = basePose();
   const ph = t * TAU, s = Math.sin(ph), c = Math.cos(ph);
   const guard = () => { p.hL = [-3.2, 3.2, 15]; p.hR = [3.4, 2.6, 15.6]; };
-  if (anim === 'idle') { guard(); p.bob = s * 0.3; p.hL[2] += s * 0.4; p.twist = 0.15; return p; }
+  // garde de boxeur : pieds décalés, il sautille et balance les poings
+  const G = { fL: [-2.2, 1.6, 0], fR: [2.2, -1.6, 0], hL: [-2.8, 4, 16], hR: [3.2, 2.4, 15.4], twist: 0.2, lean: 0.8 };
+  if (anim === 'idle') {
+    Object.assign(p, G, { hL: [-2.8, 4 + s * 0.6, 16 + c * 0.5], hR: [3.2, 2.4 - s * 0.5, 15.4 - c * 0.4] });
+    p.bob = Math.abs(s) * 0.9 - 0.4;
+    p.fL = [-2.2, 1.6, Math.max(0, s) * 0.6]; p.fR = [2.2, -1.6, Math.max(0, -s) * 0.6];
+    return p;
+  }
+  if (anim === 'block') {
+    // bras croisés devant le visage, il encaisse
+    Object.assign(p, G, { hL: [1.6, 4.2, 20.5], hR: [-1.6, 4, 19.5], lean: 1.4, bob: -0.8 - Math.abs(s) * 0.3, twist: 0 });
+    return p;
+  }
+  if (anim === 'jab') {
+    // direct du gauche, rapide
+    return keyed([{ t: 0, p: G },
+      { t: 0.4, p: { ...G, hL: [-1.2, 10, 17], twist: 0.45, lean: 2, fL: [-2.2, 3, 0] } },
+      { t: 0.6, p: { ...G, hL: [-1.2, 9.5, 17], twist: 0.4, lean: 1.8, fL: [-2.2, 3, 0] } },
+      { t: 1, p: G }], t);
+  }
+  if (anim === 'cross') {
+    // cross du droit : il arme, pivote les hanches et frappe de tout son poids
+    return keyed([{ t: 0, p: G },
+      { t: 0.25, p: { ...G, hR: [4.2, -2, 15], twist: -0.45, lean: 0.2 } },
+      { t: 0.5, p: { ...G, hR: [0.8, 10.5, 16.5], hL: [-3.5, 1, 14], twist: 0.7, lean: 2.6, fL: [-2.2, 3.2, 0], fR: [2.2, -2.5, 1] } },
+      { t: 0.7, p: { ...G, hR: [0.8, 10, 16.5], hL: [-3.5, 1, 14], twist: 0.65, lean: 2.4, fL: [-2.2, 3.2, 0], fR: [2.2, -2.5, 1] } },
+      { t: 1, p: G }], t);
+  }
+  if (anim === 'upper') {
+    // uppercut : il plonge, puis remonte en se dépliant, poing vers le ciel
+    return keyed([{ t: 0, p: G },
+      { t: 0.3, p: { ...G, hR: [3, 4, 8], bob: -2, lean: 1.6, twist: -0.3 } },
+      { t: 0.55, p: { ...G, hR: [1.2, 7, 26], hL: [-3.5, 2, 13], bob: 1.4, lean: -0.6, twist: 0.5, fL: [-2.2, 2.5, 0], fR: [2.2, -1, 2] } },
+      { t: 0.75, p: { ...G, hR: [1.2, 6.5, 25], hL: [-3.5, 2, 13], bob: 1, lean: -0.4, twist: 0.45 } },
+      { t: 1, p: G }], t);
+  }
+  if (anim === 'kick') {
+    // coup de pied circulaire : genou levé, la jambe fouette sur le côté
+    return keyed([{ t: 0, p: G },
+      { t: 0.3, p: { ...G, fR: [2, 2.5, 7], lean: -1, twist: -0.3, hL: [-4, 2, 17], hR: [4.5, 0, 16] } },
+      { t: 0.55, p: { ...G, fR: [3.5, 8, 11], fL: [-2, 0, 0], lean: -2, twist: 0.9, hL: [-6, -1, 16], hR: [5, -2, 17] } },
+      { t: 0.75, p: { ...G, fR: [3, 6.5, 9], fL: [-2, 0, 0], lean: -1.6, twist: 0.8, hL: [-6, -1, 16], hR: [5, -2, 17] } },
+      { t: 1, p: G }], t);
+  }
   if (anim === 'walk' || anim === 'run') {
     const run = anim === 'run', st = run ? 4.4 : 3;
     p.fL = [-1.9, s * st, Math.max(0, c) * (run ? 2.4 : 1.3)];

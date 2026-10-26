@@ -196,6 +196,14 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
   distance, cible clignotante au sol). Combinaison, gants et bottes d'une couleur d'accent, masque
   ou visière, cape, emblème. Nom et barre de vie au-dessus de la tête. Ils résistent à l'écrasement
   tant qu'ils ont plus de 40 % de vie. Dévorer un héros donne son alter.
+- **Combat des héros** : garde de boxeur sautillante, enchaînements (`COMBOS` : direct, cross,
+  uppercut, coup de pied circulaire, écrasement) où ils avancent en frappant. Les gros coups
+  (`kb` >= 6) projettent Brainless en arrière, parfois en l'air (`lift`), avec un arrêt sur image
+  (`hitstop`) et son animation `hurt` ; sa charge est perdue. REMPART et ACIER se mettent en garde
+  (`block`) quand il arme un coup : un coup chargé à fond brise la garde.
+- **Déplacements** : `steer` teste 16 directions en regardant 0,6 tuile devant et garde sa
+  direction précédente ; `unstick` sort de l'obstacle celui qui s'y retrouve coincé. Les
+  habitants apparaissent en fondu, et sortent des maisons quand Brainless est assez près pour voir.
 - **Tuer** : la frappe au sol écrase tous ceux qui sont sous lui (`crushed`) ; frapper quelqu'un
   de KO à terre l'achève ; un gros coup chargé à bout portant tue en retombant.
 - Vie de Brainless : 100, super régénération après 3 s sans coup ; à 0 il s'effondre et se

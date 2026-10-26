@@ -66,7 +66,7 @@ export function beastParts(type, P) {
   const H = B.H + P.bob, L = B.L, f0 = P.lunge;
   const rear = [0, -L / 2 + f0, H], front = [0, L / 2 + f0, H + (B.neck ? 0.5 : 0)];
   const ridge = B.bristles ? (p) => (p.ny < -0.5 && hash(p.x, p.y, 3) < 0.6 ? Math.max(0, p.shade - 1) : p.shade) : undefined;
-  const belly = (p) => (p.ny > 0.55 && type !== 'boar' ? WHITE[Math.min(3, p.shade + 1)] : ridge ? ridge(p) : p.shade);
+  const belly = (p) => (p.ny > 0.55 && type !== 'boar' && type !== 'rabbit' ? WHITE[Math.min(3, p.shade + 1)] : ridge ? ridge(p) : p.shade);
   parts.push({ a: rear, b: front, r1: B.rr, r2: B.br, ramp: R, group: 1, tex: belly });
   // pattes : épaule/hanche -> pied, genou en cinématique inverse
   const joints = [[-B.br * 0.55, L / 2 - 0.6], [B.br * 0.55, L / 2 - 0.6], [-B.rr * 0.55, -L / 2 + 0.6], [B.rr * 0.55, -L / 2 + 0.6]];
@@ -91,7 +91,7 @@ export function beastParts(type, P) {
   // oreilles
   for (const sd of [-1, 1]) {
     const base = add(head, [sd * B.hr * 0.5, -0.3, B.hr * 0.7]);
-    if (B.ears === 'long') parts.push({ a: base, b: add(base, [sd * 0.4, -1.2, 3.2]), r1: 0.6, r2: 0.45, ramp: R, group: 8 });
+    if (B.ears === 'long') parts.push({ a: base, b: add(base, [sd * 0.3, -1, 2.4]), r1: 0.85, r2: 0.65, ramp: R, group: 8 });
     else if (B.ears === 'pointy') parts.push({ a: base, b: add(base, [sd * 0.3, -0.2, 1.8]), r1: 0.7, r2: 0.2, ramp: R, group: 8 });
     else if (B.ears === 'deer') parts.push({ a: base, b: add(base, [sd * 1.6, -0.5, 0.6]), r1: 0.55, r2: 0.35, ramp: R, group: 8 });
     else parts.push({ a: base, r1: 0.7, ramp: R, group: 8 });
@@ -111,6 +111,8 @@ export function beastParts(type, P) {
   else if (B.tail === 'thin') parts.push({ a: tb, b: add(tb, [0, -1.2, -1.4]), r1: 0.35, ramp: R, group: 10 });
   else parts.push({ a: tb, b: add(tb, [0, -2.8, -2.2]), r1: 1, r2: 0.6, ramp: R, group: 10, tex: (p) => (p.t > 0.75 ? WHITE[p.shade] : p.shade) });
 
+  // un petit animal : pas de lignes internes entre ses parties (à cette taille, ça fait des traits parasites)
+  if (B.scale && B.L < 6) for (const part of parts) part.group = 1;
   if (P.dead) {
     // couché sur le flanc, taché de sang
     for (const part of parts) {

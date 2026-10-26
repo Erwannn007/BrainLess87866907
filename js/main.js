@@ -462,7 +462,10 @@ function blockedFor(e, nx, ny, feet, npc) {
       const info = OBJ_INFO[world.objAt(tx + dx, ty + dy)];
       if (!info) continue;
       if (info.solid) {
-        if (Math.hypot(nx - (tx + dx + 0.5), ny - (ty + dy + 0.5)) < info.solid + 0.2) return true;
+        const cx = tx + dx + 0.5, cy = ty + dy + 0.5, r = info.solid + 0.2;
+        const dn = Math.hypot(nx - cx, ny - cy);
+        // déjà coincé dedans (poussé, apparu là) : on le laisse en sortir
+        if (dn < r && !(Math.hypot(e.x - cx, e.y - cy) < r && dn >= Math.hypot(e.x - cx, e.y - cy))) return true;
         continue;
       }
       if (info.tilebox) {
@@ -688,7 +691,8 @@ function healGround(dt) {
 
 // Enchaînement de boxeur : direct gauche, direct droit, crochet, et ça recommence.
 const JABS = ['jabL', 'jabR', 'hook'];
-const HIT_AT = { jabL: 0.44, jabR: 0.44, hook: 0.44, bigpunch: 0.22, slam: 0.44, sniff: 0.6, eat: 9 };
+const HIT_AT = { jabL: 0.44, jabR: 0.44, hook: 0.44, bigpunch: 0.22, slam: 0.44, sniff: 0.6, eat: 9, hurt: 9 };
+let hitstop = 0; // arrêt sur image après un gros impact
 const CHOMPS = [0.22, 0.35, 0.48, 0.61, 0.74]; // bouchées pendant qu'il dévore
 
 function startJab() {
@@ -1033,7 +1037,7 @@ function update(dt) {
       if (prev < hitAt && player.actionT >= hitAt) {
         if (JABS.includes(act)) doPunchHit(act === 'hook');
         else if (act === 'sniff') doSniff();
-        else if (act === 'eat') { /* les bouchées sont gérées à part */ }
+        else if (act === 'eat' || act === 'hurt') { /* rien à frapper */ }
         else if (act === 'bigpunch') doBigPunch(player.punchPower);
         else doSlam(player.slamPower);
       }
@@ -1222,7 +1226,8 @@ function waterNearby() {
 }
 
 // ---------------------------------------------------------------- vie de Brainless
-function hurtPlayer(dmg, fx0, fy0) {
+// opts : { kb : force du recul, lift : il décolle du sol }
+function hurtPlayer(dmg, fx0, fy0, opts = {}) {
   if (player.dead || player.invuln > 0) return;
   dmg *= [0.6, 1, 1.5][world.p.difficulty] * (has('absorb') ? 0.5 : 1);
   if (has('absorb')) burst(player.x, player.y, player.z + 20, ['#ffe28a', '#ffffff'], 6, { up: 20, speed: 2, life: 0.3 }); // le coup rebondit
@@ -1232,8 +1237,19 @@ function hurtPlayer(dmg, fx0, fy0) {
   player.flash = 0.18;
   player.regen = false;
   const dx = player.x - fx0, dy = player.y - fy0, l = Math.hypot(dx, dy) || 1;
-  player.kb = [dx / l * 3, dy / l * 3];
-  shake = Math.max(shake, 3);
+  const kb = (opts.kb ?? 3) * (has('absorb') ? 0.6 : 1);
+  player.kb = [dx / l * kb, dy / l * kb];
+  shake = Math.max(shake, 3 + kb * 0.5);
+  if (kb >= 6) {
+    // gros coup : il est projeté en arrière (et parfois soulevé), la charge est perdue
+    hitstop = 0.08;
+    if (player.charging) { player.charging = false; player.chargeKind = null; player.aim = null; chargeStop(); }
+    player.slide = null; player.sprinting = false; player.mv = null;
+    if (opts.lift && !player.air && !player.water) { player.air = true; player.vz = opts.lift; player.jz = 0.1; player.bigJump = false; }
+    if (player.action === 'eat' && player.eating) { player.eating.eaten = false; player.eating = null; } // repas interrompu
+    startAction('hurt');
+    sfx.bodyHit(false, true);
+  }
   sfx.playerHit();
   rumble(0.5, 120);
   burst(player.x, player.y, player.z + 22, ['#fff3b0', '#ffffff', '#8086c4'], 6, { up: 30, speed: 1.5, life: 0.35 });
@@ -1442,19 +1458,28 @@ function crime(amount, x, y) {
   }
 }
 
+// Un endroit où quelqu'un peut se tenir : sol praticable, et à bonne distance des troncs et rochers voisins.
 function freeSpot(x, y) {
   const tx = Math.floor(x), ty = Math.floor(y), info = OBJ_INFO[world.objAt(tx, ty)];
-  return world.walkable(tx, ty) && !(info && (info.solid || info.part || info.building || info.tilebox));
+  if (!world.walkable(tx, ty) || (info && (info.part || info.building || info.tilebox))) return false;
+  for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+    const o = OBJ_INFO[world.objAt(tx + dx, ty + dy)];
+    if (o && o.solid && Math.hypot(x - (tx + dx + 0.5), y - (ty + dy + 0.5)) < o.solid + 0.35) return false;
+    if (o && (o.part || o.building || o.tilebox) && (dx || dy) && Math.hypot(x - (tx + dx + 0.5), y - (ty + dy + 0.5)) < 0.9) return false;
+  }
+  return true;
 }
 
 function spawnNpc(type, x, y, v, home) {
+  // Brainless est assez près pour voir : il sort d'une maison plutôt que d'apparaître au milieu de la rue
+  if (home && Math.hypot(x - player.x, y - player.y) < 16 && freeSpot(home.door[0], home.door[1])) { [x, y] = home.door; }
   const D = PEOPLE[type];
   const n = {
     type, kind: D.kind, x, y, z: groundZ(x, y), jz: 0, vz: 0, vx: 0, vy: 0, air: false,
     dir: (Math.random() * 8) | 0, anim: 'idle', t: Math.random() * 4, state: D.kind === 'knight' ? 'chase' : 'wander',
     v: v.id, home, tx: x, ty: y, wait: Math.random() * 3, koT: 0, hp: D.kind === 'hero' ? D.hp : D.kind === 'knight' ? 4 : 1, maxHp: D.hp || 4,
     alertT: 0, atkT: 0, cd: 0, hurtT: 0, flash: 0, waveT: 0, waveCd: 3 + Math.random() * 8, inside: false, stuck: 0,
-    speedK: type === 'child' ? 1.1 : type === 'elder' ? 0.55 : 1, fj: 0,
+    speedK: type === 'child' ? 1.1 : type === 'elder' ? 0.55 : 1, fj: 0, fade: 0,
   };
   npcs.push(n);
   return n;
@@ -1553,6 +1578,15 @@ function hitNpc(n, dmg, kx, ky, power) {
   sfx.bodyHit(knight, Math.random() < 0.35 || power > 0.6);
   if (knight) burst(n.x, n.y, n.z + n.jz + 16, ['#fff3b0', '#ffffff', '#dfe5ee'], 6, { up: 40, speed: 1.6, life: 0.4 });
   burst(n.x, n.y, n.z + n.jz + 12, BLOOD_COLS, knight ? 3 : 5, { up: 35, speed: 1.4, life: 0.6 });
+  if (n.state === 'block') {
+    // en garde : il encaisse sans broncher, sauf un coup chargé à fond qui lui brise la garde
+    sfx.clank();
+    burst(n.x, n.y, n.z + 16, ['#fff3b0', '#ffffff', '#ffe28a'], 8, { up: 40, speed: 2, life: 0.35 });
+    if (power > 0.75) { n.state = 'hurt'; n.hurtT = 0.9; n.hp -= dmg * 0.5; n.vx = kx * 5; n.vy = ky * 5; hitstop = 0.06; showMsg('GARDE BRISEE', 1.2); }
+    else { n.hp -= dmg * 0.25; n.vx = kx * 1.5; n.vy = ky * 1.5; }
+    if (n.hp <= 0) { n.state = 'ko'; n.koT = 2.5; n.air = true; n.vz = 60; n.jz = 0.5; }
+    return;
+  }
   if (n.kind === 'beast') {
     // un animal : il détale, ou le sanglier s'énerve ; à 0 il meurt en retombant
     n.hp -= dmg;
@@ -1635,14 +1669,14 @@ function updateSpecial(n, dt) {
       burst(n.x, n.y, n.z, DUST_COLS, 20, { up: 40, speed: 2.5, life: 0.7 });
       crackTile(Math.floor(n.x), Math.floor(n.y), 2);
       sfx.slam(0.25); shake = Math.max(shake, 4);
-      if (Math.hypot(player.x - n.x, player.y - n.y) < 1.5) hurtPlayer(16, n.x, n.y);
+      if (Math.hypot(player.x - n.x, player.y - n.y) < 1.5) hurtPlayer(16, n.x, n.y, { kb: 8, lift: 70 });
       n.cd = 2.6;
     }
   } else if (S.kind === 'dash') {
     // TURBO fonce en ligne droite, moteurs à fond
     npcMove(n, S.ux * 11 * dt, S.uy * 11 * dt);
     burst(n.x - S.ux * 0.5, n.y - S.uy * 0.5, n.z + 6, ['#ffb347', '#c9d0e0', '#8a91a0'], 3, { up: 10, speed: 0.4, g: -10, life: 0.4 });
-    if (!S.hit && Math.hypot(player.x - n.x, player.y - n.y) < 0.9) { S.hit = true; hurtPlayer(14, n.x, n.y); }
+    if (!S.hit && Math.hypot(player.x - n.x, player.y - n.y) < 0.9) { S.hit = true; hurtPlayer(14, n.x - S.ux, n.y - S.uy, { kb: 9 }); }
     if (u >= 1) { n.cd = 2.8; n.state = 'hurt'; n.hurtT = 0.6; return false; } // essoufflé après la charge
   } else if (S.kind === 'bolt') {
     // ECLAIR vise, puis la foudre tombe là où était Brainless
@@ -1656,7 +1690,7 @@ function updateSpecial(n, dt) {
       sfx.thunder(0.6); shake = Math.max(shake, 4);
       burst(S.tx, S.ty, groundZ(S.tx, S.ty), ['#fff7a8', '#8fd8ff', '#ffffff'], 16, { up: 50, speed: 2, life: 0.5 });
       crackTile(Math.floor(S.tx), Math.floor(S.ty), 2);
-      if (Math.hypot(player.x - S.tx, player.y - S.ty) < 1.1) hurtPlayer(15, S.tx, S.ty);
+      if (Math.hypot(player.x - S.tx, player.y - S.ty) < 1.1) hurtPlayer(15, S.tx, S.ty, { kb: 6, lift: 50 });
       n.cd = 2.4;
     }
   } else if (S.kind === 'smash') {
@@ -1666,11 +1700,86 @@ function updateSpecial(n, dt) {
       fx.push({ kind: 'ring', x: n.x, y: n.y, z: n.z, t: 0, r: 1.4 });
       sfx.slam(0.2); shake = Math.max(shake, 4);
       crackTile(Math.floor(n.x), Math.floor(n.y), 1);
-      if (Math.hypot(player.x - n.x, player.y - n.y) < 1.6) hurtPlayer(n.type === 'acier' ? 18 : 15, n.x, n.y);
+      if (Math.hypot(player.x - n.x, player.y - n.y) < 1.6) hurtPlayer(n.type === 'acier' ? 18 : 15, n.x, n.y, { kb: 9, lift: 60 });
     }
     if (u >= 1) n.cd = 1.8;
   }
   return u >= 1;
+}
+
+// Les coups des héros. kb = recul infligé à Brainless, lift = il décolle, lunge = le héros avance en frappant.
+const MOVES = {
+  jab: { anim: 'jab', dur: 0.33, hit: 0.45, range: 1.35, dmg: 6, kb: 2, lunge: 1.2 },
+  cross: { anim: 'cross', dur: 0.36, hit: 0.5, range: 1.4, dmg: 9, kb: 3.5, lunge: 2 },
+  upper: { anim: 'upper', dur: 0.5, hit: 0.55, range: 1.4, dmg: 13, kb: 7, lift: 85, lunge: 1.5 },
+  kick: { anim: 'kick', dur: 0.5, hit: 0.55, range: 1.7, dmg: 12, kb: 7.5, lunge: 1 },
+  smash: { anim: 'special', dur: 0.7, hit: 0.65, range: 1.7, dmg: 16, kb: 9, lift: 60, lunge: 0.5, ring: true },
+  zap: { anim: 'cross', dur: 0.36, hit: 0.5, range: 1.4, dmg: 8, kb: 6, lunge: 1.2, spark: true },
+};
+const COMBOS = {
+  rempart: ['jab', 'cross', 'smash'], acier: ['jab', 'cross', 'upper'],
+  ressort: ['kick', 'jab', 'kick'], turbo: ['jab', 'kick', 'kick'], eclair: ['jab', 'zap'],
+};
+const GUARDS = { rempart: true, acier: true }; // ceux qui savent se mettre en garde
+
+function startCombo(n) {
+  n.state = 'combo';
+  n.combo = { list: COMBOS[n.type], i: 0, t: 0, hit: false };
+  n.dir = faceDir(player.x - n.x, player.y - n.y);
+  sfx.swordSwing();
+}
+
+// Joue l'enchaînement coup par coup ; renvoie l'animation du coup en cours.
+function updateCombo(n, dt) {
+  const C = n.combo, M = MOVES[C.list[C.i]];
+  C.t += dt / M.dur;
+  const dx = player.x - n.x, dy = player.y - n.y, d = Math.hypot(dx, dy) || 1;
+  if (C.t < M.hit) { n.dir = faceDir(dx, dy); if (d > 0.8) npcMove(n, dx / d * M.lunge * dt / M.dur, dy / d * M.lunge * dt / M.dur); }
+  if (!C.hit && C.t >= M.hit) {
+    C.hit = true;
+    if (M.ring) { fx.push({ kind: 'ring', x: n.x + dx / d * 0.6, y: n.y + dy / d * 0.6, z: n.z, t: 0, r: 1.3 }); sfx.slam(0.2); crackTile(Math.floor(n.x + dx / d), Math.floor(n.y + dy / d), 1); }
+    if (M.spark) burst(n.x + dx / d * 0.8, n.y + dy / d * 0.8, n.z + 16, ['#fff7a8', '#8fd8ff'], 10, { up: 30, speed: 2, life: 0.35 });
+    if (d < M.range) {
+      hurtPlayer(M.dmg, n.x, n.y, { kb: M.kb, lift: M.lift });
+      if (M.kb >= 6) { hitstop = Math.max(hitstop, 0.07); shake = Math.max(shake, 6); }
+    } else sfx.punchAir();
+  }
+  if (C.t >= 1) {
+    // coup suivant si Brainless est encore à portée, sinon il souffle un peu
+    if (C.i < C.list.length - 1 && d < MOVES[C.list[C.i + 1]].range + 0.6) { C.i++; C.t = 0; C.hit = false; sfx.swordSwing(); }
+    else { n.state = 'chase'; n.cd = 0.8 + Math.random() * 0.6; }
+  }
+  return M.anim;
+}
+
+// Est-il pris dans un obstacle (tronc, rocher, mur, maison) ?
+function overlapping(x, y) {
+  const tx = Math.floor(x), ty = Math.floor(y);
+  if (!world.walkable(tx, ty)) return true;
+  for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+    const info = OBJ_INFO[world.objAt(tx + dx, ty + dy)];
+    if (!info) continue;
+    if (info.solid && Math.hypot(x - (tx + dx + 0.5), y - (ty + dy + 0.5)) < info.solid + 0.15) return true;
+    if (info.tilebox && boxHit(x, y, tx + dx + 0.5, ty + dy + 0.5, 0.6)) return true;
+    if (info.part || info.building) {
+      const a = world.anchorOf(tx + dx, ty + dy), ai = a && OBJ_INFO[world.objAt(a[0], a[1])];
+      if (ai && ai.box && boxHit(x, y, a[0], a[1], ai.box + 0.1)) return true;
+    }
+  }
+  return false;
+}
+
+// Coincé dans un obstacle : on le fait glisser vers l'endroit libre le plus proche.
+function unstick(n, dt) {
+  for (const r of [0.3, 0.55, 0.8, 1.1, 1.5]) {
+    for (let k = 0; k < 12; k++) {
+      const a = k / 12 * Math.PI * 2, x = n.x + Math.cos(a) * r, y = n.y + Math.sin(a) * r;
+      if (overlapping(x, y)) continue;
+      const step = Math.min(r, 3 * dt);
+      n.x += Math.cos(a) * step; n.y += Math.sin(a) * step;
+      return;
+    }
+  }
 }
 
 function npcMove(n, dx, dy) {
@@ -1686,18 +1795,30 @@ function faceDir(dx, dy) {
   return ((Math.round(Math.atan2(dx + dy, dx - dy) / (Math.PI / 4)) % 8) + 8) % 8;
 }
 
-// Avance vers (tx, ty) ; s'il est bloqué, il tente de contourner par le côté.
+// Avance vers (tx, ty). Si le chemin direct est bouché, il regarde 16 directions un peu devant
+// lui et prend la plus proche de son but qui est libre, en gardant de préférence sa direction
+// précédente (sinon il tremblote entre deux choix).
 function steer(n, tx, ty, speed, dt) {
   let dx = tx - n.x, dy = ty - n.y;
   const d = Math.hypot(dx, dy) || 1;
   dx /= d; dy /= d;
-  const step = Math.min(d, speed * dt);
-  for (const a of [0, 0.7, -0.7, 1.5, -1.5]) {
-    const c = Math.cos(a), sn = Math.sin(a), rx = dx * c - dy * sn, ry = dx * sn + dy * c;
-    if (npcMove(n, rx * step, ry * step)) { n.dir = faceDir(rx, ry); if (a) n.stuck += dt; else n.stuck = 0; return true; }
+  const step = Math.min(d, speed * dt), feet = n.z + n.jz;
+  const clear = (ux, uy) => !blockedFor(n, n.x + ux * 0.25, n.y + uy * 0.25, feet, true) && !blockedFor(n, n.x + ux * 0.6, n.y + uy * 0.6, feet, true);
+  let best = clear(dx, dy) ? [dx, dy] : null, bs = 1;
+  if (!best) {
+    bs = -9;
+    for (let k = 0; k < 16; k++) {
+      const a = k * Math.PI / 8, ux = Math.cos(a), uy = Math.sin(a);
+      let sc = ux * dx + uy * dy;
+      if (n.lastDir) sc += 0.35 * (ux * n.lastDir[0] + uy * n.lastDir[1]);
+      if (sc > bs && clear(ux, uy)) { bs = sc; best = [ux, uy]; }
+    }
   }
-  n.stuck += dt;
-  return false;
+  if (!best || !npcMove(n, best[0] * step, best[1] * step)) { n.stuck += dt; n.lastDir = null; return false; }
+  n.lastDir = best;
+  n.dir = faceDir(best[0], best[1]);
+  n.stuck = bs < 0.2 ? n.stuck + dt : 0; // il s'éloigne de son but : ça compte comme être coincé
+  return true;
 }
 
 function pickTarget(n) {
@@ -1723,7 +1844,7 @@ function updateNpcs(dt) {
     n.cd -= dt; n.waveCd -= dt;
     if (n.inside) {
       // la nuit, ils dorment chez eux ; ils ressortent au matin
-      if (!night && weather.rain < 0.4) { n.inside = false; n.state = 'wander'; n.wait = 1 + Math.random() * 3; }
+      if (!night && weather.rain < 0.4) { n.inside = false; n.fade = 0; n.state = 'wander'; n.wait = 1 + Math.random() * 3; }
       continue;
     }
     if (n.air) {
@@ -1741,6 +1862,7 @@ function updateNpcs(dt) {
       const k = Math.exp(-8 * dt);
       n.vx *= k; n.vy *= k;
     }
+    if (!n.air && overlapping(n.x, n.y)) unstick(n, dt);
     n.z += (groundZ(n.x, n.y) - n.z) * Math.min(1, dt * 12);
     const d = Math.hypot(player.x - n.x, player.y - n.y);
     let anim = 'idle';
@@ -1799,7 +1921,11 @@ function updateNpcs(dt) {
         const v = world.villages.get(n.v);
         if ((!alarmed(n.v) && d > 6) || (v && Math.hypot(player.x - v.cx, player.y - v.cy) > v.R + 25)) { n.state = 'guard'; n.wait = 0; pickTarget(n); break; }
         if (player.dead) break;
+        if (n.kind === 'hero' && GUARDS[n.type] && d < 3 && (player.charging || JABS.includes(player.action)) && Math.random() < dt * 4) {
+          n.state = 'block'; n.blockT = 0.5 + Math.random() * 0.6; n.dir = faceDir(player.x - n.x, player.y - n.y); break;
+        }
         if (n.kind === 'hero' && n.cd <= 0 && heroSpecial(n, d)) break;
+        if (n.kind === 'hero' && d < 1.3 && n.cd <= 0) { startCombo(n); break; }
         if (n.kind === 'hero' && PEOPLE[n.type].style === 'ranged' && d < 3.5) {
           // ECLAIR garde ses distances
           anim = 'walk';
@@ -1828,6 +1954,15 @@ function updateNpcs(dt) {
       case 'special':
         anim = 'special';
         if (updateSpecial(n, dt)) { n.state = 'chase'; }
+        break;
+      case 'combo':
+        anim = updateCombo(n, dt);
+        break;
+      case 'block':
+        // il garde les bras croisés tant que Brainless arme son coup
+        anim = 'block';
+        n.dir = faceDir(player.x - n.x, player.y - n.y);
+        if ((n.blockT -= dt) <= 0 && !player.charging) n.state = 'chase';
         break;
     }
     if (n.anim !== anim) { n.anim = anim; n.t = 0; }
@@ -1908,7 +2043,7 @@ function spawnBeast(type, x, y) {
   npcs.push({
     type, kind: 'beast', x, y, z: groundZ(x, y), jz: 0, vz: 0, vx: 0, vy: 0, air: false, dir: (Math.random() * 8) | 0,
     anim: 'idle', t: Math.random() * 4, state: 'graze', v: null, hp: B.hp, maxHp: B.hp, tx: x, ty: y, wait: Math.random() * 3,
-    alertT: 0, atkT: 0, cd: 0, flash: 0, stuck: 0, inside: false, fj: 0, fleeT: 0, angry: false, speedK: 1,
+    alertT: 0, atkT: 0, cd: 0, flash: 0, stuck: 0, inside: false, fj: 0, fleeT: 0, angry: false, speedK: 1, fade: 0,
   });
 }
 
@@ -2409,9 +2544,13 @@ function drawNpc(n, ox, oy) {
   ctx.drawImage(shadows.s, sx - shadows.s.ox, sy - shadows.s.oy);
   const A = animsOf(n)[n.anim];
   const f = n.anim === 'attack' ? Math.min(A.frames - 1, Math.floor(Math.max(0, n.atkT) * A.frames))
+    : n.state === 'combo' ? Math.min(A.frames - 1, Math.floor(Math.min(0.999, n.combo.t) * A.frames))
     : n.anim === 'special' && n.sp ? Math.min(A.frames - 1, Math.floor(Math.min(1, n.sp.t) * A.frames)) : Math.floor(n.t) % A.frames;
   const img = peopleImgs[n.type][n.anim][n.dir][f];
+  n.fade = Math.min(1, (n.fade ?? 1) + 1 / 30);
+  ctx.globalAlpha = n.fade;
   ctx.drawImage(img, sx - img.ox, sy - jz - img.oy);
+  ctx.globalAlpha = 1;
   if (n.flash > 0) {
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
@@ -2900,7 +3039,7 @@ let last = 0, saveT = 0;
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000 || 0);
   last = now;
-  if (mode === 'play') update(dt);
+  if (mode === 'play') { if (hitstop > 0) hitstop -= dt; else update(dt); }
   else updateMenu(dt);
   render();
   saveT += dt;
@@ -2935,7 +3074,7 @@ function updateMenu(dt) {
   if (location.hash === '#debug') {
     window.BRAINLESS = { get world() { return world; }, player, startWorld, createWorld, listWorlds, quitToMenu, get mode() { return mode; }, stats, O, T, decals, particles, npcs, damage, hurtPlayer,
       vstate, crime, killNpc, hitNpc, nearestPrey, get scent() { return scent; },
-      get tod() { return tod; }, set tod(v) { tod = v; }, weather, spawnBeast, gainEvo, has, crackTile, craterTile, doSlam, doBigPunch };
+      get tod() { return tod; }, set tod(v) { tod = v; }, weather, spawnBeast, gainEvo, has, blockedFor, freeSpot, OBJ_INFO, overlapping, crackTile, craterTile, doSlam, doBigPunch };
   }
   await loadAssets();
   loading.style.display = 'none';
