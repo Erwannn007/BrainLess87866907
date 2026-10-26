@@ -26,5 +26,6 @@ Aucune image : tout est dessiné par code au lancement.
 - `js/audio.js` : tous les sons, générés par Web Audio.
 - `js/main.js` : boucle de jeu, caméra, rendu iso, contrôles tactiles, jour/nuit, particules.
 - `tools/make-icons.mjs` : régénère les icônes depuis le sprite (`node tools/make-icons.mjs`).
+- `tools/preview.mjs` : aperçu PNG agrandi des sprites. La charte graphique est dans `CLAUDE.md`.
 
 Après une mise à jour, change `VERSION` dans `sw.js` pour que l'iPhone récupère la nouvelle version.
