@@ -12,7 +12,7 @@ s'installe sur l'écran d'accueil (PWA, marche hors-ligne).
 - **B CHARGE** (maintenir) : il se met sur les coudes et gonfle ; au relâchement il lève les bras et frappe le sol. Plus la charge est longue, plus la zone détruite est grande.
 - Les boutons se combinent en glissant : pars de SPRINT et glisse sur SAUT ou COUP, il saute ou frappe sans arrêter de sprinter.
 - Demi-tour en plein sprint : il dérape et laisse des traces ; lâcher le sprint en pleine course : il freine.
-- Eau : il patauge dans l'eau peu profonde (plus lent) et nage en eau profonde (pas de sprint, de saut ni d'attaque en nageant).
+- Eau : il patauge dans l'eau peu profonde (plus lent) et nage en eau profonde (sur place quand il ne bouge pas, brasse puissante en sprint ; pas de saut ni d'attaque en nageant).
 - Clavier : flèches/ZQSD, Maj = sprint, Espace = saut, J = coup, K (maintenir) = charge.
 - Son : tout est synthétisé en direct (pas, galop, coups, arbres qui craquent et tombent, rochers, charge, cri, frappe au sol, vent, eau, oiseaux le jour, grillons la nuit). Icône haut-parleur en haut à droite (ou M) pour couper.
 - La position, les arbres abattus et l'heure sont sauvegardés automatiquement.

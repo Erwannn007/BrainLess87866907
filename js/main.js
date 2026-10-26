@@ -297,6 +297,7 @@ function waterDepth(x, y) {
 }
 const WATER_LINE = -3; // hauteur de la surface de l'eau
 const SINK = [0, 9, 10]; // de combien il s'enfonce sous la surface
+const SINK_ANIM = { tread: 19, swim: 10, swimfast: 8 }; // en eau profonde, selon la nage
 
 function blocked(nx, ny) {
   const tx = Math.floor(nx), ty = Math.floor(ny);
@@ -575,33 +576,34 @@ function update(dt) {
     // Petite tolérance : un joystick qui repasse par le centre pendant un demi-tour ne coupe pas le sprint.
     player.idleT = mag > 0.15 ? 0 : player.idleT + dt;
     const coasting = wasSprinting && player.mv && player.idleT < 0.12 && sprintHeld();
-    const run = sprintHeld() && !player.tired && (mag > 0.15 || coasting) && player.water < 2;
+    const run = sprintHeld() && !player.tired && (mag > 0.15 || coasting);
     if (!player.air) player.sprinting = run;
     if (mag > 0.15) {
       const cx = ix / mag, ct = iy / mag;
       const vx = (cx + ct) / Math.SQRT2, vy = (ct - cx) / Math.SQRT2;
       const newDir = ((Math.round(Math.atan2(ct, cx) / (Math.PI / 4)) % 8) + 8) % 8;
-      if (player.sprinting && !player.air && player.mv && vx * player.mv[0] + vy * player.mv[1] < -0.35) {
+      if (player.sprinting && !player.air && !player.water && player.mv && vx * player.mv[0] + vy * player.mv[1] < -0.35) {
         startSlide('skid', newDir); // demi-tour violent
       } else {
-        const speed = player.water === 2 ? 1.9 : (player.sprinting ? 5.8 : 2.2) * (player.water ? 0.62 : 1);
+        const speed = player.water === 2 ? (player.sprinting ? 4.6 : 1.9) : (player.sprinting ? 5.8 : 2.2) * (player.water ? 0.62 : 1);
         if (player.sprinting && !player.air) trample(vx, vy);
         tryMove(vx * speed * dt, vy * speed * dt);
         player.dir = newDir;
         player.mv = player.sprinting ? [vx, vy] : null;
-        setAnim(player.water === 2 ? 'swim' : player.sprinting ? 'run' : 'walk');
-        if (player.water === 2) swimStrokes();
+        setAnim(player.water === 2 ? (player.sprinting ? 'swimfast' : 'swim') : player.sprinting ? 'run' : 'walk');
+        if (player.water === 2) swimStrokes(vx, vy);
         else if (!player.sprinting && !player.air) walkSteps();
-        if (player.sprinting && !player.air) sprintImpacts(vx, vy);
+        if (player.sprinting && !player.air && player.water !== 2) sprintImpacts(vx, vy);
       }
     } else if (coasting && run) {
       tryMove(player.mv[0] * 5.8 * dt, player.mv[1] * 5.8 * dt);
     } else {
-      setAnim(player.water === 2 ? 'swim' : 'idle');
+      setAnim(player.water === 2 ? 'tread' : 'idle');
+      if (player.water === 2) swimStrokes(0, 0);
       if (!player.air) player.sprinting = false;
     }
     // il lâche le sprint en pleine course : il freine
-    if (wasSprinting && !player.sprinting && !player.slide && !player.air && prevMv) {
+    if (wasSprinting && !player.sprinting && !player.slide && !player.air && !player.water && prevMv) {
       player.mv = prevMv;
       startSlide('brake', player.dir);
     }
@@ -615,7 +617,8 @@ function update(dt) {
   const depth = waterDepth(player.x, player.y);
   if (depth && !player.water && !player.air) splash(depth === 2 || wasSprinting ? 1 : 0.5);
   player.water = player.air ? 0 : depth;
-  const gz = depth ? WATER_LINE - SINK[depth] : groundZ(player.x, player.y);
+  const sink = depth === 2 ? (SINK_ANIM[player.anim] ?? SINK[2]) : SINK[depth];
+  const gz = depth ? WATER_LINE - sink : groundZ(player.x, player.y);
   player.z += (gz - player.z) * Math.min(1, dt * (depth ? 8 : 14));
   if (depth && (mag > 0.15 || Math.random() < dt * 2)) {
     player.rippleT = (player.rippleT || 0) - dt;
@@ -658,14 +661,39 @@ function walkSteps() {
   }
 }
 
-function swimStrokes() {
-  const fi = Math.floor(player.t) % ANIMS.swim.frames;
+function swimStrokes(vx, vy) {
+  const anim = player.anim;
+  const fi = Math.floor(player.t) % ANIMS[anim].frames;
   if (fi === player.runFrame) return;
   player.runFrame = fi;
-  if (fi === 1 || fi === 5) {
+  const [dx, dy] = dirWorld(player.dir);
+  if (anim === 'swimfast') {
+    // les deux bras s'abattent ensemble : grosse gerbe, sillage, secousse
+    if (fi === 3) {
+      sfx.splash(0.8);
+      sfx.gallop(true, 'water');
+      shake = Math.max(shake, 2.5);
+      burst(player.x + dx * 0.55, player.y + dy * 0.55, WATER_LINE, WATER_COLS, 22, { up: 75, speed: 2.2, g: 150, life: 0.7, spread: 2, big: 0.6 });
+      fx.push({ kind: 'ripple', x: player.x + dx * 0.5, y: player.y + dy * 0.5, t: 0, big: true });
+    }
+    if (fi % 2 === 0) {
+      // sillage en V derrière lui
+      const px = -vy, py = vx;
+      for (const side of [-1, 1]) {
+        burst(player.x - vx * 0.5 + px * side * 0.35, player.y - vy * 0.5 + py * side * 0.35, WATER_LINE, WATER_COLS, 3, { up: 25, speed: 0.6, g: 120, life: 0.5, spread: 0 });
+      }
+      fx.push({ kind: 'ripple', x: player.x - vx * 0.3, y: player.y - vy * 0.3, t: 0 });
+    }
+  } else if (anim === 'swim') {
+    if (fi === 1 || fi === 5) {
+      sfx.stroke();
+      burst(player.x + dx * 0.4, player.y + dy * 0.4, WATER_LINE, WATER_COLS, 5, { up: 35, speed: 0.8, g: 130, life: 0.45, spread: 0 });
+    }
+  } else if (fi === 0 || fi === 4) {
+    // sur place : petits remous de chaque côté
     sfx.stroke();
-    const [dx, dy] = dirWorld(player.dir);
-    burst(player.x + dx * 0.4, player.y + dy * 0.4, WATER_LINE, WATER_COLS, 5, { up: 35, speed: 0.8, g: 130, life: 0.45, spread: 0 });
+    const px = -dy, py = dx, side = fi === 0 ? 1 : -1;
+    burst(player.x + px * side * 0.4, player.y + py * side * 0.4, WATER_LINE, WATER_COLS, 3, { up: 20, speed: 0.5, g: 120, life: 0.35, spread: 0 });
   }
 }
 

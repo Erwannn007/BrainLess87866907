@@ -32,6 +32,8 @@ export const ANIMS = {
   skid: { frames: 4, fps: 20, loop: true }, // demi-tour en dérapage
   brake: { frames: 4, fps: 20, loop: true }, // freinage en fin de sprint
   swim: { frames: 8, fps: 8, loop: true }, // nage en eau profonde
+  tread: { frames: 8, fps: 7, loop: true }, // nage sur place
+  swimfast: { frames: 8, fps: 11, loop: true }, // sprint dans l'eau
 };
 
 const smooth = (u) => u * u * (3 - 2 * u);
@@ -170,6 +172,42 @@ export function poseFor(anim, t) {
     p.bob = Math.sin(ph * 2) * 0.6;
     p.twist = Math.sin(ph) * 0.15;
     p.jaw = 0.4;
+    return p;
+  }
+  if (anim === 'tread') {
+    // Sur place : buste droit hors de l'eau, bras qui balaient sous la surface, jambes qui pédalent.
+    const ph = t * TAU, s = Math.sin(ph), c = Math.cos(ph);
+    const p = basePose();
+    p.handsAbs = 1;
+    p.hL = [-12 - s * 3, 6 + c * 4, 27];
+    p.hR = [12 + s * 3, 6 - c * 4, 27];
+    p.fL = [-4, 2 + s * 4, 4 + Math.max(0, c) * 4];
+    p.fR = [4, 2 - s * 4, 4 + Math.max(0, -c) * 4];
+    p.crouch = 2;
+    p.pitch = 0.15;
+    p.bob = Math.sin(ph * 2) * 0.8;
+    p.breathe = s;
+    p.jaw = 0.3;
+    p.nod = c * 0.5;
+    return p;
+  }
+  if (anim === 'swimfast') {
+    // Brasse papillon de bête : les deux bras jaillissent ensemble, le corps bondit hors de l'eau.
+    const ph = t * TAU, s = Math.sin(ph), c = Math.cos(ph);
+    const p = basePose();
+    p.handsAbs = 1;
+    const hf = 16 + s * 13, hz = 14 + c * 11;
+    p.hL = [-7.5, hf, hz];
+    p.hR = [7.5, hf, hz];
+    p.fL = [-4, -13, 6 + Math.sin(ph * 2) * 3];
+    p.fR = [4, -13, 6 + Math.sin(ph * 2) * 3];
+    p.crouch = 9;
+    p.pitch = 1.22 - Math.max(0, c) * 0.25; // se cabre quand les bras passent au-dessus
+    p.lift = Math.max(0, c) * 4;
+    p.headUp = 4 + Math.max(0, c) * 2;
+    p.jaw = 1.3;
+    p.swell = 0.04;
+    p.twist = 0;
     return p;
   }
   if (anim === 'brake') {
