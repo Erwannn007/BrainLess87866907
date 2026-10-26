@@ -1,7 +1,7 @@
 import { World, T, O, OBJ_INFO, VG } from './world.js';
 import { buildVillageSprites } from './buildings.js';
 import { renderPerson, PEOPLE, PEOPLE_ANIMS, CIVILIANS, HEROES } from './people.js';
-import { renderNomu, ANIMS, ORIGIN_X, ORIGIN_Y } from './nomu.js';
+import { renderNomu, ANIMS } from './nomu.js';
 import { renderBeast, BEASTS, BEAST_ANIMS, BEAST_MEAL } from './beasts.js';
 import { valueNoise } from './noise.js';
 import * as SP from './sprites.js';
@@ -53,6 +53,46 @@ function toCanvas(buf) {
   return c;
 }
 
+// Planches de sprites : chaque sprite est rogné au plus près de son dessin, puis rangé dans
+// une grande planche de 2048x2048, rangée après rangée. Quelques grandes images en mémoire au
+// lieu de milliers de petites, presque sans pixels vides.
+const ATLAS = 2048;
+const pages = [];
+let page = null, packX = 0, packY = 0, rowH = 0;
+
+function toSprite(buf) {
+  const { w, h, data } = buf;
+  let x0 = w, y0 = h, x1 = -1, y1 = -1;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (!data[(y * w + x) * 4 + 3]) continue;
+      if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+    }
+  }
+  if (x1 < 0) return { page: null, sx: 0, sy: 0, w: 0, h: 0, width: 0, height: 0, ox: 0, oy: 0 };
+  const sw = x1 - x0 + 1, sh = y1 - y0 + 1;
+  if (page && packX + sw > ATLAS) { packX = 0; packY += rowH + 1; rowH = 0; } // rangée suivante
+  if (!page || packY + sh > ATLAS) {
+    page = document.createElement('canvas');
+    page.width = page.height = ATLAS;
+    page.c = page.getContext('2d');
+    pages.push(page);
+    packX = packY = rowH = 0;
+  }
+  const img = new ImageData(sw, sh);
+  for (let y = 0; y < sh; y++) img.data.set(data.subarray(((y + y0) * w + x0) * 4, ((y + y0) * w + x1 + 1) * 4), y * sw * 4);
+  page.c.putImageData(img, packX, packY);
+  const spr = { page, sx: packX, sy: packY, w: sw, h: sh, width: sw, height: sh, ox: buf.ox - x0, oy: buf.oy - y0 };
+  packX += sw + 1; // 1 px d'écart entre deux sprites
+  rowH = Math.max(rowH, sh);
+  return spr;
+}
+
+// Dessine un sprite de planche, son coin haut-gauche en (x, y).
+function draw(s, x, y) {
+  if (s.page) ctx.drawImage(s.page, s.sx, s.sy, s.w, s.h, x, y, s.w, s.h);
+}
+
 // ---------------------------------------------------------------- assets
 const nomu = {}; // nomu[anim][dir][frame]
 let objSprites, objGlow, crackImgs, peopleImgs, bloodImgs, fogImg, waterImgs, foamImgs, rimImgs, shadows, ui;
@@ -73,7 +113,7 @@ async function loadAssets() {
     nomu[anim] = [];
     for (let d = 0; d < 8; d++) {
       const list = nomu[anim][d] = [];
-      for (let f = 0; f < ANIMS[anim].frames; f++) jobs.push(() => { list[f] = toCanvas(renderNomu(anim, f / ANIMS[anim].frames, d)); });
+      for (let f = 0; f < ANIMS[anim].frames; f++) jobs.push(() => { list[f] = toSprite(renderNomu(anim, f / ANIMS[anim].frames, d)); });
     }
   }
   // villageois et chevaliers : chaque anim x 8 directions
@@ -85,7 +125,7 @@ async function loadAssets() {
       peopleImgs[type][anim] = [];
       for (let d = 0; d < 8; d++) {
         const list = peopleImgs[type][anim][d] = [];
-        for (let f = 0; f < AN[anim].frames; f++) jobs.push(() => { list[f] = toCanvas(renderPerson(type, anim, f / AN[anim].frames, d)); });
+        for (let f = 0; f < AN[anim].frames; f++) jobs.push(() => { list[f] = toSprite(renderPerson(type, anim, f / AN[anim].frames, d)); });
       }
     }
   }
@@ -96,7 +136,7 @@ async function loadAssets() {
       peopleImgs[type][anim] = [];
       for (let d = 0; d < 8; d++) {
         const list = peopleImgs[type][anim][d] = [];
-        for (let f = 0; f < BEAST_ANIMS[anim].frames; f++) jobs.push(() => { list[f] = toCanvas(renderBeast(type, anim, f / BEAST_ANIMS[anim].frames, d)); });
+        for (let f = 0; f < BEAST_ANIMS[anim].frames; f++) jobs.push(() => { list[f] = toSprite(renderBeast(type, anim, f / BEAST_ANIMS[anim].frames, d)); });
       }
     }
   }
@@ -111,18 +151,18 @@ async function loadAssets() {
   }
   const raw = SP.buildObjectSprites();
   objSprites = {};
-  for (const id in raw) objSprites[id] = raw[id].map(toCanvas);
+  for (const id in raw) objSprites[id] = raw[id].map(toSprite);
   done++; progress(); await tick();
   // bâtiments et objets de village, avec leur couche de fenêtres allumées pour la nuit
   const vs = buildVillageSprites();
   objGlow = {};
   for (const id in vs) {
-    objSprites[id] = vs[id].map((s) => toCanvas(s.img));
-    if (vs[id][0].glow) objGlow[id] = toCanvas(vs[id][0].glow);
+    objSprites[id] = vs[id].map((s) => toSprite(s.img));
+    if (vs[id][0].glow) objGlow[id] = toSprite(vs[id][0].glow);
   }
-  bloodImgs = [6, 9, 13].map((r, i) => toCanvas(SP.bloodBuffer(r, i * 17 + 3)));
+  bloodImgs = [6, 9, 13].map((r, i) => toSprite(SP.bloodBuffer(r, i * 17 + 3)));
   crackImgs = {};
-  for (const m of ['earth', 'sand', 'stone', 'snow']) crackImgs[m] = [1, 2, 3].map((l) => [0, 1, 2, 3].map((v) => toCanvas(SP.crackBuffer(m, l, v))));
+  for (const m of ['earth', 'sand', 'stone', 'snow']) crackImgs[m] = [1, 2, 3].map((l) => [0, 1, 2, 3].map((v) => toSprite(SP.crackBuffer(m, l, v))));
   done++; progress(); await tick();
 
   waterImgs = [0, 1].map(deep => [0, 1, 2, 3].map(f => [0, 1, 2, 3].map(v => toCanvas(SP.waterBuffer(deep, f, v)))));
@@ -2415,7 +2455,7 @@ function render() {
         if (lowerAt(x + 1, y, h)) ctx.drawImage(rimImgs[2], sx - 16, top);
         if (lowerAt(x, y + 1, h)) ctx.drawImage(rimImgs[3], sx - 16, top);
         const w = world.wearAt(x, y);
-        if (w) ctx.drawImage(crackImgs[crackMat(t)][w - 1][(x * 7 + y * 13) & 3], sx - 16, top);
+        if (w) { const c = crackImgs[crackMat(t)][w - 1][(x * 7 + y * 13) & 3]; draw(c, sx - c.ox, top - c.oy); }
       }
       const o = world.objAt(x, y);
       // un bâtiment passe avant tout ce qui est sur sa rangée (c'est devant lui)
@@ -2426,7 +2466,7 @@ function render() {
       for (const m of marks) {
         if (m.img) {
           ctx.globalAlpha = Math.min(1, (180 - m.age) / 20);
-          ctx.drawImage(m.img, Math.round(ox + isoX(m.x, m.y) - m.img.ox), Math.round(oy + isoY(m.x, m.y) - m.h * 8 - m.img.oy));
+          draw(m.img, Math.round(ox + isoX(m.x, m.y) - m.img.ox), Math.round(oy + isoY(m.x, m.y) - m.h * 8 - m.img.oy));
           continue;
         }
         ctx.globalAlpha = Math.min(0.85, (9 - m.age) / 4);
@@ -2505,7 +2545,7 @@ function drawGlows() {
     // Brainless passe devant : on ne rallume pas ce qui est caché derrière lui
     if (g.behind && g.x < px1 && g.x + g.img.width > px0 && g.y < py1 && g.y + g.img.height > py0) continue;
     ctx.globalAlpha = dk * 0.85;
-    ctx.drawImage(g.img, g.x, g.y);
+    draw(g.img, g.x, g.y);
     if (g.halo) {
       ctx.fillStyle = '#ffcf6a';
       ctx.globalAlpha = dk * 0.2;
@@ -2533,7 +2573,7 @@ function drawNpc(n, ox, oy) {
   if (!alive(n)) {
     ctx.globalAlpha = Math.min(1, (150 - n.deadT) / 10);
     const im = peopleImgs[n.type][n.anim][n.dir][0];
-    ctx.drawImage(im, sx - im.ox, sy - im.oy);
+    draw(im, sx - im.ox, sy - im.oy);
     ctx.globalAlpha = 1;
     if (n === player.nearCorpse) {
       const l = { touch: 'N', keys: 'R', pad: 'L1' }[inputMode] + ': DEVORER';
@@ -2549,13 +2589,13 @@ function drawNpc(n, ox, oy) {
   const img = peopleImgs[n.type][n.anim][n.dir][f];
   n.fade = Math.min(1, (n.fade ?? 1) + 1 / 30);
   ctx.globalAlpha = n.fade;
-  ctx.drawImage(img, sx - img.ox, sy - jz - img.oy);
+  draw(img, sx - img.ox, sy - jz - img.oy);
   ctx.globalAlpha = 1;
   if (n.flash > 0) {
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     ctx.globalAlpha = 0.7;
-    ctx.drawImage(img, sx - img.ox, sy - jz - img.oy);
+    draw(img, sx - img.ox, sy - jz - img.oy);
     ctx.restore();
   }
   if (n.state === 'ko' && !n.air) {
@@ -2602,7 +2642,7 @@ function drawObject(e) {
     f = Math.floor(time * (info.tree ? 2 : 2.5) * gust + ph) % frames.length;
   }
   const img = frames[f];
-  ctx.drawImage(img, gx - img.ox, gy - img.oy);
+  draw(img, gx - img.ox, gy - img.oy);
   const gl = objGlow[e.o];
   if (gl && darkness() > 0.15) glows.push({ img: gl, x: gx - gl.ox, y: gy - gl.oy, behind: !playerDrawn, halo: e.o === O.LANTERN, hx: gx + 3, hy: gy - 15 });
   // pétales qui tombent des cerisiers
@@ -2634,19 +2674,19 @@ function drawPlayer(ox, oy, withShadow) {
     const A = ANIMS[player.anim];
     img = nomu[player.anim][player.dir][Math.floor(player.t) % A.frames];
   }
-  const px = sx - ORIGIN_X, py = sy - gz - jz - ORIGIN_Y;
+  const px = sx - img.ox, py = sy - gz - jz - img.oy;
   if (player.water) {
     // seule la partie au-dessus de la surface est nette ; dessous, on le devine à travers l'eau
     const wl = sy - WATER_LINE;
     const a = ctx.globalAlpha;
     ctx.save();
     ctx.beginPath(); ctx.rect(0, 0, VW, wl); ctx.clip();
-    ctx.drawImage(img, px, py);
+    draw(img, px, py);
     ctx.restore();
     ctx.save();
     ctx.beginPath(); ctx.rect(0, wl, VW, VH); ctx.clip();
     ctx.globalAlpha = a * 0.22;
-    ctx.drawImage(img, px, py);
+    draw(img, px, py);
     ctx.restore();
     if (withShadow) {
       // écume autour du corps, qui ondule
@@ -2660,12 +2700,12 @@ function drawPlayer(ox, oy, withShadow) {
     }
     return;
   }
-  ctx.drawImage(img, px, py);
+  draw(img, px, py);
   if (player.flash > 0 && withShadow) {
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     ctx.globalAlpha = 0.6;
-    ctx.drawImage(img, px, py);
+    draw(img, px, py);
     ctx.restore();
   }
   if (player.charging && withShadow) {
@@ -2674,7 +2714,7 @@ function drawPlayer(ox, oy, withShadow) {
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     ctx.globalAlpha = (0.08 + player.charge * 0.3) * pulse;
-    ctx.drawImage(img, sx - ORIGIN_X, sy - gz - jz - ORIGIN_Y);
+    draw(img, px, py);
     ctx.restore();
   }
 }
@@ -2804,7 +2844,7 @@ function drawFx(f, ox, oy) {
     ctx.save();
     ctx.beginPath(); ctx.rect(0, 0, VW, sy + 14); ctx.clip();
     ctx.globalAlpha = 1 - u;
-    ctx.drawImage(f.img, Math.round(sx - f.img.ox + (Math.random() - 0.5) * 3 * (1 - u)), Math.round(sy - f.img.oy + u * u * 20));
+    draw(f.img, Math.round(sx - f.img.ox + (Math.random() - 0.5) * 3 * (1 - u)), Math.round(sy - f.img.oy + u * u * 20));
     ctx.restore();
   } else if (f.kind === 'fall') {
     const sx = ox + isoX(f.x, f.y), sy = oy + isoY(f.x, f.y) - f.gz;
@@ -2814,7 +2854,7 @@ function drawFx(f, ox, oy) {
     ctx.globalAlpha = f.t > 0.75 ? Math.max(0, 1 - (f.t - 0.75) / 0.2) : 1;
     ctx.translate(Math.round(sx), Math.round(sy));
     ctx.rotate(ang);
-    ctx.drawImage(f.img, -f.img.ox, -f.img.oy);
+    draw(f.img, -f.img.ox, -f.img.oy);
     ctx.restore();
   }
 }
@@ -2888,7 +2928,7 @@ function drawSprintBar(x, y) {
 }
 
 function drawHpBar(x, y) {
-  const w = 52, fill = Math.max(0, Math.round((w - 2) * player.hp / maxHp()));
+  const w = 52, fill = Math.max(0, Math.min(w - 2, Math.round((w - 2) * player.hp / maxHp())));
   const low = player.hp < 30 && Math.floor(time * 5) % 2;
   drawText(ctx, 'VIE', x, y, player.regen ? '#c9d0ff' : '#ff9aa8');
   const bx = x + 26;
@@ -3074,7 +3114,7 @@ function updateMenu(dt) {
   if (location.hash === '#debug') {
     window.BRAINLESS = { get world() { return world; }, player, startWorld, createWorld, listWorlds, quitToMenu, get mode() { return mode; }, stats, O, T, decals, particles, npcs, damage, hurtPlayer,
       vstate, crime, killNpc, hitNpc, nearestPrey, get scent() { return scent; },
-      get tod() { return tod; }, set tod(v) { tod = v; }, weather, spawnBeast, gainEvo, has, blockedFor, freeSpot, OBJ_INFO, overlapping, crackTile, craterTile, doSlam, doBigPunch };
+      get tod() { return tod; }, set tod(v) { tod = v; }, weather, spawnBeast, gainEvo, has, pages, blockedFor, freeSpot, OBJ_INFO, overlapping, crackTile, craterTile, doSlam, doBigPunch };
   }
   await loadAssets();
   loading.style.display = 'none';

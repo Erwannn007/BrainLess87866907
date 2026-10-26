@@ -56,6 +56,12 @@ du même jeu.
   - `facing = [cx, ct]` : direction du regard dans le plan caméra. Le personnage a 8 directions,
     `dirFacing(k)` avec `k * 45°`, et `k = 2` = face caméra.
 - `ik(racine, bout, l1, l2, plier)` : genoux et coudes en cinématique inverse.
+- **Planches de sprites** (`toSprite` / `draw` dans `main.js`) : au chargement, chaque sprite cuit
+  (Brainless, habitants, animaux, bâtiments, objets, fissures, sang) est rogné au plus près de son
+  dessin puis rangé dans une planche de 2048x2048. On le dessine avec `draw(sprite, x, y)` (coin
+  haut-gauche = position du point d'ancrage moins `sprite.ox/oy`), jamais avec `ctx.drawImage`
+  directement. Tout tient aujourd'hui dans une seule planche (~17 Mo). Les tuiles, l'eau, les
+  ombres et les boutons restent de petits canvas à part.
 - `makeBuffer(w, h)` + `outlineBuffer(buf, k)` : dessin pixel par pixel (fleurs, herbes, UI).
 
 ## 4. Brainless (`js/nomu.js`)
