@@ -39,6 +39,7 @@ export const ANIMS = {
   swim: { frames: 8, fps: 8, loop: true }, // nage en eau profonde
   tread: { frames: 8, fps: 7, loop: true }, // nage sur place
   swimfast: { frames: 8, fps: 11, loop: true }, // sprint dans l'eau
+  down: { frames: 8, fps: 8, loop: false }, // à bout de forces, il s'effondre
 };
 
 const smooth = (u) => u * u * (3 - 2 * u);
@@ -232,6 +233,15 @@ export function poseFor(anim, t) {
     p.bob = k * 0.4;
     p.twist = -0.12 + j * 0.04;
     return p;
+  }
+  if (anim === 'down') {
+    // Il tangue, tombe à genoux, puis s'écroule à plat ventre, bras en croix.
+    return keyed([
+      { t: 0, p: { lean: -1.5, jaw: 1.4, hL: [-12, 0, 20], hR: [12, 0, 22], swell: 0.04 } },
+      { t: 0.3, p: { crouch: 7, lean: 1, jaw: 1.2, hL: [-8, 6, 12], hR: [8, 6, 12], fL: [-5, 3, 0], fR: [5, -3, 0] } },
+      { t: 0.6, p: { handsAbs: 1, hL: [-7, 15, 2.4], hR: [7, 16, 2.4], crouch: 9, pitch: 1.15, headUp: 1, jaw: 1, fL: [-5, -6, 0], fR: [5, -7, 0] } },
+      { t: 1, p: { handsAbs: 1, hL: [-13, 13, 2], hR: [13, 11, 2], crouch: 13, pitch: 1.5, headUp: -1, jaw: 0.6, fL: [-6, -12, 0], fR: [6, -11, 0] } },
+    ], t);
   }
   if (anim === 'jump') {
     // t : 0 décollage, 0.5 sommet, 1 atterrissage

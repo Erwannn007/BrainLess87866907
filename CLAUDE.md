@@ -6,8 +6,9 @@ Safari iOS et installée sur l'écran d'accueil. Tout est en JS vanilla (modules
 aucune image ni son externe** : chaque sprite et chaque son est généré par code au lancement.
 
 Avant de créer ou de modifier un sprite, relis cette charte et regarde les planches de
-référence `docs/ref-brainless.png` et `docs/ref-nature.png` (avec l'outil Read) : tout ce qui
-est nouveau doit avoir l'air de sortir du même jeu.
+référence `docs/ref-brainless.png`, `docs/ref-nature.png`, `docs/ref-village.png` et
+`docs/ref-people.png` (avec l'outil Read) : tout ce qui est nouveau doit avoir l'air de sortir
+du même jeu.
 
 ---
 
@@ -109,6 +110,9 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
 | Pierre / Neige | `#6f747f … #b8bcc4` / `#c9d5e1 … #ffffff` |
 | Terre (flancs) | `#4a2f1c #62402a #7a5233 #8e6440` |
 | Eau / Eau profonde | `#1f4f86 #2a66a6 #3f86c6 #8cc6ee` / `#163a6a … #6fa9dc` |
+| Chemin | `#7a5a3a #94704a #ab875a #c29e6e` (petits cailloux) |
+| Terre retournée (cratères, champs) | `#4f3220 #664330 #7d5638 #946a44` (mottes) |
+| Pavés | `#5f5a52 #7f786c #9d9586 #bdb4a2` (pierres en quinconce, joints ton 0) |
 
 - **Arbres** : tronc en capsule effilée + houppier en grappe de 5 à 7 sphères. On a 4 frames
   de balancement (`SWAY_FRAMES`), et le haut bouge plus que le bas. Le canevas fait 60×78,
@@ -127,7 +131,59 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
 - Les objets ont des infos de gameplay dans `OBJ_INFO` (`solid`, `hp`, `tree`, `rock`,
   `leafy`, `small`…). Chaque nouvel objet y a sa ligne, et sa génération dans `genCell`.
 
-## 6. Effets visuels
+## 6. Villages et bâtiments (`js/buildings.js`, `js/world.js`)
+
+- **Moteur de volumes** : `renderSolids(prims)` lance un rayon iso par pixel dans des boîtes,
+  toits à deux pans (`gable` + `gableWall`), pyramides, cylindres, ellipsoïdes et capsules.
+  Coordonnées `u` (= x monde), `v` (= y monde), `z` ; 16 unités = 1 tuile, 8 = une marche.
+  Même charte que le reste : 4 tons par matière, lumière `L = (-0.25, 0.55, 0.8)` (face gauche
+  claire, face droite sombre, dessus le plus clair), grain `hash`, lignes internes, contour 0.3.
+  Les textures sont des fonctions de `(u, v, z)` : joints de pierre, colombages, rangées de tuiles…
+  Une fenêtre met `q.glow = 1` : elle est rallumée la nuit (couche `glow`, mode `lighter`).
+- **Bâtiments** : 2x2 tuiles. L'objet est posé sur la tuile de devant (l'ancre) ; les 3 autres
+  tuiles portent `PART_W / PART_N / PART_NW` qui renvoient vers l'ancre. Le sprite est centré sur
+  le coin commun des 4 tuiles. Collision = une boîte (`box`). Dans le tri de profondeur, un
+  bâtiment passe avant tout ce qui est sur sa rangée, et Brainless/les habitants passent devant
+  s'ils sont du côté +x ou +y.
+- **3 états** par bâtiment : intact → abîmé (trous dans le toit, fissures, crépi tombé, vitres
+  cassées, gravats) → ruine (murs cassés en dents, plancher, gravats, poutres calcinées).
+  On le voit **trembler** à chaque coup (`hits`). Résistance (`BUILDINGS` dans `world.js`) :
+
+  | Bâtiment | Toit | PV avant abîmé / avant ruine |
+  |---|---|---|
+  | Chaumière | chaume `#6e5420 … #ead37a` | 4 / 4 |
+  | Maison à colombages | tuiles `#5e1f17 … #d9744c` | 6 / 6 |
+  | Grange | bardeaux `#2e1a10 … #8c5a36`, murs `#4a1410 … #c45a44` | 5 / 5 |
+  | Auberge | ardoise `#252b38 … #7083a0` | 8 / 8 |
+  | Tour de guet | ardoise, pierre `#3f434b … #a7acb5` | 11 / 11 |
+
+  Les dégâts de zone baissent avec la distance (`base x (1 - 0.75 d/R)`) : un coup chargé à bout
+  portant rase une chaumière, plus loin il l'abîme seulement ; la tour encaisse plusieurs coups.
+- **Objets de village** (1 tuile) : puits, étal, clôtures, tonneau, caisse, foin, lanterne (allumée
+  la nuit), blé, choux, planches. Chacun a sa ligne `OBJ_INFO` (`prop`, `crime`, `next` = ce qu'il
+  devient une fois cassé).
+- **Génération** (`planVillage`) : au plus un village par région de 80x80 tuiles, sur un site plat
+  et sec (`siteOk`). Hameau (R 7), village (R 10), grand village (R 13, place pavée, tour). Le sol
+  est aplani, les arbres retirés, puis place + puits, bâtiments, chemins de chaque porte à la
+  place, champs clôturés, objets, lanternes, quelques arbres. Un grand village est garanti près
+  du départ.
+
+## 7. Habitants (`js/people.js`)
+
+- Même moteur que Brainless (capsules + sphères, `renderModel`), environ 27 px de haut (enfant
+  ~19 px), 48x54, origine (24, 45). Visage = partie avant de la tête (`dot(n, fc)`), cheveux au-dessus.
+- Villageois : paysan (chapeau de paille), paysanne (robe, tablier, foulard), enfant, ancien
+  (barbe, canne, dos voûté), marchand (béret, tablier). Anims : `idle walk flee wave ko`.
+- Chevalier : armure `#353b48 #626b7c #9aa3b4 #dfe5ee`, tabard bleu à croix dorée, plumet rouge,
+  épée, bouclier. Anims : `idle walk run attack hurt ko`.
+- Comportement : ils se promènent, saluent Brainless quand il est calme, rentrent dormir la nuit,
+  s'enfuient en criant quand il fait le méchant, volent et tombent KO (étoiles) quand on les frappe.
+- **Méchanceté** (`heat`) : casser le village ou frapper ses habitants la fait monter. Étoiles à
+  1/6/14/26/40 → 1, 2, 3, 5, 7 chevaliers qui sortent de la tour ou des portes. Elle redescend
+  quand plus aucun chevalier ne le talonne. Vie de Brainless : 100, super régénération après 3 s
+  sans coup ; à 0 il s'effondre et se réveille au départ.
+
+## 8. Effets visuels
 
 - **Particules** : 1–2 px, couleurs tirées de listes de 3–4 teintes de la matière
   (`LEAF_COLS`, `ROCK_COLS`, `WOOD_COLS`, `DUST_COLS`, `WATER_COLS`…).
@@ -137,12 +193,16 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
   (`#fff3b0/#ffe28a`, `#ffb347/#ff9a3c`, `#ff5a5a/#ff2e63`). Le corps s'illumine en `lighter`.
 - **Ondes de choc / arcs** : pointillés `#fff6d8` qui s'étendent et s'effacent.
 - **Eau** : ronds `#e8f6ff`, écume `#eaf7ff`, gerbes blanches et bleu clair.
+- **Sol abîmé** : fissures en 3 niveaux (`crackBuffer`, une version par matière) ; un coup chargé
+  au maximum creuse un **cratère** (la tuile descend d'une marche, l'herbe devient terre, 2 marches
+  au plus). Les fissures se referment et l'herbe repousse avec le temps (`healGround`).
+- **Effondrement** : la maison intacte s'enfonce dans un nuage de poussière et laisse la ruine.
 - **Traces au sol** : 3×1 px, couleur selon le sol (terre `#3d2b1a`, sable `#a88b52`,
   neige `#9fb3c8`, pierre `#4f535c`), disparaissent en 9 s.
 - **Secousse d'écran** (`shake`) dosée selon l'impact : pas ≈ 1.5, coup ≈ 2.5, gros coup 5–16.
 - **Jour/nuit** : teinte `multiply` (`SKY` dans `main.js`). Les lucioles sont dessinées après la teinte.
 
-## 7. Interface
+## 9. Interface
 
 - Police pixel maison 3×5 (`js/font.js`), en majuscules, avec une ombre décalée de 1 px.
 - Boutons ronds pixel (`circleBuf`) : COUP rouge `[225,70,90]`, CHARGE violet
@@ -153,7 +213,7 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
   `pad` (manette, `js/pad.js`, ex. AYN Thor). Les boutons tactiles ne s'affichent qu'en `touch` ;
   l'aide (`HINTS`) s'adapte au mode. Toute nouvelle action doit être jouable dans les 3 modes.
 
-## 8. Son (`js/audio.js`)
+## 10. Son (`js/audio.js`)
 
 - Tout est synthétisé avec Web Audio : `noise()` (bruit filtré) et `tone()` (oscillateur avec
   glissement). On les combine en couches : un **impact grave** (sine 60–120 Hz qui descend), une
@@ -162,7 +222,7 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
 - Chaque nouvelle action visible a son son. On utilise `gate()` pour éviter les doublons quand
   beaucoup de choses cassent en même temps.
 
-## 9. Comment ajouter un nouveau sprite (méthode)
+## 11. Comment ajouter un nouveau sprite (méthode)
 
 1. Choisir la technique : volume (→ `renderModel` avec capsules/sphères) ou petit détail
    plat (→ `makeBuffer` + `outlineBuffer`).
@@ -173,19 +233,24 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
    - `node tools/preview.mjs nomu /tmp/x.png '[["anim",0.25,1]]'` (poses de Brainless)
    - `node tools/preview.mjs nomu-sheet /tmp/x.png anim` (une anim × 8 directions)
    - `node tools/preview.mjs nature /tmp/x.png` (tout le décor)
+   - `node tools/preview.mjs village /tmp/x.png` (bâtiments x 3 états, objets, tuiles, fissures)
+   - `node tools/preview.mjs people /tmp/x.png` (habitants à côté de Brainless)
+   - `node tools/preview.mjs people-sheet /tmp/x.png knight attack` (une anim x 8 directions)
 
    Puis ouvrir le PNG avec Read et comparer aux planches `docs/ref-*.png`.
 5. Brancher le gameplay (`OBJ_INFO`, génération, sons, particules) et tester en jeu.
 6. Si le style de référence change volontairement, régénérer les planches :
    `node tools/preview.mjs nomu docs/ref-brainless.png` et
-   `node tools/preview.mjs nature docs/ref-nature.png`.
+   `node tools/preview.mjs nature docs/ref-nature.png`, `node tools/preview.mjs village docs/ref-village.png`,
+   `node tools/preview.mjs people docs/ref-people.png`.
 7. Si Brainless change, régénérer les icônes : `node tools/make-icons.mjs`.
 
-## 10. Publication
+## 12. Publication
 
 - Branche `main` servie par GitHub Pages (racine). Pas d'étape de build.
 - **À chaque mise à jour, incrémenter `VERSION` dans `sw.js`** sinon l'iPhone garde
   l'ancienne version en cache. Tout nouveau fichier JS doit être ajouté à la liste `FILES`.
 - Test local : `python3 -m http.server 8765` puis `http://localhost:8765/` ; `#debug` à la
-  fin de l'URL expose `window.BRAINLESS` (monde, joueur, stats…) pour les tests automatisés.
+  fin de l'URL expose `window.BRAINLESS` (monde, joueur, stats, habitants, `heat`, `tod`,
+  `doSlam`, `doBigPunch`…) pour les tests automatisés.
 - Les commentaires et textes du jeu sont en français.

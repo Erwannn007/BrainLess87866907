@@ -249,6 +249,112 @@ export const sfx = {
     // rafale qui part au loin
     noise({ f: 1600, f2: 300, q: 0.6, gain: 0.3 + power * 0.3, a: 0.05, dec: 0.8 + power * 0.8, delay: 0.08 });
   },
+  // --- village
+  hitBuilding(mat) {
+    if (!ready() || !gate('bhit', 0.05)) return;
+    tone({ f: rnd(120, 150), f2: 60, type: 'triangle', gain: 0.5, dec: 0.2 });
+    tone({ f: 70, f2: 38, gain: 0.5, dec: 0.2 });
+    noise({ type: 'lowpass', f: 900, gain: 0.4, dec: 0.22 });
+    if (mat === 'stone' || mat === 'slate') noise({ f: 2200, q: 2.5, gain: 0.3, dec: 0.07 });
+    else noise({ type: 'highpass', f: 3500, gain: 0.1, a: 0.02, dec: 0.3, delay: 0.03 }); // paille, tuiles qui glissent
+  },
+  buildingCrack() {
+    if (!ready() || !gate('bcrack', 0.2)) return;
+    tone({ f: 95, f2: 50, type: 'sawtooth', gain: 0.22, a: 0.03, dec: 0.45, lp: 500 });
+    noise({ type: 'highpass', f: 2500, gain: 0.25, dec: 0.15 });
+    for (let i = 0; i < 5; i++) tone({ f: rnd(800, 2400), type: 'square', gain: 0.035, dec: 0.03, delay: 0.05 + i * rnd(0.03, 0.08) });
+  },
+  collapse() {
+    if (!ready() || !gate('collapse', 0.15)) return;
+    tone({ f: 55, f2: 22, gain: 1, dec: 1.4, rev: 0.6 });
+    noise({ type: 'lowpass', f: 1800, f2: 120, gain: 0.8, dec: 1.6, rev: 0.6 });
+    noise({ type: 'highpass', f: 2500, gain: 0.25, a: 0.05, dec: 1.2 });
+    for (const d of [0.2, 0.45, 0.7]) tone({ f: rnd(70, 90), f2: 35, gain: 0.5, dec: 0.25, delay: d });
+    for (let i = 0; i < 14; i++) tone({ f: rnd(500, 2200), type: 'square', gain: 0.035, dec: 0.03, delay: Math.random() * 1.2 }); // gravats
+  },
+  propBreak(kind) {
+    if (!ready() || !gate('prop', 0.05)) return;
+    if (kind === 'lantern') {
+      for (let i = 0; i < 7; i++) tone({ f: rnd(3000, 6000), type: 'square', gain: 0.03, dec: 0.03, delay: i * rnd(0.01, 0.04) }); // verre
+      noise({ type: 'highpass', f: 5000, gain: 0.2, dec: 0.2 });
+    } else if (kind === 'hay') {
+      noise({ type: 'highpass', f: 2500, gain: 0.25, a: 0.02, dec: 0.35 });
+    } else {
+      noise({ type: 'lowpass', f: 2200, f2: 500, gain: 0.45, dec: 0.25 });
+      tone({ f: rnd(160, 200), f2: 90, type: 'triangle', gain: 0.35, dec: 0.12 });
+      if (kind === 'barrel') noise({ f: 1200, f2: 500, q: 0.7, gain: 0.25, dec: 0.3, delay: 0.04 }); // ça coule
+    }
+  },
+  crunch() {
+    if (!ready() || !gate('crunch', 0.06)) return;
+    noise({ f: 1600, q: 1.2, gain: 0.3, dec: 0.12 });
+    tone({ f: 70, f2: 35, gain: 0.45, dec: 0.2 });
+    for (let i = 0; i < 3; i++) tone({ f: rnd(700, 1800), type: 'square', gain: 0.03, dec: 0.025, delay: 0.03 + i * 0.04 });
+  },
+  // Cri de villageois : voix rauque qui monte puis retombe, avec un vibrato de panique.
+  scream(f = 300) {
+    if (!ready() || !gate('scream', 0.22)) return;
+    const t = ctx.currentTime + rnd(0, 0.08), dur = rnd(0.35, 0.55);
+    const o = ctx.createOscillator();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(f, t);
+    o.frequency.exponentialRampToValueAtTime(f * 1.35, t + dur * 0.3);
+    o.frequency.exponentialRampToValueAtTime(f * 0.8, t + dur);
+    const lfo = ctx.createOscillator(), lg = ctx.createGain();
+    lfo.frequency.value = 9; lg.gain.value = f * 0.05;
+    lfo.connect(lg).connect(o.frequency);
+    const fl = ctx.createBiquadFilter(); fl.type = 'bandpass'; fl.frequency.value = Math.min(2400, f * 3.5); fl.Q.value = 1.5;
+    const g = ctx.createGain(); env(g, t, 0.03, 0.13, dur);
+    o.connect(fl).connect(g).connect(sfxBus);
+    for (const n of [o, lfo]) { n.start(t); n.stop(t + dur + 0.1); }
+  },
+  hello(f = 300) {
+    if (!ready() || !gate('hello', 0.6)) return;
+    tone({ f: f * 1.6, f2: f * 2, type: 'triangle', gain: 0.07, dec: 0.08 });
+    tone({ f: f * 2, f2: f * 2.4, type: 'triangle', gain: 0.07, dec: 0.1, delay: 0.12 });
+  },
+  clank() {
+    if (!ready() || !gate('clank', 0.04)) return;
+    tone({ f: rnd(1700, 2100), type: 'square', gain: 0.05, dec: 0.05 });
+    tone({ f: rnd(2400, 2800), gain: 0.08, dec: 0.35 }); // l'armure résonne
+    noise({ type: 'highpass', f: 5000, gain: 0.25, dec: 0.08 });
+    tone({ f: 110, f2: 60, gain: 0.35, dec: 0.1 });
+  },
+  swordSwing() {
+    if (!ready() || !gate('sword', 0.08)) return;
+    noise({ f: 900, f2: 3200, q: 2, gain: 0.2, a: 0.04, dec: 0.12 });
+  },
+  playerHit() {
+    if (!ready() || !gate('phit', 0.08)) return;
+    tone({ f: 120, f2: 50, gain: 0.7, dec: 0.2 });
+    noise({ f: 1500, q: 1, gain: 0.35, dec: 0.1 });
+    tone({ f: 2300, gain: 0.06, dec: 0.25 }); // la lame qui tinte
+    tone({ f: 160, f2: 110, type: 'sawtooth', gain: 0.14, a: 0.02, dec: 0.2, lp: 700 }); // grognement
+  },
+  knightDown() {
+    if (!ready() || !gate('kdown', 0.1)) return;
+    tone({ f: 90, f2: 40, gain: 0.5, dec: 0.25, delay: 0.25 });
+    for (let i = 0; i < 6; i++) tone({ f: rnd(1200, 3000), type: 'square', gain: 0.04, dec: 0.04, delay: 0.2 + i * rnd(0.04, 0.09) });
+  },
+  // Cloche d'alarme du village quand il devient plus recherché.
+  bell() {
+    if (!ready() || !gate('bell', 1)) return;
+    for (const d of [0, 0.7]) {
+      tone({ f: 440, gain: 0.25, dec: 2.2, delay: d, rev: 0.5 });
+      tone({ f: 666, gain: 0.1, dec: 1.6, delay: d });
+      tone({ f: 1104, gain: 0.05, dec: 1, delay: d });
+    }
+  },
+  down() {
+    if (!ready()) return;
+    tone({ f: 150, f2: 55, type: 'sawtooth', gain: 0.3, a: 0.05, dec: 1.2, lp: 600 });
+    tone({ f: 70, f2: 28, gain: 0.9, dec: 0.5, delay: 0.55, rev: 0.4 });
+    noise({ type: 'lowpass', f: 800, gain: 0.4, dec: 0.4, delay: 0.55 });
+  },
+  regen() {
+    if (!ready() || !gate('regen', 2)) return;
+    for (let i = 0; i < 4; i++) tone({ f: 300 + i * 120, f2: 420 + i * 140, type: 'triangle', gain: 0.04, dec: 0.15, delay: i * 0.09 });
+  },
   ui() {
     if (!ready()) return;
     tone({ f: 660, f2: 880, type: 'square', gain: 0.06, dec: 0.06 });

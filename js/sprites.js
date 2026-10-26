@@ -238,6 +238,16 @@ export function shadowBuffer(rw, rh) {
 }
 
 // ---------- tuiles isométriques ----------
+// Pavés : grille de pierres en losange, joints sombres, chaque pierre a sa teinte.
+function cobbleShade(x, r, seed) {
+  const u = (x - 16) / 2 + r, v = r - (x - 16) / 2; // axes du monde dans la tuile
+  const row = Math.floor(v / 4);
+  const uu = u + (row & 1) * 2.5;
+  if (v - row * 4 < 0.9 || uu - Math.floor(uu / 5) * 5 < 0.9) return 0;
+  const k = hash(Math.floor(uu / 5), row, seed + 11);
+  return k < 0.3 ? 1 : k < 0.85 ? 2 : 3;
+}
+
 const TOPS = {
   [T.GRASS]: ramp('#4b8a35', '#5c9e3f', '#73b84d', '#8fd162'),
   [T.FOREST]: ramp('#2f6329', '#3c7533', '#4f9142', '#68a854'),
@@ -245,6 +255,9 @@ const TOPS = {
   [T.SAND]: ramp('#c9b06c', '#dfc98a', '#ecdca2', '#f6ebbf'),
   [T.STONE]: ramp('#6f747f', '#878c96', '#9ea3ac', '#b8bcc4'),
   [T.SNOW]: ramp('#c9d5e1', '#e3eaf1', '#f3f7fa', '#ffffff'),
+  [T.PATH]: ramp('#7a5a3a', '#94704a', '#ab875a', '#c29e6e'),
+  [T.DIRT]: ramp('#4f3220', '#664330', '#7d5638', '#946a44'),
+  [T.COBBLE]: ramp('#5f5a52', '#7f786c', '#9d9586', '#bdb4a2'),
 };
 const DIRT = ramp('#4a2f1c', '#62402a', '#7a5233', '#8e6440');
 const SANDSIDE = ramp('#8f7444', '#a88b52', '#c2a364', '#d4b97c');
@@ -263,7 +276,8 @@ export function blockBuffer(type, level, v) {
   const b = makeBuffer(TILE_W, TILE_H + sideH);
   const top = TOPS[type];
   const grassy = type === T.GRASS || type === T.FOREST || type === T.MEADOW;
-  const sideRamp = type === T.SAND ? SANDSIDE : grassy ? DIRT : STONESIDE;
+  const earthy = type === T.PATH || type === T.DIRT;
+  const sideRamp = type === T.SAND ? SANDSIDE : grassy || earthy ? DIRT : STONESIDE;
   const seed = type * 31 + v * 7;
 
   // faces latérales
@@ -296,6 +310,12 @@ export function blockBuffer(type, level, v) {
       if (grassy && h > 0.972) { s = 3; b.set(x, r + 1, top[0]); }
       if (type === T.STONE && h > 0.95) s = 0;
       if (type === T.SNOW && h > 0.97) s = 3;
+      if (type === T.DIRT) {
+        // terre retournée : mottes claires avec leur ombre dessous
+        if (h > 0.9) { s = 3; b.set(x, r + 1, top[0]); } else if (h < 0.22) s = 0;
+      }
+      if (type === T.PATH && h > 0.975) { s = 3; b.set(x + 1, r, STONESIDE[2]); } // petits cailloux
+      if (type === T.COBBLE) s = cobbleShade(x, r, seed);
       b.set(x, r, top[s]);
     }
   }
@@ -324,6 +344,49 @@ export function waterBuffer(deep, frame, v) {
       if (w > 1.55) s = 3; else if (w > 1.05) s = 2; else if (w < -1.4) s = 0;
       b.set(x, r, C[s]);
     }
+  }
+  return Object.assign(b, { ox: 16, oy: 0 });
+}
+
+// Fissures sur le dessus d'une tuile, après un gros coup. Niveau 1 à 3 ;
+// `mat` : 'earth' (herbe, terre), 'sand', 'stone', 'snow'. Le niveau 3 laisse voir le dessous.
+const CRACK = {
+  earth: { line: '#2e1e12', patch: ['#62402a', '#7a5233'], chip: '#8e6440' },
+  sand: { line: '#8f7444', patch: ['#c2a364', '#d4b97c'], chip: '#f6ebbf' },
+  stone: { line: '#2c2f36', patch: ['#575b64', '#6c717b'], chip: '#c9cdd4' },
+  snow: { line: '#7f93aa', patch: ['#b8c6d6', '#a8b8ca'], chip: '#ffffff' },
+};
+export function crackBuffer(mat, level, v) {
+  const C = CRACK[mat], line = hex(C.line), chip = hex(C.chip), patch = C.patch.map(hex);
+  const b = makeBuffer(TILE_W, TILE_H);
+  const inside = (x, y) => { if (y < 1 || y > 14) return false; const [x0, x1] = rowSpan(y); return x > x0 + 1 && x < x1 - 1; };
+  // terre à nu, au niveau 3
+  if (level >= 3) {
+    for (let y = 0; y < 16; y++) for (let x = 0; x < TILE_W; x++) {
+      if (!inside(x, y)) continue;
+      const dx = (x - 16) / 9, dy = (y - 8) / 4.5;
+      if (dx * dx + dy * dy + hash(x, y, v + 40) * 0.5 < 0.8) b.set(x, y, patch[hash(x, y, v) < 0.7 ? 0 : 1]);
+    }
+  }
+  // fissures en zigzag qui partent du centre
+  const n = [3, 5, 7][level - 1];
+  for (let i = 0; i < n; i++) {
+    let x = 16 + (hash(i, v, 2) - 0.5) * 4, y = 8 + (hash(i, v, 3) - 0.5) * 2;
+    const a0 = (i / n) * Math.PI * 2 + hash(i, v, 4);
+    const len = 4 + level * 2 + hash(i, v, 5) * 4;
+    for (let k = 0; k < len; k++) {
+      const a = a0 + (hash(i, k, v + 7) - 0.5) * 1.4;
+      x += Math.cos(a) * 1.2; y += Math.sin(a) * 0.6;
+      const px = Math.round(x), py = Math.round(y);
+      if (!inside(px, py)) break;
+      b.set(px, py, line);
+      if (k % 3 === 1 && inside(px, py + 1) && !b.get(px, py + 1)) b.set(px, py + 1, chip, 110); // bord éclairé
+    }
+  }
+  // éclats
+  for (let i = 0; i < level * 2; i++) {
+    const x = 6 + ((hash(i, v, 8) * 20) | 0), y = 3 + ((hash(i, v, 9) * 10) | 0);
+    if (inside(x, y)) b.set(x, y, chip, 220);
   }
   return Object.assign(b, { ox: 16, oy: 0 });
 }

@@ -17,13 +17,19 @@ s'installe sur l'écran d'accueil (PWA, marche hors-ligne).
 - **PC** : clic gauche = coup (maintenir = chargé), clic droit = frappe au sol, F = plein écran.
 - Clavier : flèches/ZQSD, Maj = sprint, Espace = saut, J = coup, K (maintenir) = charge.
 - Son : tout est synthétisé en direct (pas, galop, coups, arbres qui craquent et tombent, rochers, charge, cri, frappe au sol, vent, eau, oiseaux le jour, grillons la nuit). Icône haut-parleur en haut à droite (ou M) pour couper.
-- La position, les arbres abattus et l'heure sont sauvegardés automatiquement.
+- **Villages** : hameaux, villages et grands villages (chaumières, maisons à colombages, granges, auberges, tours de guet, puits, étals, champs). Chaque bâtiment tremble sous les coups, s'abîme puis s'effondre ; un coup chargé rase tout ce qui est près et abîme ce qui est plus loin. La nuit, les fenêtres et les lanternes s'allument.
+- **Habitants** : paysans, paysannes, enfants, anciens, marchands. Ils te saluent quand tu es calme, rentrent dormir la nuit, fuient en criant si tu fais le méchant.
+- **Recherche** : casser le village fait monter les étoiles, et des chevaliers viennent te combattre. Barre de VIE ; Brainless se régénère tout seul. À 0, il s'effondre et se réveille au départ.
+- **Sol abîmé** : les coups chargés fissurent le sol et creusent des cratères ; l'herbe repousse avec le temps.
+- La position, les arbres abattus, les maisons détruites, le sol creusé et l'heure sont sauvegardés automatiquement.
 
 ## Comment c'est fait
 Aucune image : tout est dessiné par code au lancement.
 - `js/raster.js` : mini moteur "3D → pixel art" (capsules, z-buffer, ombrage 4 tons tramé, contours).
 - `js/nomu.js` : squelette de Brainless + poses (repos, marche, course, coup, smash), cuites en frames × 8 directions.
-- `js/sprites.js` : arbres, rochers, fleurs, herbes, eau animée, tuiles.
+- `js/sprites.js` : arbres, rochers, fleurs, herbes, eau animée, tuiles, fissures.
+- `js/buildings.js` : bâtiments et objets de village (rayons iso dans des volumes), 3 états chacun.
+- `js/people.js` : villageois et chevaliers (squelettes en capsules, comme Brainless).
 - `js/world.js` : monde infini généré par chunks (lacs, rivières, forêts, montagnes enneigées).
 - `js/audio.js` : tous les sons, générés par Web Audio.
 - `js/main.js` : boucle de jeu, caméra, rendu iso, contrôles tactiles, jour/nuit, particules.
