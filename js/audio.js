@@ -221,6 +221,18 @@ export const sfx = {
     for (let i = 0; i < 5; i++) tone({ f: rnd(1500, 3000), type: 'square', gain: 0.025, dec: 0.02, delay: Math.random() * dur });
     if (big) tone({ f: 170, f2: 120, type: 'sawtooth', gain: 0.12, a: 0.03, dec: 0.25, lp: 800 }); // grognement
   },
+  splash(power = 1) {
+    if (!ready() || !gate('splash', 0.08)) return;
+    noise({ f: 1400, f2: 500, q: 0.7, gain: 0.25 + power * 0.35, a: 0.005, dec: 0.2 + power * 0.3, rev: power * 0.2 });
+    noise({ type: 'highpass', f: 3000, gain: 0.12 + power * 0.1, a: 0.01, dec: 0.3 + power * 0.3 });
+    tone({ f: 120, f2: 50, gain: 0.25 * power, dec: 0.15 });
+    for (let i = 0; i < 2 + power * 4; i++) tone({ f: rnd(600, 1400), f2: rnd(1500, 2600), gain: 0.04, dec: 0.04, delay: 0.05 + Math.random() * 0.3 }); // gouttes
+  },
+  stroke() {
+    if (!ready() || !gate('stroke', 0.15)) return;
+    noise({ type: 'lowpass', f: 1200, f2: 400, gain: 0.25, a: 0.04, dec: 0.25 });
+    for (let i = 0; i < 3; i++) tone({ f: rnd(500, 1000), f2: rnd(1200, 2000), gain: 0.03, dec: 0.05, delay: 0.1 + Math.random() * 0.2 }); // bulles
+  },
   ui() {
     if (!ready()) return;
     tone({ f: 660, f2: 880, type: 'square', gain: 0.06, dec: 0.06 });

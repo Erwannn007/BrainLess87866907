@@ -31,6 +31,7 @@ export const ANIMS = {
   jump: { frames: 6, fps: 1, loop: false }, // piloté par la hauteur du saut
   skid: { frames: 4, fps: 20, loop: true }, // demi-tour en dérapage
   brake: { frames: 4, fps: 20, loop: true }, // freinage en fin de sprint
+  swim: { frames: 8, fps: 8, loop: true }, // nage en eau profonde
 };
 
 const smooth = (u) => u * u * (3 - 2 * u);
@@ -152,6 +153,23 @@ export function poseFor(anim, t) {
     p.twist = 0.25 + j * 0.05;
     p.curl = 1;
     p.bob = k * 0.5;
+    return p;
+  }
+  if (anim === 'swim') {
+    // Crawl de bête : corps à plat, bras qui moulinent devant, jambes qui battent derrière.
+    const ph = t * TAU;
+    const p = basePose();
+    p.handsAbs = 1;
+    p.hL = [-8, 15 + Math.sin(ph) * 8, 12 + Math.cos(ph) * 6];
+    p.hR = [8, 15 + Math.sin(ph + Math.PI) * 8, 12 + Math.cos(ph + Math.PI) * 6];
+    p.fL = [-4, -12, 6 + Math.sin(ph * 2) * 2];
+    p.fR = [4, -12, 6 - Math.sin(ph * 2) * 2];
+    p.crouch = 9;
+    p.pitch = 1.25;
+    p.headUp = 4;
+    p.bob = Math.sin(ph * 2) * 0.6;
+    p.twist = Math.sin(ph) * 0.15;
+    p.jaw = 0.4;
     return p;
   }
   if (anim === 'brake') {

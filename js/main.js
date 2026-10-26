@@ -125,7 +125,7 @@ let tod = 0.3;
 let time = 0;
 const player = { x: 0, y: 0, z: 0, dir: 2, anim: 'idle', t: 0, action: null, actionT: 0, hitDone: false, dustT: 0, stamina: 1, tired: false, sprinting: false,
   jz: 0, vz: 0, air: false, charging: false, charge: 0, slamPower: 0, runFrame: -1,
-  slide: null, mv: null, idleT: 0 };
+  slide: null, mv: null, idleT: 0, water: 0, rippleT: 0 };
 let windT = 0; // rafale après une frappe au sol : la végétation s'agite
 const hits = new Map();
 const particles = [];
@@ -290,12 +290,20 @@ function groundZ(x, y) {
   return world.walkable(tx, ty) ? world.hAt(tx, ty) * 8 : -3;
 }
 
+// 0 : terre ferme, 1 : eau peu profonde (il patauge), 2 : eau profonde (il nage)
+function waterDepth(x, y) {
+  const t = world.typeAt(Math.floor(x), Math.floor(y));
+  return t === T.DEEP ? 2 : t === T.WATER ? 1 : 0;
+}
+const WATER_LINE = -3; // hauteur de la surface de l'eau
+const SINK = [0, 9, 10]; // de combien il s'enfonce sous la surface
+
 function blocked(nx, ny) {
   const tx = Math.floor(nx), ty = Math.floor(ny);
-  if (!world.walkable(tx, ty)) return true;
   const cur = world.hAt(Math.floor(player.x), Math.floor(player.y));
   const h = world.hAt(tx, ty);
-  const feet = player.z + player.jz; // en sautant on peut monter sur une marche plus haute
+  // dans l'eau, ses pieds sont au fond (niveau 0) : il peut remonter sur la berge
+  const feet = (player.water ? 0 : player.z) + player.jz; // en sautant on peut monter sur une marche plus haute
   if (h * 8 - feet > 8.5 || cur - h > 2) return true; // falaise
   for (let dy = -1; dy <= 1; dy++) {
     for (let dx = -1; dx <= 1; dx++) {
@@ -478,6 +486,7 @@ function surfaceAt(x, y) {
 }
 
 function land() {
+  if (waterDepth(player.x, player.y)) { player.air = false; player.jz = 0; player.vz = 0; splash(1); return; }
   sfx.land(player.sprinting);
   player.air = false;
   player.jz = 0;
@@ -512,7 +521,7 @@ function update(dt) {
   const prevMv = player.mv;
 
   // --- saut
-  if (input.jump && !player.air && !player.action && !player.charging && !player.slide) {
+  if (input.jump && !player.air && !player.action && !player.charging && !player.slide && player.water < 2) {
     player.air = true;
     player.vz = JUMP_V * (player.sprinting ? 1.1 : 1);
     sfx.jump();
@@ -525,7 +534,7 @@ function update(dt) {
   }
 
   // --- charge (maintenir B) puis frappe au sol au relâchement
-  if (!player.action && !player.air && !player.slide) {
+  if (!player.action && !player.air && !player.slide && player.water < 2) {
     if (chargeHeld()) {
       if (!player.charging) { player.charging = true; player.charge = 0; player.sprinting = false; setAnim('charge'); chargeStart(); }
       player.charge = Math.min(1, player.charge + dt / 1.6);
@@ -539,7 +548,7 @@ function update(dt) {
       startAction('slam');
     }
   }
-  if (input.punch && !player.action && !player.charging && !player.air && !player.slide) startAction('punch');
+  if (input.punch && !player.action && !player.charging && !player.air && !player.slide && player.water < 2) startAction('punch');
   input.punch = input.jump = false;
 
   if (player.slide) {
@@ -566,7 +575,7 @@ function update(dt) {
     // Petite tolérance : un joystick qui repasse par le centre pendant un demi-tour ne coupe pas le sprint.
     player.idleT = mag > 0.15 ? 0 : player.idleT + dt;
     const coasting = wasSprinting && player.mv && player.idleT < 0.12 && sprintHeld();
-    const run = sprintHeld() && !player.tired && (mag > 0.15 || coasting);
+    const run = sprintHeld() && !player.tired && (mag > 0.15 || coasting) && player.water < 2;
     if (!player.air) player.sprinting = run;
     if (mag > 0.15) {
       const cx = ix / mag, ct = iy / mag;
@@ -575,19 +584,20 @@ function update(dt) {
       if (player.sprinting && !player.air && player.mv && vx * player.mv[0] + vy * player.mv[1] < -0.35) {
         startSlide('skid', newDir); // demi-tour violent
       } else {
-        const speed = player.sprinting ? 5.8 : 2.2;
+        const speed = player.water === 2 ? 1.9 : (player.sprinting ? 5.8 : 2.2) * (player.water ? 0.62 : 1);
         if (player.sprinting && !player.air) trample(vx, vy);
         tryMove(vx * speed * dt, vy * speed * dt);
         player.dir = newDir;
         player.mv = player.sprinting ? [vx, vy] : null;
-        setAnim(player.sprinting ? 'run' : 'walk');
-        if (!player.sprinting && !player.air) walkSteps();
+        setAnim(player.water === 2 ? 'swim' : player.sprinting ? 'run' : 'walk');
+        if (player.water === 2) swimStrokes();
+        else if (!player.sprinting && !player.air) walkSteps();
         if (player.sprinting && !player.air) sprintImpacts(vx, vy);
       }
     } else if (coasting && run) {
       tryMove(player.mv[0] * 5.8 * dt, player.mv[1] * 5.8 * dt);
     } else {
-      setAnim('idle');
+      setAnim(player.water === 2 ? 'swim' : 'idle');
       if (!player.air) player.sprinting = false;
     }
     // il lâche le sprint en pleine course : il freine
@@ -602,8 +612,18 @@ function update(dt) {
   const A = ANIMS[player.anim];
   player.t += dt * A.fps * (player.charging ? 1 + player.charge * 1.8 : 1);
 
-  const gz = groundZ(player.x, player.y);
-  player.z += (gz - player.z) * Math.min(1, dt * 14);
+  const depth = waterDepth(player.x, player.y);
+  if (depth && !player.water && !player.air) splash(depth === 2 || wasSprinting ? 1 : 0.5);
+  player.water = player.air ? 0 : depth;
+  const gz = depth ? WATER_LINE - SINK[depth] : groundZ(player.x, player.y);
+  player.z += (gz - player.z) * Math.min(1, dt * (depth ? 8 : 14));
+  if (depth && (mag > 0.15 || Math.random() < dt * 2)) {
+    player.rippleT = (player.rippleT || 0) - dt;
+    if (player.rippleT <= 0) {
+      player.rippleT = mag > 0.15 ? 0.35 : 1.2;
+      fx.push({ kind: 'ripple', x: player.x, y: player.y, t: 0 });
+    }
+  }
 
   for (const [k, st] of hits) { st.shake = Math.max(0, st.shake - dt); }
 
@@ -622,7 +642,7 @@ function update(dt) {
       burst(ex, ey, f.gz, DUST_COLS, 14, { up: 25, speed: 2 });
       shake = Math.max(shake, 3);
     }
-    if ((f.kind === 'ring' && f.t > 0.6) || (f.kind === 'fall' && f.t > 0.95)) fx.splice(i, 1);
+    if ((f.kind === 'ring' && f.t > 0.6) || (f.kind === 'fall' && f.t > 0.95) || (f.kind === 'ripple' && f.t > 1.1)) fx.splice(i, 1);
   }
 }
 
@@ -632,7 +652,28 @@ function walkSteps() {
   const fi = Math.floor(player.t) % ANIMS.walk.frames;
   if (fi === player.runFrame) return;
   player.runFrame = fi;
-  if (fi === 2 || fi === 6) sfx.step(surfaceAt(player.x, player.y));
+  if (fi === 2 || fi === 6) {
+    if (player.water) { sfx.splash(0.3); burst(player.x, player.y, WATER_LINE, WATER_COLS, 4, { up: 30, speed: 0.6, g: 120, life: 0.4, spread: 0 }); }
+    else sfx.step(surfaceAt(player.x, player.y));
+  }
+}
+
+function swimStrokes() {
+  const fi = Math.floor(player.t) % ANIMS.swim.frames;
+  if (fi === player.runFrame) return;
+  player.runFrame = fi;
+  if (fi === 1 || fi === 5) {
+    sfx.stroke();
+    const [dx, dy] = dirWorld(player.dir);
+    burst(player.x + dx * 0.4, player.y + dy * 0.4, WATER_LINE, WATER_COLS, 5, { up: 35, speed: 0.8, g: 130, life: 0.45, spread: 0 });
+  }
+}
+
+const WATER_COLS = ['#ffffff', '#d8eefb', '#8cc6ee'];
+function splash(power) {
+  sfx.splash(power);
+  burst(player.x, player.y, WATER_LINE, WATER_COLS, Math.round(10 + power * 20), { up: 50 + power * 40, speed: 1.2 + power, g: 140, life: 0.6, spread: 0, big: 0.5 });
+  fx.push({ kind: 'ripple', x: player.x, y: player.y, t: 0, big: true });
 }
 
 function sprintImpacts(vx, vy) {
@@ -919,7 +960,7 @@ function drawPlayer(ox, oy, withShadow) {
   const sy = oy + Math.round(isoY(player.x, player.y));
   const gz = Math.round(player.z);
   const jz = Math.round(player.jz);
-  if (withShadow) {
+  if (withShadow && !player.water) {
     const sh = player.jz > 12 ? shadows.m : shadows.p;
     ctx.drawImage(sh, sx - sh.ox, sy - gz - sh.oy);
   }
@@ -935,7 +976,33 @@ function drawPlayer(ox, oy, withShadow) {
     const A = ANIMS[player.anim];
     img = nomu[player.anim][player.dir][Math.floor(player.t) % A.frames];
   }
-  ctx.drawImage(img, sx - ORIGIN_X, sy - gz - jz - ORIGIN_Y);
+  const px = sx - ORIGIN_X, py = sy - gz - jz - ORIGIN_Y;
+  if (player.water) {
+    // seule la partie au-dessus de la surface est nette ; dessous, on le devine à travers l'eau
+    const wl = sy - WATER_LINE;
+    const a = ctx.globalAlpha;
+    ctx.save();
+    ctx.beginPath(); ctx.rect(0, 0, VW, wl); ctx.clip();
+    ctx.drawImage(img, px, py);
+    ctx.restore();
+    ctx.save();
+    ctx.beginPath(); ctx.rect(0, wl, VW, VH); ctx.clip();
+    ctx.globalAlpha = a * 0.22;
+    ctx.drawImage(img, px, py);
+    ctx.restore();
+    if (withShadow) {
+      // écume autour du corps, qui ondule
+      ctx.fillStyle = '#eaf7ff';
+      const r = player.water === 2 ? 11 : 8;
+      for (let i = 0; i < 28; i++) {
+        const ang = i / 28 * Math.PI * 2;
+        if (Math.sin(ang * 3 + time * 6) < -0.2) continue;
+        ctx.fillRect(Math.round(sx + Math.cos(ang) * r), Math.round(wl + Math.sin(ang) * r * 0.45), 1, 1);
+      }
+    }
+    return;
+  }
+  ctx.drawImage(img, px, py);
   if (player.charging && withShadow) {
     // il "chauffe" : son corps s'illumine par pulsations
     const pulse = (Math.sin(time * (8 + player.charge * 14)) + 1) / 2;
@@ -973,6 +1040,20 @@ function drawChargeAura(ox, oy) {
 }
 
 function drawFx(f, ox, oy) {
+  if (f.kind === 'ripple') {
+    // ronds dans l'eau qui s'élargissent
+    const sx = ox + isoX(f.x, f.y), sy = oy + isoY(f.x, f.y) - WATER_LINE;
+    const r = 5 + f.t * (f.big ? 22 : 12);
+    ctx.globalAlpha = Math.max(0, 0.7 * (1 - f.t / 1.1));
+    ctx.fillStyle = '#e8f6ff';
+    const n = Math.round(r * 3);
+    for (let i = 0; i < n; i++) {
+      const a = i / n * Math.PI * 2;
+      ctx.fillRect(Math.round(sx + Math.cos(a) * r), Math.round(sy + Math.sin(a) * r * 0.5), 1, 1);
+    }
+    ctx.globalAlpha = 1;
+    return;
+  }
   if (f.kind === 'ring') {
     const sx = ox + isoX(f.x, f.y), sy = oy + isoY(f.x, f.y) - f.z;
     if (f.t < 0) return;
