@@ -19,6 +19,8 @@ export const O = {
   // Objets de village (1 tuile)
   WELL: 42, STALL: 43, FENCE_X: 44, FENCE_Y: 45, BARREL: 46, CRATE: 47, HAY: 48,
   WHEAT: 49, CABBAGE: 50, LANTERN: 51, PLANKS: 52, WELL_R: 53,
+  // remparts des villes fortifiées (1 tuile chacun)
+  WALL: 54, WALL_D: 55, WALL_R: 56, WALL_TOWER: 57, WALL_TOWER_D: 58,
 };
 
 // Résistance des bâtiments : points de vie avant d'être abîmé, puis avant de s'effondrer.
@@ -57,6 +59,12 @@ export const OBJ_INFO = {
   [O.WHEAT]: { hp: 0, small: true, crop: true, village: true, crime: 0.1 },
   [O.CABBAGE]: { hp: 0, small: true, crop: true, village: true, crime: 0.1 },
   [O.PLANKS]: { hp: 0, small: true },
+  // `tilebox` : bloque toute la tuile (un mur continu, pas un tronc rond)
+  [O.WALL]: { tilebox: true, hp: 8, prop: 'stone', village: true, crime: 1, next: O.WALL_D },
+  [O.WALL_D]: { tilebox: true, hp: 8, prop: 'stone', village: true, crime: 1, next: O.WALL_R },
+  [O.WALL_TOWER]: { tilebox: true, hp: 14, prop: 'stone', village: true, crime: 1.5, next: O.WALL_TOWER_D },
+  [O.WALL_TOWER_D]: { tilebox: true, hp: 10, prop: 'stone', village: true, crime: 1.5, next: O.WALL_R },
+  [O.WALL_R]: { hp: 0, small: true },
 };
 for (const name in BUILDINGS) {
   const b = BUILDINGS[name];
@@ -71,11 +79,13 @@ for (const name in BUILDINGS) {
 
 const CS = 32;
 export const VG = 80; // une région de 80x80 tuiles a au plus un village
-export const VILLAGE_KINDS = ['HAMEAU', 'VILLAGE', 'GRAND VILLAGE'];
+export const VILLAGE_KINDS = ['HAMEAU', 'VILLAGE', 'GRAND VILLAGE', 'VILLE FORTIFIEE'];
 
 export class World {
-  constructor(seed) {
+  // params : { villages, heroes, wildlife, weather, relief, water, difficulty }, chacun 0, 1 ou 2
+  constructor(seed, params = {}) {
     this.seed = seed;
+    this.p = { villages: 1, heroes: 1, wildlife: 1, weather: 1, relief: 1, water: 1, difficulty: 1, ...params };
     this.chunks = new Map();
     this.mods = new Map(); // "x,y" -> objet (0 = détruit)
     this.terr = new Map(); // "x,y" -> [type, hauteur, instant] : sol creusé par les coups
@@ -172,6 +182,7 @@ export class World {
     let e = fbm(x * 0.016, y * 0.016, s, 5);
     // Garantit de la terre autour du point de départ.
     e += 0.12 * Math.exp(-(x * x + y * y) / (2 * 30 * 30));
+    e += [0.035, 0, -0.045][this.p.water]; // plus ou moins de mers et de lacs
     const m = fbm(x * 0.028 + 500, y * 0.028 - 300, s + 7, 3);
     const dr = Math.abs(fbm(x * 0.009 + 1000, y * 0.009, s + 13, 3) - 0.5);
 
@@ -180,7 +191,7 @@ export class World {
     else if (e < 0.375) t = T.WATER;
     else if (e < 0.4) t = T.SAND;
     else {
-      h = Math.min(6, 1 + Math.floor((e - 0.4) / 0.055));
+      h = Math.min(6, 1 + Math.floor((e - 0.4) / [0.075, 0.055, 0.042][this.p.relief]));
       if (e > 0.71) t = T.SNOW;
       else if (e > 0.665) t = T.STONE;
       else if (m > 0.55) t = T.FOREST;
@@ -248,7 +259,7 @@ export class World {
   // puis on pose les chemins, les maisons et les objets du plan du village.
   genCell(x, y) {
     const cell = this.genTerrain(x, y);
-    if (cell.t === T.WATER || cell.t === T.DEEP) return cell;
+    const wet = cell.t === T.WATER || cell.t === T.DEEP;
     const rx = Math.floor(x / VG), ry = Math.floor(y / VG);
     for (let j = -1; j <= 1; j++) {
       for (let i = -1; i <= 1; i++) {
@@ -256,6 +267,11 @@ export class World {
         if (!v) continue;
         const d = Math.hypot(x - v.cx, y - v.cy);
         if (d >= v.R + 7) continue;
+        if (wet) {
+          // une ville comble l'eau à l'intérieur de ses remparts ; ailleurs l'eau reste de l'eau
+          if (v.kind !== 3 || Math.max(Math.abs(x - v.cx), Math.abs(y - v.cy)) > Math.floor(v.R * 0.68) + 1) return cell;
+          cell.t = T.GRASS; cell.h = v.hv; cell.o = O.NONE;
+        }
         const w = Math.min(1, (v.R + 7 - d) / 5), k = w * w * (3 - 2 * w);
         cell.h = Math.round(cell.h + (v.hv - cell.h) * k);
         if (d < v.R + 2) {
@@ -292,32 +308,34 @@ export class World {
   }
 
   // Le sol est-il assez plat et sec pour poser un village de rayon R en (cx, cy) ?
+  // Une ville (grand rayon) est moins exigeante : seul l'intérieur des remparts doit être sec.
   siteOk(cx, cy, R) {
     const c = this.genTerrain(cx, cy);
     if (!(c.t === T.GRASS || c.t === T.MEADOW || c.t === T.FOREST) || c.h < 1 || c.h > 4) return null;
-    let n = 0, bad = 0, steep = 0;
-    for (let dy = -R - 2; dy <= R + 2; dy += 2) {
-      for (let dx = -R - 2; dx <= R + 2; dx += 2) {
-        if (dx * dx + dy * dy > (R + 2) * (R + 2)) continue;
+    const town = R > 20, Rc = town ? Math.ceil(R * 0.97) : R + 2;
+    let n = 0, bad = 0, steep = 0, wet = 0;
+    for (let dy = -Rc; dy <= Rc; dy += 2) {
+      for (let dx = -Rc; dx <= Rc; dx += 2) {
+        if (dx * dx + dy * dy > Rc * Rc) continue;
         const s = this.genTerrain(cx + dx, cy + dy);
         n++;
-        if (s.t === T.WATER || s.t === T.DEEP) return null;
+        if (s.t === T.WATER || s.t === T.DEEP) { if (!town) return null; wet++; }
         if (s.t === T.STONE || s.t === T.SNOW || s.t === T.SAND) bad++;
         if (Math.abs(s.h - c.h) > 1) steep++;
       }
     }
-    if (bad > n * 0.2 || steep > n * 0.3) return null;
+    if (bad > n * (town ? 0.3 : 0.2) || steep > n * (town ? 0.45 : 0.3) || wet > n * 0.25) return null;
     return c.h;
   }
 
   planVillage(rx, ry) {
     const s = this.seed;
     const home = rx === 0 && ry === 0; // un grand village pas loin du départ
-    if (!home && hash2(rx, ry, s + 501) > 0.55) return null;
+    if (!home && hash2(rx, ry, s + 501) > [0.3, 0.55, 0.78][this.p.villages]) return null;
     const rng = mulberry32((s ^ Math.imul(rx, 92821) ^ Math.imul(ry, 68917)) >>> 0);
     const roll = rng();
-    const kind = home ? 2 : roll < 0.4 ? 0 : roll < 0.82 ? 1 : 2;
-    const R = [7, 10, 13][kind];
+    let kind = home ? 2 : roll < 0.32 ? 0 : roll < 0.65 ? 1 : roll < 0.86 ? 2 : 3;
+    let R = [7, 10, 13, 24][kind];
     let cx = 0, cy = 0, hv = null;
     if (home) {
       // le site plat le plus proche du départ, en spirale
@@ -329,20 +347,25 @@ export class World {
         }
       }
     }
-    for (let tries = 0; tries < 14 && hv === null && !home; tries++) {
-      cx = rx * VG + 24 + Math.floor(rng() * 32);
-      cy = ry * VG + 24 + Math.floor(rng() * 32);
+    for (let tries = 0; tries < (kind === 3 ? 40 : 14) && hv === null && !home; tries++) {
+      // une ville prend presque toute sa région : son centre reste loin des bords
+      const m = kind === 3 ? 32 : 24;
+      cx = rx * VG + m + Math.floor(rng() * (VG - 2 * m));
+      cy = ry * VG + m + Math.floor(rng() * (VG - 2 * m));
       hv = this.siteOk(cx, cy, R);
+      if (hv === null && kind === 3 && tries === 39) { kind = 2; R = 13; tries = -1; } // pas de place : un grand village
     }
     if (hv === null) return null;
 
     // garnison : un nombre fixe de chevaliers par village, sans renforts
-    const v = { id: rx + ',' + ry, kind, name: VILLAGE_KINDS[kind], cx, cy, R, hv, cells: new Map(), houses: [], tower: null, garrison: [1, 3, 5][kind], folk: 0 };
+    const v = { id: rx + ',' + ry, kind, name: VILLAGE_KINDS[kind], cx, cy, R, hv, cells: new Map(), houses: [], tower: null, garrison: [1, 3, 5, 10][kind], folk: 0 };
     const K = (x, y) => x + ',' + y;
     const occ = new Set(); // tuiles réservées (bâtiments + leur marge)
     const bld = new Set(); // tuiles sous un bâtiment
     const put = (x, y, c) => v.cells.set(K(x, y), Object.assign(v.cells.get(K(x, y)) || {}, c));
     const free = (x, y) => !occ.has(K(x, y)) && !(v.cells.get(K(x, y)) || {}).o && Math.hypot(x - cx, y - cy) < R;
+
+    if (kind === 3) return this.planTown(v, rng, { K, occ, bld, put });
 
     // place centrale : pavés pour les gros villages, terre battue sinon, un puits au milieu
     const pr = kind === 2 ? 3 : kind === 1 ? 2 : 1;
@@ -381,6 +404,9 @@ export class World {
     }
 
     v.folk = Math.min(12, 2 + v.houses.length);
+    // héros (chacun a un alter) : surtout dans les grands villages
+    const hc = home ? (this.p.heroes === 2 ? 1 : 0) : rng() < [[0, 0, 0.15], [0, 0.15, 0.4], [0.25, 0.6, 1]][kind][this.p.heroes] ? 1 : 0;
+    v.heroes = this.pickHeroes(rng, hc);
 
     // chemins de terre de chaque porte jusqu'à la place
     for (const h of v.houses) {
@@ -457,6 +483,72 @@ export class World {
       if (freeProp(x, y) && freeProp(x + 1, y) && freeProp(x, y + 1)) put(x, y, { o: rng() < 0.4 ? O.CHERRY : O.OAK_M });
     }
     return v;
+  }
+
+  // Ville fortifiée : une enceinte carrée de remparts avec 4 portes, des rues pavées en croix,
+  // une grande place, et des maisons serrées dans chaque quartier.
+  planTown(v, rng, { K, occ, bld, put }) {
+    const { cx, cy } = v;
+    const Wd = Math.floor(v.R * 0.68); // demi-côté de l'enceinte
+    // remparts : portes au milieu de chaque côté, flanquées de deux tours ; tours aux coins
+    for (let d = -Wd; d <= Wd; d++) {
+      for (const [x, y, along] of [[cx + d, cy - Wd, d], [cx + d, cy + Wd, d], [cx - Wd, cy + d, d], [cx + Wd, cy + d, d]]) {
+        occ.add(K(x, y));
+        const corner = Math.abs(d) === Wd;
+        if (Math.abs(along) <= 1 && !corner) { put(x, y, { t: T.COBBLE }); continue; } // la porte
+        put(x, y, { o: corner || Math.abs(along) === 2 ? O.WALL_TOWER : O.WALL });
+      }
+    }
+    // rues pavées de porte à porte (3 de large) et grande place
+    for (let d = -Wd + 1; d < Wd; d++) for (let w = -1; w <= 1; w++) {
+      put(cx + d, cy + w, { t: T.COBBLE }); put(cx + w, cy + d, { t: T.COBBLE });
+      occ.add(K(cx + d, cy + w)); occ.add(K(cx + w, cy + d));
+    }
+    for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) {
+      if (dx * dx + dy * dy > 18) continue;
+      put(cx + dx, cy + dy, { t: T.COBBLE }); occ.add(K(cx + dx, cy + dy));
+    }
+    put(cx, cy, { o: O.WELL });
+    // bâtiments : on remplit chaque quartier
+    const place = (type, ax, ay) => {
+      for (let y = ay - 2; y <= ay + 1; y++) for (let x = ax - 2; x <= ax + 1; x++) {
+        if (occ.has(K(x, y)) || Math.max(Math.abs(x - cx), Math.abs(y - cy)) >= Wd) return false;
+      }
+      for (let y = ay - 2; y <= ay + 1; y++) for (let x = ax - 2; x <= ax + 1; x++) occ.add(K(x, y));
+      for (const [x, y] of [[ax - 1, ay - 1], [ax - 1, ay], [ax, ay - 1], [ax, ay]]) bld.add(K(x, y));
+      put(ax - 1, ay - 1, { o: O.PART_NW }); put(ax - 1, ay, { o: O.PART_W }); put(ax, ay - 1, { o: O.PART_N });
+      put(ax, ay, { o: BUILDINGS[type].ids[0] });
+      const h = { type, ax, ay, door: [ax, ay + 1.3] };
+      v.houses.push(h);
+      if (type === 'tower' && !v.tower) v.tower = h;
+      return true;
+    };
+    // deux tours de garde près de la place, puis les maisons
+    place('tower', cx + 6, cy + 6); place('tower', cx - 4, cy - 4); place('inn', cx + 6, cy - 3);
+    for (let tries = 0; tries < 600 && v.houses.length < 32; tries++) {
+      const ax = cx + Math.round((rng() * 2 - 1) * (Wd - 2)), ay = cy + Math.round((rng() * 2 - 1) * (Wd - 2));
+      const r = rng();
+      place(r < 0.5 ? 'house' : r < 0.75 ? 'cottage' : r < 0.9 ? 'inn' : 'barn', ax, ay);
+    }
+    // étals le long de la rue principale, lanternes et tonneaux
+    for (let d = -Wd + 3; d < Wd - 2; d += 3) {
+      for (const [x, y] of [[cx + d, cy + 2], [cx + d, cy - 2], [cx + 2, cy + d], [cx - 2, cy + d]]) {
+        if (occ.has(K(x, y)) || (v.cells.get(K(x, y)) || {}).o) continue;
+        const r = rng();
+        put(x, y, { o: Math.abs(d) < 8 ? (r < 0.6 ? O.STALL : O.LANTERN) : r < 0.35 ? O.LANTERN : r < 0.6 ? O.BARREL : O.CRATE });
+        occ.add(K(x, y));
+      }
+    }
+    v.folk = 20;
+    v.heroes = this.pickHeroes(rng, [1, 2, 3][this.p.heroes]);
+    return v;
+  }
+
+  // n héros tous différents (indices dans la liste des héros).
+  pickHeroes(rng, n) {
+    const all = [0, 1, 2, 3, 4];
+    for (let i = all.length - 1; i > 0; i--) { const j = (rng() * (i + 1)) | 0; [all[i], all[j]] = [all[j], all[i]]; }
+    return all.slice(0, n);
   }
 
   // Cherche une tuile d'herbe libre près de l'origine.

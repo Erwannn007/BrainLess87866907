@@ -23,6 +23,14 @@ const SHOE = ramp('#1a100a', '#2e1c10', '#4a2e1a', '#6b4426');
 const WOODC = ramp('#3d2614', '#5e3d22', '#86593a', '#a87a52');
 const PLUME = ramp('#5e0c18', '#9c1628', '#d22838', '#ff5a5e');
 const EYE = [24, 16, 14];
+const MASK = ramp('#0c0a14', '#16121f', '#221c30', '#302842');
+const SUIT_RED = ramp('#4a0c14', '#8a1626', '#c42838', '#ec5a5e');
+const SUIT_GREEN = ramp('#123a20', '#1f6a34', '#36a04a', '#6cd46a');
+const SUIT_WHITE = ramp('#7a8296', '#b4bccc', '#dfe4ee', '#ffffff');
+const SUIT_YELLOW = ramp('#6e5410', '#b8901c', '#eec43a', '#fff07a');
+const SUIT_BLACK = ramp('#0e0e16', '#1c1c2a', '#2c2c40', '#44445e');
+const IRON = ramp('#3a3e48', '#6a7080', '#a4abba', '#e6ebf4');
+const METALD = ramp('#1a1c22', '#2e323c', '#4a505e', '#727a8c');
 const BLOOD = ramp('#3e060c', '#6e0e18', '#a01824', '#d02c36');
 
 // Les habitants. `voice` = hauteur du cri (Hz).
@@ -33,7 +41,19 @@ export const PEOPLE = {
   elder: { kind: 'civ', skin: SKIN_B, hair: HAIR_GREY, top: PURPLE, legs: PURPLE, dress: PURPLE, beard: HAIR_GREY, cane: true, scale: 0.94, bent: 1.6, voice: 180 },
   merchant: { kind: 'civ', skin: SKIN_B, hair: HAIR_BROWN, top: TEAL, legs: BROWN, apron: CREAM, beret: RED, beard: HAIR_BROWN, voice: 290 },
   knight: { kind: 'knight', skin: SKIN_A, hair: HAIR_BROWN, top: BLUE, legs: STEEL, scale: 1.05, voice: 200 },
+  // Héros : chacun a un alter, que Brainless récupère en le dévorant.
+  rempart: { kind: 'hero', name: 'REMPART', alter: 'absorb', style: 'melee', hp: 50, skin: SKIN_B, hair: HAIR_BROWN, top: SUIT_RED, legs: SUIT_RED,
+    accent: GOLD, cape: SUIT_BLACK, pads: GOLD, emblem: 'shield', bulk: 1.22, scale: 1.16, voice: 150 },
+  ressort: { kind: 'hero', name: 'RESSORT', alter: 'leap', style: 'leap', hp: 32, skin: SKIN_A, hair: HAIR_BLOND, top: SUIT_GREEN, legs: SUIT_GREEN,
+    accent: SUIT_BLACK, mask: true, springs: true, emblem: 'spring', scale: 1.04, voice: 260 },
+  turbo: { kind: 'hero', name: 'TURBO', alter: 'engine', style: 'dash', hp: 30, skin: SKIN_A, hair: HAIR_BROWN, top: SUIT_WHITE, legs: SUIT_WHITE,
+    accent: BLUE, visor: true, pipes: true, scale: 1.1, voice: 220 },
+  acier: { kind: 'hero', name: 'ACIER', alter: 'iron', style: 'melee', hp: 45, skin: IRON, hair: HAIR_RED, top: IRON, legs: SUIT_BLACK,
+    accent: SUIT_BLACK, spikes: true, bulk: 1.15, scale: 1.12, voice: 170 },
+  eclair: { kind: 'hero', name: 'ECLAIR', alter: 'storm', style: 'ranged', hp: 28, skin: SKIN_A, hair: HAIR_BLOND, top: SUIT_YELLOW, legs: SUIT_BLACK,
+    accent: SUIT_BLACK, cape: SUIT_BLACK, mask: true, emblem: 'bolt', scale: 1.05, voice: 300 },
 };
+export const HEROES = ['rempart', 'ressort', 'turbo', 'acier', 'eclair'];
 export const CIVILIANS = ['farmer', 'woman', 'child', 'elder', 'merchant'];
 
 export const PEOPLE_ANIMS = {
@@ -45,6 +65,11 @@ export const PEOPLE_ANIMS = {
     idle: { frames: 4, fps: 4 }, walk: { frames: 6, fps: 9 }, run: { frames: 6, fps: 12 },
     attack: { frames: 6, fps: 12 }, hurt: { frames: 2, fps: 8 }, ko: { frames: 1, fps: 1 },
     dead: { frames: 1, fps: 1 }, crushed: { frames: 1, fps: 1 },
+  },
+  hero: {
+    idle: { frames: 4, fps: 5 }, walk: { frames: 6, fps: 9 }, run: { frames: 6, fps: 13 },
+    attack: { frames: 6, fps: 14 }, special: { frames: 6, fps: 10 }, hurt: { frames: 2, fps: 8 },
+    ko: { frames: 1, fps: 1 }, dead: { frames: 1, fps: 1 }, crushed: { frames: 1, fps: 1 },
   },
 };
 
@@ -74,10 +99,12 @@ function keyed(keys, t) {
   return full[full.length - 1].p;
 }
 
-export function personPose(kind, anim, t) {
+export function personPose(D, anim, t) {
+  const kind = D.kind;
   const p = basePose();
   const ph = t * TAU, s = Math.sin(ph), c = Math.cos(ph);
   const knight = kind === 'knight';
+  if (kind === 'hero' && anim !== 'ko' && anim !== 'dead' && anim !== 'crushed' && anim !== 'hurt') return heroPose(D, anim, t);
   const guard = () => { p.hR = [3.8, 3, 9.5]; p.hL = [-3.4, 3.4, 11]; };
   if (anim === 'idle') {
     p.bob = s * 0.25;
@@ -125,9 +152,52 @@ export function personPose(kind, anim, t) {
   return p;
 }
 
+// Héros : garde de boxeur, coup de poing, et un mouvement spécial selon son style.
+function heroPose(D, anim, t) {
+  const p = basePose();
+  const ph = t * TAU, s = Math.sin(ph), c = Math.cos(ph);
+  const guard = () => { p.hL = [-3.2, 3.2, 15]; p.hR = [3.4, 2.6, 15.6]; };
+  if (anim === 'idle') { guard(); p.bob = s * 0.3; p.hL[2] += s * 0.4; p.twist = 0.15; return p; }
+  if (anim === 'walk' || anim === 'run') {
+    const run = anim === 'run', st = run ? 4.4 : 3;
+    p.fL = [-1.9, s * st, Math.max(0, c) * (run ? 2.4 : 1.3)];
+    p.fR = [1.9, -s * st, Math.max(0, -c) * (run ? 2.4 : 1.3)];
+    p.hL = [-4.2, -s * 3, run ? 12 : 9]; p.hR = [4.2, s * 3, run ? 12 : 9];
+    p.bob = (1 - Math.abs(s)) * (run ? 1 : 0.6) - 0.3;
+    p.twist = s * 0.15; p.lean = run ? 2 : 0.5;
+    return p;
+  }
+  if (anim === 'attack') {
+    const g = { hL: [-3.2, 3.2, 15], hR: [3.4, 2.6, 15.6], twist: 0.15 };
+    return keyed([
+      { t: 0, p: g },
+      { t: 0.3, p: { hL: [-3.2, 3.5, 15], hR: [4, -2, 15], twist: -0.45, lean: -0.3, fR: [1.9, -1.5, 0] } },
+      { t: 0.5, p: { hL: [-4, 0, 13], hR: [1.5, 9.5, 17], twist: 0.55, lean: 2, fL: [-1.9, 2.5, 0], fR: [1.9, -2, 0] } },
+      { t: 0.7, p: { hL: [-4, 0, 13], hR: [1.5, 9, 17], twist: 0.5, lean: 1.8, fL: [-1.9, 2.5, 0], fR: [1.9, -2, 0] } },
+      { t: 1, p: g },
+    ], t);
+  }
+  // special
+  if (D.style === 'leap') { p.fL = [-2, 2, 5.5]; p.fR = [2, -1, 6.5]; p.hL = [-5, 1, 24]; p.hR = [5, 1, 24]; p.lean = 1; return p; }
+  if (D.style === 'dash') { p.lean = 4; p.fL = [-1.9, 4.5, 0.5]; p.fR = [1.9, -4.5, 1.5]; p.hL = [-4, -4.5, 12]; p.hR = [4, -4.5, 12]; p.bob = -0.8; return p; }
+  if (D.style === 'ranged') {
+    p.hR = [2.5, 9.5, 18 + s * 0.4]; p.hL = [-4.5, -1.5, 12]; p.twist = 0.35; p.lean = 0.6;
+    p.fL = [-1.9, 2, 0]; p.fR = [1.9, -1.5, 0];
+    return p;
+  }
+  // mêlée lourde : les deux poings en l'air, puis il les abat devant lui
+  return keyed([
+    { t: 0, p: { hL: [-3.2, 3.2, 15], hR: [3.4, 2.6, 15.6] } },
+    { t: 0.4, p: { hL: [-2, 0.5, 26], hR: [2, 0.5, 26], lean: -0.8, fL: [-2.2, 1, 0], fR: [2.2, -1, 0] } },
+    { t: 0.65, p: { hL: [-2, 8.5, 9], hR: [2, 8.5, 9], lean: 2.6, fL: [-2.2, 2.5, 0], fR: [2.2, -1.5, 0] } },
+    { t: 1, p: { hL: [-3.2, 3.2, 15], hR: [3.4, 2.6, 15.6] } },
+  ], t);
+}
+
 export function personParts(type, P) {
   const D = PEOPLE[type];
-  const knight = D.kind === 'knight';
+  const knight = D.kind === 'knight', hero = D.kind === 'hero';
+  const bk = D.bulk || 1;
   const parts = [];
   const hipZ = 11 + P.bob;
   const bent = D.bent || 0;
@@ -143,13 +213,20 @@ export function personParts(type, P) {
     const hj = [side * 1.9, 0, hipZ];
     const ankle = [f[0], f[1], 1.2 + f[2]];
     const knee = ik(hj, ankle, 5.4, 5.2, [0, 1, 0.1]);
-    parts.push({ a: hj, b: knee, r1: 1.75, r2: 1.5, ramp: limb, group: g });
-    parts.push({ a: knee, b: ankle, r1: 1.45, r2: 1.25, ramp: limb, group: g,
-      tex: knight ? (p) => (p.t < 0.15 ? Math.min(3, p.shade + 1) : p.shade) : undefined });
-    parts.push({ a: ankle, b: add(ankle, [0, 2, -0.3]), r1: 1.15, r2: 1, ramp: knight ? STEEL : SHOE, group: g });
+    parts.push({ a: hj, b: knee, r1: 1.75 * bk, r2: 1.5 * bk, ramp: limb, group: g });
+    parts.push({ a: knee, b: ankle, r1: 1.45 * bk, r2: 1.25 * bk, ramp: hero ? D.accent : limb, group: g,
+      tex: knight ? (p) => (p.t < 0.15 ? Math.min(3, p.shade + 1) : p.shade)
+        : D.springs ? (p) => ((p.t * 7 | 0) % 2 ? GOLD[Math.min(3, p.shade + 1)] : p.shade) : undefined }); // ressorts
+    parts.push({ a: ankle, b: add(ankle, [0, 2, -0.3]), r1: 1.15, r2: 1, ramp: knight ? STEEL : hero ? D.accent : SHOE, group: g });
+    if (D.pipes) {
+      // pots d'échappement sur les mollets
+      const a = add([knee[0], knee[1], knee[2]], [side * 1.2, -1.2, -1.5]);
+      parts.push({ a, b: add(a, [0, -2.4, 0.8]), r1: 0.75, r2: 0.6, ramp: METALD, group: 15 + side,
+        tex: (p) => (p.t > 0.8 ? [255, 180, 80] : p.shade) });
+    }
   }
   // bassin + buste
-  parts.push({ a: hip, r1: 2.7, ramp: D.dress || (knight ? D.top : D.legs), group: 1 });
+  parts.push({ a: hip, r1: 2.7 * bk, ramp: D.dress || (knight ? D.top : D.legs), group: 1 });
   const front = (p, k) => p.nx * p.fc[0] + p.ny * p.fc[1] + p.nz * p.fc[2] > k;
   const topTex = (p) => {
     if (D.apron && front(p, 0.45) && Math.abs(p.ex) < p.r * 0.5) return D.apron[Math.min(3, p.shade + 1)];
@@ -157,10 +234,27 @@ export function personParts(type, P) {
       // croix dorée sur le tabard
       if (Math.abs(p.ex) < p.r * 0.2 || Math.abs(p.t - 0.55) < 0.1) return GOLD[Math.min(3, p.shade + 1)];
     }
-    if (Math.abs(p.t - 0.05) < 0.08) return (knight ? GOLD : BROWN)[Math.max(1, p.shade)]; // ceinture
+    if (D.emblem && front(p, 0.5)) {
+      // emblème du héros sur la poitrine
+      const u = p.ex / p.r, v = p.ey / p.r;
+      if (D.emblem === 'bolt' && Math.abs(u + v * 0.6) < 0.16 && Math.abs(v) < 0.6) return SUIT_BLACK[1];
+      if (D.emblem === 'shield' && Math.abs(u) < 0.3 - Math.max(0, v) * 0.3 && v > -0.5 && v < 0.5) return GOLD[Math.min(3, p.shade + 1)];
+      if (D.emblem === 'spring' && Math.abs(u) < 0.32 && Math.abs(v + 0.1) < 0.4 && ((v * 6 + 10) | 0) % 2) return SUIT_BLACK[1];
+    }
+    if (D.spikes && hash(p.x, p.y, 5) < 0.12) return IRON[3];
+    if (Math.abs(p.t - 0.05) < 0.08) return (knight || hero ? (hero ? D.accent : GOLD) : BROWN)[Math.max(1, p.shade)]; // ceinture
     return p.shade;
   };
-  parts.push({ a: U([0, 0, 11]), b: U([0, 0, 17.6]), r1: 3, r2: 3.5, ramp: D.top, group: 1, tex: topTex });
+  parts.push({ a: U([0, 0, 11]), b: U([0, 0, 17.6]), r1: 3 * bk, r2: 3.5 * bk, ramp: D.top, group: 1, tex: topTex });
+  if (D.cape) {
+    // cape dans le dos, qui flotte un peu
+    parts.push({ a: U([0, -3 * bk, 17.5]), b: [0, -5.4 - lean * 0.6, 4.5 + P.bob], r1: 2.1 * bk, r2: 3.2 * bk, ramp: D.cape, group: 14,
+      tex: (p) => (front(p, 0.2) ? null : p.shade) });
+  }
+  if (D.pads) for (const side of [-1, 1]) parts.push({ a: U([side * 3.7 * bk, -0.3, 17.9]), r1: 1.9, ramp: D.pads, group: 2 + (side > 0 ? 1 : 0) });
+  if (D.spikes) {
+    for (const side of [-1, 1]) for (let i = 0; i < 3; i++) parts.push({ a: U([side * (3.2 + i * 0.6) * bk, -0.8 + i * 0.4, 18.6 + i * 0.5]), r1: 0.9, ramp: IRON, group: 2 + (side > 0 ? 1 : 0) });
+  }
   if (D.dress) {
     // robe : un cône du bassin jusqu'au sol
     parts.push({ a: U([0, 0, 12.5]), b: [0, 0.3 + lean * 0.3, 1.6], r1: 3, r2: 4.4, ramp: D.dress, group: 1,
@@ -176,15 +270,20 @@ export function personParts(type, P) {
     const h = U(side < 0 ? P.hL : P.hR), g = side < 0 ? 6 : 7;
     const sh = U([side * 3.5, 0, 17.2]);
     const el = ik(sh, h, 4.3, 4.3, [side * 0.5, -0.6, -0.4]);
-    parts.push({ a: sh, b: el, r1: 1.35, r2: 1.2, ramp: knight ? STEEL : D.top, group: g });
-    parts.push({ a: el, b: h, r1: 1.2, r2: 1.05, ramp: knight ? STEEL : D.top, group: g,
-      tex: knight ? undefined : (p) => (p.t > 0.8 ? D.top[Math.max(0, p.shade - 1)] : p.shade) });
-    parts.push({ a: h, r1: 1.25, ramp: knight ? STEEL : D.skin, group: g });
+    parts.push({ a: sh, b: el, r1: 1.35 * bk, r2: 1.2 * bk, ramp: knight ? STEEL : D.top, group: g });
+    parts.push({ a: el, b: h, r1: 1.2 * bk, r2: 1.05 * bk, ramp: knight ? STEEL : hero ? D.accent : D.top, group: g,
+      tex: knight || hero ? undefined : (p) => (p.t > 0.8 ? D.top[Math.max(0, p.shade - 1)] : p.shade) });
+    parts.push({ a: h, r1: 1.25 * (hero ? 1.15 : 1), ramp: knight ? STEEL : hero ? D.accent : D.skin, group: g });
     hands[side] = h;
   }
   if (D.cane) {
     const h = hands[1];
     parts.push({ a: h, b: [h[0] + 0.6, h[1] + 1.4, 0], r1: 0.5, ramp: WOODC, group: 11 });
+  }
+  if (D.shield) {
+    const sl = add(hands[-1], [-1.4, 1.2, 0.5]);
+    parts.push({ a: add(sl, [0, 0, 1.6]), b: add(sl, [0, 0.3, -1.6]), r1: 3.6, r2: 3.6, ramp: GOLD, group: 13,
+      tex: (p) => (Math.hypot(p.ex, p.ey) / p.r > 0.7 ? SUIT_RED[Math.min(3, p.shade + 1)] : Math.hypot(p.ex, p.ey) / p.r < 0.25 ? SUIT_RED[2] : p.shade) });
   }
   if (knight) {
     // épée dans la main droite, bouclier au bras gauche
@@ -222,6 +321,8 @@ export function personParts(type, P) {
     parts.push({ a: head, r1: hr, ramp: D.skin, group: 4, tex: (p) => {
       const hs = -p.ny * 0.866 + p.nz * 0.5; // hauteur du point sur la tête
       if (hs > (D.scarf ? 0.58 : 0.66) || !front(p, D.scarf ? 0.3 : 0.15)) return hairR[p.shade];
+      if (D.mask && hs > -0.08 && hs < 0.3) return MASK[Math.min(3, p.shade)]; // masque de héros
+      if (D.visor && hs > -0.12 && hs < 0.3) return BLUE[Math.min(3, p.shade + 1)];
       return p.shade;
     } });
     for (const side of [-1, 1]) {
@@ -266,7 +367,7 @@ export function personParts(type, P) {
 
 export function renderPerson(type, anim, t, dir) {
   const D = PEOPLE[type];
-  const buf = renderModel(personParts(type, personPose(D.kind, anim, t)), {
+  const buf = renderModel(personParts(type, personPose(D, anim, t)), {
     w: PEOPLE_W, h: PEOPLE_H, ox: PEOPLE_OX, oy: PEOPLE_OY,
     facing: dirFacing(dir), scale: D.scale || 1,
   });

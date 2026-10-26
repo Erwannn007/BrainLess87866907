@@ -5,6 +5,11 @@ Jeu perso en pixel art isométrique, monde ouvert dans la nature, où l'on joue 
 s'installe sur l'écran d'accueil (PWA, marche hors-ligne).
 
 ## Jouer
+- **Accueil** : JOUER, puis choisis un monde ou crée-en un (nom, graine, villages, héros, faune, météo, relief, eau, difficulté). Chaque monde est infini, généré à partir de sa graine, et a sa propre sauvegarde. L'icône maison en haut à droite ramène à l'accueil.
+- **Faim et évolution** : la faim baisse ; près d'un cadavre, N devient DÉVORER. Manger fait évoluer Brainless (niveaux : plus de vie, plus de force). Dévorer un **héros** vole son alter (ABSORPTION, BOND, MOTEUR, FER, FOUDRE).
+- **Villes fortifiées** : remparts, portes, rues pavées, grosse garnison et plusieurs héros.
+- **Faune** : lapins, cerfs, sangliers (qui chargent), loups en meute la nuit.
+- **Météo** : pluie, neige en montagne, brouillard, orages avec la foudre qui frappe.
 - **iPhone** : ouvrir l'URL GitHub Pages dans Safari → Partager → *Sur l'écran d'accueil*.
 - Pouce gauche : joystick pour marcher (debout).
 - **>> SPRINT** (maintenir) : galop de bête à quatre pattes qui pulvérise arbres et rochers, fait trembler l'écran et vide la barre de sprint.

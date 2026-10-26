@@ -5,6 +5,7 @@
 //   node tools/preview.mjs nature out.png                                  tous les objets du décor + tuiles
 //   node tools/preview.mjs people out.png                                  villageois et chevalier (poses clés) à côté de Brainless
 //   node tools/preview.mjs people-sheet out.png knight attack              une anim d'un habitant x 8 directions
+//   node tools/preview.mjs beasts out.png                                  la faune (poses clés)
 //   node tools/preview.mjs village out.png                                 bâtiments (3 états), objets de village, tuiles, fissures
 //
 // Variable K = facteur d'agrandissement (défaut 6). Ouvrir le PNG pour juger le rendu.
@@ -15,6 +16,7 @@ import * as SP from '../js/sprites.js';
 import { T } from '../js/world.js';
 import { buildVillageSprites } from '../js/buildings.js';
 import { renderPerson, PEOPLE, PEOPLE_ANIMS, PEOPLE_W, PEOPLE_H } from '../js/people.js';
+import { renderBeast, BEASTS, BEAST_W, BEAST_H } from '../js/beasts.js';
 
 const [mode = 'nomu', out = 'preview.png', arg] = process.argv.slice(2);
 const K = +(process.env.K || 6);
@@ -63,7 +65,8 @@ if (mode === 'nomu') {
 if (mode === 'people') {
   const k = Math.min(K, 4);
   const cols = { civ: [['idle', 0, 2], ['idle', 0, 1], ['walk', 0.25, 1], ['walk', 0.25, 6], ['flee', 0.25, 3], ['wave', 0.25, 2], ['ko', 0, 2]],
-    knight: [['idle', 0, 2], ['idle', 0, 1], ['walk', 0.25, 1], ['run', 0.25, 6], ['attack', 0.35, 3], ['attack', 0.55, 3], ['hurt', 0, 2], ['ko', 0, 2]] };
+    knight: [['idle', 0, 2], ['idle', 0, 1], ['walk', 0.25, 1], ['run', 0.25, 6], ['attack', 0.35, 3], ['attack', 0.55, 3], ['hurt', 0, 2], ['ko', 0, 2]],
+    hero: [['idle', 0, 2], ['idle', 0, 1], ['run', 0.25, 1], ['attack', 0.5, 3], ['special', 0.3, 1], ['special', 0.6, 3], ['hurt', 0, 2], ['dead', 0, 2]] };
   const types = Object.keys(PEOPLE);
   const W = (8 * PEOPLE_W + SPRITE_W) * k, H = Math.max(types.length * PEOPLE_H, SPRITE_H) * k;
   const img = canvas(W, H);
@@ -76,6 +79,14 @@ if (mode === 'people') {
   const W = PEOPLE_W * n * k, H = PEOPLE_H * 8 * k;
   const img = canvas(W, H);
   for (let d = 0; d < 8; d++) for (let f = 0; f < n; f++) blit(img, W, renderPerson(type, anim, f / n, d), f * PEOPLE_W * k, d * PEOPLE_H * k, k);
+  writeFileSync(out, encodePNG(W, H, img));
+}
+if (mode === 'beasts') {
+  const k = Math.min(K, 4);
+  const cols = [['idle', 0, 2], ['idle', 0, 1], ['walk', 0.25, 1], ['run', 0.2, 6], ['run', 0.6, 3], ['attack', 0.5, 1], ['dead', 0, 2], ['crushed', 0, 2]];
+  const types = Object.keys(BEASTS), W = BEAST_W * cols.length * k, H = BEAST_H * types.length * k;
+  const img = canvas(W, H);
+  types.forEach((t, r) => cols.forEach(([a, tt, d], c) => blit(img, W, renderBeast(t, a, tt, d), c * BEAST_W * k, r * BEAST_H * k, k)));
   writeFileSync(out, encodePNG(W, H, img));
 }
 if (mode === 'village') {

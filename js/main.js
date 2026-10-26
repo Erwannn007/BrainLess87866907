@@ -1,15 +1,18 @@
 import { World, T, O, OBJ_INFO, VG } from './world.js';
 import { buildVillageSprites } from './buildings.js';
-import { renderPerson, PEOPLE, PEOPLE_ANIMS, CIVILIANS, PEOPLE_OX, PEOPLE_OY } from './people.js';
+import { renderPerson, PEOPLE, PEOPLE_ANIMS, CIVILIANS, HEROES } from './people.js';
 import { renderNomu, ANIMS, ORIGIN_X, ORIGIN_Y } from './nomu.js';
+import { renderBeast, BEASTS, BEAST_ANIMS, BEAST_MEAL } from './beasts.js';
+import { valueNoise } from './noise.js';
 import * as SP from './sprites.js';
 import { hash, makeBuffer } from './raster.js';
 import { drawText, textWidth } from './font.js';
 import { sfx, unlockAudio, toggleMute, isMuted, audioRunning, chargeStart, chargeUpdate, chargeStop, updateAmbience } from './audio.js';
 import { pad, pollPad, rumble } from './pad.js';
+import { listWorlds, loadWorldData, saveWorldData, touchWorld, createWorld } from './saves.js';
+import { initMenu, showMenu, hideMenu, menuVisible, menuPad } from './menu.js';
 
-const SEED = 87866907;
-const SAVE_KEY = 'brainless-save-v1';
+const SEED = 87866907; // monde de fond de l'écran d'accueil quand aucun monde n'existe
 const DAY_LENGTH = 360; // secondes pour un cycle jour/nuit complet
 
 const canvas = document.getElementById('game');
@@ -52,7 +55,7 @@ function toCanvas(buf) {
 
 // ---------------------------------------------------------------- assets
 const nomu = {}; // nomu[anim][dir][frame]
-let objSprites, objGlow, crackImgs, peopleImgs, bloodImgs, waterImgs, foamImgs, rimImgs, shadows, ui;
+let objSprites, objGlow, crackImgs, peopleImgs, bloodImgs, fogImg, waterImgs, foamImgs, rimImgs, shadows, ui;
 const blockCache = new Map();
 
 function block(type, h, v) {
@@ -86,6 +89,18 @@ async function loadAssets() {
       }
     }
   }
+  // animaux
+  for (const type in BEASTS) {
+    peopleImgs[type] = {};
+    for (const anim in BEAST_ANIMS) {
+      peopleImgs[type][anim] = [];
+      for (let d = 0; d < 8; d++) {
+        const list = peopleImgs[type][anim][d] = [];
+        for (let f = 0; f < BEAST_ANIMS[anim].frames; f++) jobs.push(() => { list[f] = toCanvas(renderBeast(type, anim, f / BEAST_ANIMS[anim].frames, d)); });
+      }
+    }
+  }
+  fogImg = toCanvas(fogBuffer());
   const total = jobs.length + 5;
   let done = 0;
   const progress = () => { bar.style.width = (100 * done / total) + '%'; };
@@ -146,7 +161,9 @@ function circleBuf(r, fill, col, alpha) {
 }
 
 // ---------------------------------------------------------------- état du jeu
-const world = new World(SEED);
+let world = new World(SEED);
+let current = null; // le monde joué (entrée de la liste des mondes)
+let mode = 'menu'; // 'menu' : écran d'accueil, le monde défile en fond ; 'play' : on joue
 const stats = { trees: 0, rocks: 0, smash: 0, houses: 0, knights: 0, victims: 0, play: 0 };
 let tod = 0.3;
 let time = 0;
@@ -155,13 +172,15 @@ const player = { x: 0, y: 0, z: 0, dir: 2, anim: 'idle', t: 0, action: null, act
   slide: null, mv: null, idleT: 0, water: 0, rippleT: 0,
   chargeKind: null, punchHoldT: 0, punchPower: 0, combo: 0, lastPunch: -1, punchBuf: false,
   aim: null, // pendant la charge du coup : direction visée (vecteur monde), plus fine que les 8 directions
-  hp: 100, lastHurt: -99, invuln: 0, flash: 0, kb: null, dead: null, regen: false };
+  hp: 100, lastHurt: -99, invuln: 0, flash: 0, kb: null, dead: null, regen: false,
+  // faim (100 = repu), évolution (points gagnés en dévorant), alters volés aux héros
+  hunger: 100, xp: 0, level: 1, alters: [], eating: null, nearCorpse: null, bigJump: false, starveMsg: false };
 const npcs = []; // villageois et chevaliers autour de Brainless
 const vstate = new Map(); // id du village -> { populated, anger, alarm }
 const bloods = []; // flaques de sang au sol
 let scent = null; // après avoir flairé : { v, t } le village le plus proche
 let msg = null; // bandeau au milieu de l'écran : { text, t }
-function showMsg(text, dur = 2.5) { msg = { text, t: dur }; }
+function showMsg(text, dur = 2.5, sub = '') { msg = { text, sub, t: dur }; }
 let windT = 0; // rafale après une frappe au sol : la végétation s'agite
 const hits = new Map();
 const particles = [];
@@ -170,10 +189,42 @@ const fx = []; // anneaux de choc, arbres qui tombent
 let shake = 0;
 let lastShake = 0;
 let hintT = 9;
+const PLAYER0 = JSON.parse(JSON.stringify(player));
 
-function load() {
+// Tout remettre à zéro avant de charger un autre monde.
+function resetState() {
+  Object.assign(player, JSON.parse(JSON.stringify(PLAYER0)));
+  for (const k in stats) stats[k] = 0;
+  npcs.length = particles.length = flyers.length = fx.length = decals.length = bloods.length = 0;
+  hits.clear(); vstate.clear(); bumpT.clear();
+  scent = null; msg = null; shake = 0; windT = 0; tod = 0.3; curVillage = null;
+  Object.assign(weather, { kind: 'clear', left: 40, rain: 0, cloud: 0, fog: 0, storm: 0, flash: 0, boltT: 6 });
+  weather.drops.length = weather.flakes.length = thunders.length = 0;
+  input.punch = input.jump = input.sniff = false;
+  chargeStop();
+}
+
+function startWorld(meta) {
+  resetState();
+  current = meta;
+  world = new World(meta.seed, meta.params);
+  load(loadWorldData(meta.id));
+  touchWorld(meta.id);
+  hideMenu();
+  mode = 'play';
+  hintT = 9;
+  showMsg(meta.name, 2.5);
+}
+
+function quitToMenu() {
+  save();
+  mode = 'menu';
+  resetState();
+  showMenu('worlds');
+}
+
+function load(s) {
   try {
-    const s = JSON.parse(localStorage.getItem(SAVE_KEY));
     if (s && typeof s.x === 'number') {
       world.mods = new Map(s.mods || []);
       world.terr = new Map(s.terr || []);
@@ -182,6 +233,8 @@ function load() {
       Object.assign(stats, s.stats || {});
       tod = s.tod ?? tod;
       player.x = s.x; player.y = s.y;
+      player.hunger = s.hunger ?? 100; player.xp = s.xp ?? 0; player.level = s.level ?? 1; player.alters = s.alters || [];
+      player.hp = s.hp ?? maxHp();
       if (world.walkable(Math.floor(player.x), Math.floor(player.y))) return;
     }
   } catch (e) { /* pas de sauvegarde lisible */ }
@@ -190,9 +243,10 @@ function load() {
 }
 
 function save() {
-  try {
-    localStorage.setItem(SAVE_KEY, JSON.stringify({ x: player.x, y: player.y, tod, stats, mods: [...world.mods], terr: [...world.terr], wear: [...world.wear], deaths: [...world.deaths] }));
-  } catch (e) { /* stockage indisponible */ }
+  if (mode !== 'play' || !current) return;
+  saveWorldData(current.id, {
+    x: player.x, y: player.y, hp: player.hp, hunger: player.hunger, xp: player.xp, level: player.level, alters: player.alters, tod, stats, mods: [...world.mods], terr: [...world.terr], wear: [...world.wear], deaths: [...world.deaths],
+  });
 }
 document.addEventListener('visibilitychange', () => { if (document.hidden) save(); });
 
@@ -250,6 +304,7 @@ function pressButton(k) {
 const toGame = (t) => [t.clientX / cssPerPx, t.clientY / cssPerPx];
 
 const muteBtn = { x: 0, y: 0, r: 7 };
+const homeBtn = { x: 0, y: 0, r: 7 }; // retour à l'accueil
 
 function onTouchStart(e) {
   e.preventDefault();
@@ -258,6 +313,7 @@ function onTouchStart(e) {
   for (const t of e.changedTouches) {
     const [x, y] = toGame(t);
     if (Math.hypot(x - muteBtn.x, y - muteBtn.y) < muteBtn.r + 6) { toggleMute(); sfx.ui(); continue; }
+    if (mode === 'play' && Math.hypot(x - homeBtn.x, y - homeBtn.y) < homeBtn.r + 5) { sfx.ui(); quitToMenu(); return; }
     const k = buttonAt(x, y, 6);
     if (k) {
       btnTouches.set(t.identifier, { origin: k, cur: k });
@@ -307,7 +363,9 @@ window.addEventListener('keydown', (e) => {
   keys.add(e.code);
   unlockAudio();
   setMode('keys');
+  if (mode !== 'play') { keys.delete(e.code); return; } // le menu gère ses touches
   if (e.code === 'KeyM') toggleMute();
+  if (e.code === 'Escape') { quitToMenu(); return; }
   if (e.code === 'KeyF') toggleFullscreen();
   if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault(); // pas de défilement de page
   if (e.code === 'KeyJ') input.punch = true;
@@ -323,6 +381,7 @@ canvas.addEventListener('mousedown', (e) => {
   setMode('keys');
   const x = e.clientX / cssPerPx, y = e.clientY / cssPerPx;
   if (Math.hypot(x - muteBtn.x, y - muteBtn.y) < muteBtn.r + 6) { toggleMute(); sfx.ui(); return; }
+  if (mode === 'play' && Math.hypot(x - homeBtn.x, y - homeBtn.y) < homeBtn.r + 5) { sfx.ui(); quitToMenu(); return; }
   if (e.button === 0) { mouse.punch = true; input.punch = true; }
   if (e.button === 2) mouse.charge = true;
 });
@@ -348,6 +407,7 @@ function readPad() {
   if (pad.jumpPressed) input.jump = true;
   if (pad.punchPressed) input.punch = true;
   if (pad.mutePressed) toggleMute();
+  if (pad.startPressed && mode === 'play') quitToMenu();
   if (pad.sniffPressed) input.sniff = true;
   return pad.x || pad.y ? [pad.x, pad.y] : null;
 }
@@ -403,6 +463,12 @@ function blockedFor(e, nx, ny, feet, npc) {
       if (!info) continue;
       if (info.solid) {
         if (Math.hypot(nx - (tx + dx + 0.5), ny - (ty + dy + 0.5)) < info.solid + 0.2) return true;
+        continue;
+      }
+      if (info.tilebox) {
+        // rempart : toute la tuile est pleine
+        const bx = tx + dx + 0.5, by = ty + dy + 0.5;
+        if (boxHit(nx, ny, bx, by, 0.7) && !boxHit(e.x, e.y, bx, by, 0.7)) return true;
         continue;
       }
       if (!info.part && !info.building) continue;
@@ -622,7 +688,8 @@ function healGround(dt) {
 
 // Enchaînement de boxeur : direct gauche, direct droit, crochet, et ça recommence.
 const JABS = ['jabL', 'jabR', 'hook'];
-const HIT_AT = { jabL: 0.44, jabR: 0.44, hook: 0.44, bigpunch: 0.22, slam: 0.44, sniff: 0.6 };
+const HIT_AT = { jabL: 0.44, jabR: 0.44, hook: 0.44, bigpunch: 0.22, slam: 0.44, sniff: 0.6, eat: 9 };
+const CHOMPS = [0.22, 0.35, 0.48, 0.61, 0.74]; // bouchées pendant qu'il dévore
 
 function startJab() {
   if (!JABS.includes(player.action) && time - player.lastPunch > 0.45) player.combo = 0; // trop lent : on repart du direct gauche
@@ -641,7 +708,7 @@ function doPunchHit(strong) {
     const d = Math.hypot(n.x - hx, n.y - hy);
     if (d < wd) { wd = d; who = n; }
   }
-  if (who) { hitNpc(who, strong ? 2 : 1, dx, dy, strong ? 0.35 : 0.15); shake = Math.max(shake, strong ? 2.5 : 1.5); return; }
+  if (who) { hitNpc(who, (strong ? 2 : 1) * strength(), dx, dy, strong ? 0.35 : 0.15); shake = Math.max(shake, strong ? 2.5 : 1.5); return; }
   let best = null, bestD = 0.8;
   for (let ty = Math.floor(hy) - 1; ty <= Math.floor(hy) + 1; ty++) {
     for (let tx = Math.floor(hx) - 1; tx <= Math.floor(hx) + 1; tx++) {
@@ -653,7 +720,7 @@ function doPunchHit(strong) {
     }
   }
   const gz = player.z;
-  if (best) { damage(best[0], best[1], strong ? 2 : 1); shake = Math.max(shake, strong ? 2.5 : 1.5); }
+  if (best) { damage(best[0], best[1], Math.round((strong ? 2 : 1) * strength())); shake = Math.max(shake, strong ? 2.5 : 1.5); }
   else { burst(hx, hy, gz + 18, ['#ffffff', '#d8e0f0'], 5, { up: 10, g: 0, life: 0.25, speed: 1.2 }); sfx.punchAir(); }
 }
 
@@ -676,6 +743,12 @@ function trample(vx, vy) {
         continue;
       }
       const d = Math.hypot(fx0 - (tx + 0.5), fy0 - (ty + 0.5));
+      if (info.tilebox) {
+        // un rempart ne cède pas à la course : il encaisse et Brainless s'arrête
+        const k = tx + ',' + ty;
+        if (boxHit(fx0, fy0, tx + 0.5, ty + 0.5, 0.95) && time - (bumpT.get(k) ?? -9) > 0.6) { bumpT.set(k, time); damage(tx, ty, 3); shake = Math.max(shake, 4); }
+        continue;
+      }
       if (d > (info.solid || 0.2) + 0.4) continue;
       // détruit d'un coup, souche et cailloux compris
       while (world.objAt(tx, ty) !== O.NONE && damage(tx, ty, 99)) { /* casse jusqu'au bout */ }
@@ -716,7 +789,7 @@ function doBigPunch(power) {
     if (d < R * 1.5 && (rx * dx + ry * dy) / d > Math.cos(half * 1.3)) { p.vx += dx * 7; p.vy += dy * 7; p.vz += 10; }
   }
   // tout près, ça rase tout ; plus loin, ça abîme sans détruire
-  const dmgBase = 2 + power * 8;
+  const dmgBase = (2 + power * 8) * strength();
   const inCone = (rx, ry, d) => d < 0.9 || (rx * dx + ry * dy) / d > Math.cos(half);
   const dmgAt = (d) => Math.max(1, Math.round(dmgBase * (1 - 0.75 * d / R)));
   blast(R, inCone, dmgAt);
@@ -735,6 +808,7 @@ function doBigPunch(power) {
     }
   }
   if (power > 0.3) sfx.crunch();
+  if (has('storm')) lightningChain(power);
   for (const f of flyers) if ((f.x - player.x) * dx + (f.y - player.y) * dy > 0) f.scared = 3;
 }
 
@@ -764,15 +838,18 @@ function doSlam(power) {
     const dx = p.x - player.x, dy = p.y - player.y, d = Math.hypot(dx, dy) || 1;
     if (d < R * 2) { p.vx += dx / d * 6; p.vy += dy / d * 6; p.vz += 20; }
   }
-  const base = 2 + power * 8;
+  const base = (2 + power * 8) * strength();
   const dmgAt = (d) => Math.max(1, Math.round(base * (1 - 0.75 * d / R)));
   blast(R, () => true, dmgAt);
+  if (has('storm')) lightningChain(power);
   // au centre, ceux qui sont sous lui sont écrasés ; plus loin ils sont projetés
   const crushR = Math.max(1.3, R * 0.5);
   for (const n of npcs) {
     const rx = n.x - player.x, ry = n.y - player.y, d = Math.hypot(rx, ry) || 0.01;
     if (n.inside || !alive(n) || d > R) continue;
-    if (d <= crushR && power >= 0.2) killNpc(n, true);
+    // un héros résiste à l'écrasement tant qu'il n'est pas affaibli
+    if (d <= crushR && power >= 0.2 && !(n.kind === 'hero' && n.hp > n.maxHp * 0.4)) killNpc(n, true);
+    else if (d <= crushR && n.kind === 'hero') hitNpc(n, dmgAt(d) * 1.5, rx / d, ry / d, power);
     else hitNpc(n, dmgAt(d), rx / d, ry / d, power * (1 - d / R) + 0.25);
   }
   // cratère au centre, fissures tout autour
@@ -822,8 +899,9 @@ function land() {
   player.air = false;
   player.jz = 0;
   player.vz = 0;
-  const hard = player.sprinting;
+  const hard = player.sprinting || player.bigJump;
   shake = Math.max(shake, hard ? 4 : 2.5);
+  if (player.bigJump) { player.bigJump = false; landingShock(); }
   burst(player.x, player.y, player.z, DUST_COLS, hard ? 18 : 10, { up: 20, speed: 2.2, g: 60, life: 0.6, spread: 1 });
   if (hard) crackTile(Math.floor(player.x), Math.floor(player.y), 1);
   // l'herbe et les fleurs sous lui sont écrasées
@@ -866,7 +944,8 @@ function update(dt) {
     // --- saut
     if (input.jump && !player.air && !player.action && !player.charging && !player.slide && player.water < 2) {
       player.air = true;
-      player.vz = JUMP_V * (player.sprinting ? 1.1 : 1);
+      player.vz = JUMP_V * (player.sprinting ? 1.1 : 1) * (has('leap') ? 1.6 : 1);
+      player.bigJump = has('leap');
       sfx.jump();
       burst(player.x, player.y, player.z, DUST_COLS, 6, { up: 15, speed: 1.2, g: 60, life: 0.5, spread: 1 });
     }
@@ -933,10 +1012,11 @@ function update(dt) {
       }
     }
     // flairer : il s'arrête, lève la tête et renifle l'air
+    player.nearCorpse = player.action ? null : corpseNear();
     if (input.sniff && !player.action && !player.charging && !player.air && !player.slide && player.water < 2) {
       player.sprinting = false;
-      startAction('sniff');
-      sfx.sniff();
+      if (player.nearCorpse) startEat(player.nearCorpse);
+      else { startAction('sniff'); sfx.sniff(); }
     }
     input.punch = input.jump = input.sniff = false;
 
@@ -949,9 +1029,11 @@ function update(dt) {
       player.actionT += dt / dur;
       const act = player.action;
       const hitAt = HIT_AT[act] ?? 0.4;
+      if (act === 'eat') for (const c of CHOMPS) if (prev < c && player.actionT >= c) chomp();
       if (prev < hitAt && player.actionT >= hitAt) {
         if (JABS.includes(act)) doPunchHit(act === 'hook');
         else if (act === 'sniff') doSniff();
+        else if (act === 'eat') { /* les bouchées sont gérées à part */ }
         else if (act === 'bigpunch') doBigPunch(player.punchPower);
         else doSlam(player.slamPower);
       }
@@ -963,6 +1045,7 @@ function update(dt) {
       else if (player.actionT >= 1) {
         if (JABS.includes(act)) player.lastPunch = time;
         if (act === 'bigpunch') player.aim = null;
+        if (act === 'eat') finishEat();
         player.action = null;
         player.t = 0;
       }
@@ -983,7 +1066,7 @@ function update(dt) {
         if (player.sprinting && !player.air && !player.water && player.mv && vx * player.mv[0] + vy * player.mv[1] < -0.35) {
           startSlide('skid', newDir); // demi-tour violent
         } else {
-          const speed = player.water === 2 ? (player.sprinting ? 4.6 : 1.9) : (player.sprinting ? 5.8 : 2.2) * (player.water ? 0.62 : 1);
+          const speed = player.water === 2 ? (player.sprinting ? 4.6 : 1.9) : (player.sprinting ? 5.8 * (has('engine') ? 1.35 : 1) : 2.2) * (player.water ? 0.62 : 1);
           if (player.sprinting && !player.air) trample(vx, vy);
           tryMove(vx * speed * dt, vy * speed * dt);
           player.dir = newDir;
@@ -1007,7 +1090,7 @@ function update(dt) {
       }
       if (!player.sprinting && !player.slide) player.mv = null;
     }
-    if (player.sprinting && !player.air) player.stamina = Math.max(0, player.stamina - dt / 4.5);
+    if (player.sprinting && !player.air) player.stamina = Math.max(0, player.stamina - dt / 4.5 / (1 + 0.08 * (player.level - 1)) * (has('engine') ? 0.6 : 1));
     else if (!player.sprinting) player.stamina = Math.min(1, player.stamina + dt / (player.tired ? 3 : 5));
     const A = ANIMS[player.anim];
     player.t += dt * A.fps * (player.charging ? 1 + player.charge * 1.8 : 1);
@@ -1031,12 +1114,15 @@ function update(dt) {
   updateHealth(dt);
   updateVillages(dt);
   updateNpcs(dt);
+  updateWildlife(dt);
+  updateWeather(dt);
   updateScent(dt);
   healGround(dt);
 
   updateParticles(dt);
   for (let i = decals.length - 1; i >= 0; i--) if ((decals[i].age += dt) > 9) decals.splice(i, 1);
-  updateAmbience(dt, { night: darkness() > 0.5, water: waterNearby(), height: world.hAt(Math.floor(player.x), Math.floor(player.y)) });
+  updateAmbience(dt, { night: darkness() > 0.5, water: waterNearby(), height: world.hAt(Math.floor(player.x), Math.floor(player.y)),
+    rain: weather.snow ? 0 : weather.rain, storm: weather.storm });
   updateFlyers(dt);
   for (let i = fx.length - 1; i >= 0; i--) {
     const f = fx[i];
@@ -1049,7 +1135,7 @@ function update(dt) {
       burst(ex, ey, f.gz, DUST_COLS, 14, { up: 25, speed: 2 });
       shake = Math.max(shake, 3);
     }
-    if ((f.kind === 'collapse' && f.t > 0.7) || (f.kind === 'ring' && f.t > 0.6) || (f.kind === 'fall' && f.t > 0.95) || (f.kind === 'ripple' && f.t > 1.1) || (f.kind === 'cone' && f.t > 0.5)) fx.splice(i, 1);
+    if ((f.kind === 'collapse' && f.t > 0.7) || (f.kind === 'bolt' && f.t > 0.3) || (f.kind === 'mark' && f.t > 8) || (f.kind === 'ring' && f.t > 0.6) || (f.kind === 'fall' && f.t > 0.95) || (f.kind === 'ripple' && f.t > 1.1) || (f.kind === 'cone' && f.t > 0.5)) fx.splice(i, 1);
   }
 }
 
@@ -1120,6 +1206,7 @@ function sprintImpacts(vx, vy) {
   const cols = t === T.SNOW ? ['#ffffff', '#dfe8f0'] : t === T.SAND ? DUST_COLS : ['#c9b58f', '#8fb86a', '#6b4a2e'];
   burst(player.x + vx * d, player.y + vy * d, player.z, cols, front ? 7 : 4, { up: 25, speed: 1.2, g: 70, life: 0.5, spread: 1 });
   sfx.gallop(front, surfaceAt(player.x, player.y));
+  if (has('engine')) burst(player.x - vx * 0.6, player.y - vy * 0.6, player.z + 10, ['#c9d0e0', '#8a91a0', '#ffb347'], 4, { up: 8, speed: 0.6, g: -20, life: 0.5 });
   if (front && Math.random() < 0.35) sfx.breath();
 }
 
@@ -1137,6 +1224,8 @@ function waterNearby() {
 // ---------------------------------------------------------------- vie de Brainless
 function hurtPlayer(dmg, fx0, fy0) {
   if (player.dead || player.invuln > 0) return;
+  dmg *= [0.6, 1, 1.5][world.p.difficulty] * (has('absorb') ? 0.5 : 1);
+  if (has('absorb')) burst(player.x, player.y, player.z + 20, ['#ffe28a', '#ffffff'], 6, { up: 20, speed: 2, life: 0.3 }); // le coup rebondit
   player.hp -= dmg;
   player.lastHurt = time;
   player.invuln = 0.3;
@@ -1169,11 +1258,12 @@ function updateDead(dt) {
     D.moved = true;
     const sp = world.findSpawn();
     player.x = sp.x; player.y = sp.y; player.z = groundZ(sp.x, sp.y);
-    player.hp = 100;
+    player.hp = maxHp();
+    player.hunger = Math.max(player.hunger, 50);
     // il est loin : les villages se calment, les chevaliers retournent patrouiller
     for (const st of vstate.values()) { st.anger = 0; st.alarm = -99; }
     for (const n of npcs) {
-      if (n.kind === 'knight' && alive(n) && n.state !== 'ko') { n.state = 'guard'; n.wait = 1; }
+      if (fighter(n) && alive(n) && n.state !== 'ko') { n.state = 'guard'; n.wait = 1; }
       else if (n.state === 'flee') { n.state = 'wander'; n.wait = 1; }
     }
     showMsg('SUPER REGENERATION', 3);
@@ -1190,15 +1280,134 @@ function updateHealth(dt) {
     player.kb[0] *= Math.exp(-8 * dt); player.kb[1] *= Math.exp(-8 * dt);
     if (Math.hypot(player.kb[0], player.kb[1]) < 0.1) player.kb = null;
   }
-  // Super régénération : quelques secondes sans coup, et ses blessures se referment.
-  if (!player.dead && player.hp < 100 && time - player.lastHurt > 3) {
+  // La faim : elle descend toujours, plus vite en sprint. Le ventre vide, il dépérit.
+  if (!player.dead) {
+    player.hunger = Math.max(0, player.hunger - dt * 100 / 420 * [0.7, 1, 1.3][world.p.difficulty] * (player.sprinting ? 1.8 : 1));
+    if (player.hunger <= 0) {
+      player.hp -= dt * 1.5;
+      if (!player.starveMsg) { player.starveMsg = true; showMsg('IL A FAIM...', 3, 'DEVORE QUELQUE CHOSE'); }
+      if (player.hp <= 0) playerDown();
+    } else if (player.hunger > 20) player.starveMsg = false;
+  }
+  // Super régénération : quelques secondes sans coup, et ses blessures se referment (pas le ventre vide).
+  if (!player.dead && player.hp < maxHp() && time - player.lastHurt > 3 && player.hunger > 15) {
     if (!player.regen) { player.regen = true; sfx.regen(); }
-    player.hp = Math.min(100, player.hp + 22 * dt);
+    player.hp = Math.min(maxHp(), player.hp + 22 * dt);
     if (Math.random() < dt * 10) {
       burst(player.x + (Math.random() - 0.5) * 0.6, player.y + (Math.random() - 0.5) * 0.6, player.z + 6 + Math.random() * 20,
         ['#8f9cff', '#c9d0ff', '#ff8a9a'], 1, { up: 18, g: -10, speed: 0.1, life: 0.8, spread: 0 });
     }
-  } else if (player.hp >= 100) player.regen = false;
+  } else player.regen = false;
+}
+
+// ---------------------------------------------------------------- faim, évolution, alters
+const LEVEL_AT = [0, 3, 8, 15, 25, 40, 60, 85, 115, 150, 200];
+const ALTERS = {
+  absorb: { name: 'ABSORPTION', desc: 'LES COUPS LUI FONT DEUX FOIS MOINS MAL' },
+  leap: { name: 'BOND', desc: 'SAUTS GEANTS, ONDE DE CHOC A LA RECEPTION' },
+  engine: { name: 'MOTEUR', desc: 'SPRINT PLUS RAPIDE ET QUI DURE PLUS LONGTEMPS' },
+  iron: { name: 'FER', desc: 'SES COUPS FONT 50% DE DEGATS EN PLUS' },
+  storm: { name: 'FOUDRE', desc: 'SES COUPS CHARGES FONT TOMBER LA FOUDRE' },
+};
+const has = (a) => player.alters.includes(a);
+const maxHp = () => 100 + 15 * (player.level - 1);
+const strength = () => (1 + 0.12 * (player.level - 1)) * (has('iron') ? 1.5 : 1);
+const fighter = (n) => n.kind === 'knight' || n.kind === 'hero';
+
+// Ce que rapporte une proie : de quoi manger, et des points d'évolution.
+function mealOf(n) {
+  if (n.kind === 'hero') return { food: 60, evo: 8 };
+  if (n.kind === 'knight') return { food: 40, evo: 2 };
+  if (n.kind === 'beast') return BEAST_MEAL[n.type];
+  return { food: 30, evo: 1 };
+}
+
+function corpseNear() {
+  let best = null, bd = 1.3;
+  for (const n of npcs) {
+    if (alive(n) || n.eaten) continue;
+    const d = Math.hypot(n.x - player.x, n.y - player.y);
+    if (d < bd) { bd = d; best = n; }
+  }
+  return best;
+}
+
+function startEat(n) {
+  player.eating = n;
+  n.eaten = true;
+  player.dir = faceDir(n.x - player.x, n.y - player.y);
+  startAction('eat');
+  sfx.growl();
+}
+
+function chomp() {
+  const n = player.eating;
+  if (!n || !npcs.includes(n)) return;
+  player.hunger = Math.min(100, player.hunger + mealOf(n).food / CHOMPS.length);
+  burst(n.x, n.y, n.z + 3, BLOOD_COLS, 8, { up: 40, speed: 1.2, life: 0.6 });
+  sfx.crunch();
+  if (Math.random() < 0.5) sfx.splat();
+  shake = Math.max(shake, 1.2);
+}
+
+function finishEat() {
+  const n = player.eating;
+  player.eating = null;
+  const i = npcs.indexOf(n);
+  if (i < 0) return;
+  npcs.splice(i, 1);
+  bloods.push({ x: n.x, y: n.y, h: world.hAt(Math.floor(n.x), Math.floor(n.y)), img: bloodImgs[0], age: 0 });
+  gainEvo(mealOf(n).evo);
+  const alter = PEOPLE[n.type] && PEOPLE[n.type].alter;
+  if (alter && !has(alter)) {
+    player.alters.push(alter);
+    showMsg('ALTER DEVORE : ' + ALTERS[alter].name, 4, ALTERS[alter].desc);
+    sfx.roar(1);
+    burst(player.x, player.y, player.z + 20, ['#c9a0ff', '#ffffff', '#8f9cff'], 40, { up: 60, speed: 2.5, life: 1 });
+    fx.push({ kind: 'ring', x: player.x, y: player.y, z: player.z, t: 0, r: 3 });
+  }
+}
+
+function gainEvo(x) {
+  player.xp += x;
+  while (player.level < LEVEL_AT.length && player.xp >= LEVEL_AT[player.level]) {
+    player.level++;
+    player.hp = maxHp();
+    showMsg('EVOLUTION ! NIVEAU ' + player.level, 3.5, 'PLUS DE VIE, DES COUPS PLUS FORTS');
+    sfx.roar(1);
+    shake = Math.max(shake, 6);
+    fx.push({ kind: 'ring', x: player.x, y: player.y, z: player.z, t: 0, r: 2.5 });
+    burst(player.x, player.y, player.z + 20, ['#c9a0ff', '#ff6b7a', '#ffffff'], 50, { up: 70, speed: 2.5, life: 1.2 });
+  }
+}
+
+// BOND : à la réception d'un saut géant, une onde de choc autour de lui.
+function landingShock() {
+  const R = 2.4;
+  sfx.slam(0.35);
+  shake = Math.max(shake, 7);
+  fx.push({ kind: 'ring', x: player.x, y: player.y, z: player.z, t: 0, r: R });
+  burst(player.x, player.y, player.z, DUST_COLS, 30, { up: 40, speed: 3, g: 80, life: 0.9, spread: 2 });
+  const dmgAt = (d) => Math.max(1, Math.round(4 * strength() * (1 - 0.6 * d / R)));
+  blast(R, () => true, dmgAt);
+  for (const n of npcs) {
+    const rx = n.x - player.x, ry = n.y - player.y, d = Math.hypot(rx, ry) || 0.01;
+    if (!n.inside && alive(n) && d < R) hitNpc(n, dmgAt(d), rx / d, ry / d, 0.4);
+  }
+  for (let ty = Math.floor(player.y - 1); ty <= Math.floor(player.y + 1); ty++) for (let tx = Math.floor(player.x - 1); tx <= Math.floor(player.x + 1); tx++) crackTile(tx, ty, 1);
+}
+
+// FOUDRE : ses gros coups font tomber des éclairs sur les ennemis proches.
+function lightningChain(power) {
+  const targets = npcs.filter((n) => alive(n) && !n.inside && Math.hypot(n.x - player.x, n.y - player.y) < 7)
+    .sort((a, b) => Math.hypot(a.x - player.x, a.y - player.y) - Math.hypot(b.x - player.x, b.y - player.y)).slice(0, 2 + Math.round(power * 2));
+  for (const n of targets) {
+    fx.push({ kind: 'bolt', x: n.x, y: n.y, z: n.z, t: 0, seed: Math.random() * 1000 });
+    const d = Math.hypot(n.x - player.x, n.y - player.y) || 1;
+    hitNpc(n, 3 * strength(), (n.x - player.x) / d, (n.y - player.y) / d, 0.3);
+    burst(n.x, n.y, n.z + 10, ['#fff7a8', '#8fd8ff', '#ffffff'], 10, { up: 40, speed: 2, life: 0.4 });
+  }
+  if (targets.length) sfx.thunder(0.4);
 }
 
 // ---------------------------------------------------------------- villageois et chevaliers
@@ -1229,13 +1438,13 @@ function crime(amount, x, y) {
     if (n.v !== v.id || n.inside || !alive(n)) continue;
     const dn = Math.hypot(n.x - x, n.y - y), dp = Math.hypot(n.x - player.x, n.y - player.y);
     if (n.kind === 'civ' && dn < 14) startFlee(n);
-    if (n.kind === 'knight' && n.state === 'guard' && (dn < 16 || dp < 10)) { n.state = 'chase'; n.alertT = 1.2; }
+    if (fighter(n) && n.state === 'guard' && (dn < 16 || dp < 10)) { n.state = 'chase'; n.alertT = 1.2; }
   }
 }
 
 function freeSpot(x, y) {
   const tx = Math.floor(x), ty = Math.floor(y), info = OBJ_INFO[world.objAt(tx, ty)];
-  return world.walkable(tx, ty) && !(info && (info.solid || info.part || info.building));
+  return world.walkable(tx, ty) && !(info && (info.solid || info.part || info.building || info.tilebox));
 }
 
 function spawnNpc(type, x, y, v, home) {
@@ -1243,7 +1452,7 @@ function spawnNpc(type, x, y, v, home) {
   const n = {
     type, kind: D.kind, x, y, z: groundZ(x, y), jz: 0, vz: 0, vx: 0, vy: 0, air: false,
     dir: (Math.random() * 8) | 0, anim: 'idle', t: Math.random() * 4, state: D.kind === 'knight' ? 'chase' : 'wander',
-    v: v.id, home, tx: x, ty: y, wait: Math.random() * 3, koT: 0, hp: D.kind === 'knight' ? 4 : 1,
+    v: v.id, home, tx: x, ty: y, wait: Math.random() * 3, koT: 0, hp: D.kind === 'hero' ? D.hp : D.kind === 'knight' ? 4 : 1, maxHp: D.hp || 4,
     alertT: 0, atkT: 0, cd: 0, hurtT: 0, flash: 0, waveT: 0, waveCd: 3 + Math.random() * 8, inside: false, stuck: 0,
     speedK: type === 'child' ? 1.1 : type === 'elder' ? 0.55 : 1, fj: 0,
   };
@@ -1273,6 +1482,14 @@ function populate(v) {
       if (freeSpot(jx, jy)) { const g = spawnNpc('knight', jx, jy, v, null); g.state = 'guard'; g.wait = Math.random() * 3; break; }
     }
   }
+  // les héros du village (ceux qui n'ont pas encore été dévorés)
+  (v.heroes || []).slice(dead.hero || 0).forEach((h) => {
+    for (let k = 0; k < 20; k++) {
+      const a = Math.random() * Math.PI * 2, r = Math.random() * v.R * 0.5;
+      const x = v.cx + 0.5 + Math.cos(a) * r, y = v.cy + 0.5 + Math.sin(a) * r;
+      if (freeSpot(x, y)) { const n = spawnNpc(HEROES[h], x, y, v, null); n.state = 'guard'; break; }
+    }
+  });
 }
 
 let villageT = 0, curVillage = null;
@@ -1322,18 +1539,29 @@ function releaseHome(ax, ay) {
 }
 
 const BLOOD_COLS = ['#6e0e18', '#a01824', '#d02c36', '#3e060c'];
-const deathsOf = (id) => { let d = world.deaths.get(id); if (!d) world.deaths.set(id, d = { civ: 0, knight: 0 }); return d; };
+const deathsOf = (id) => { let d = world.deaths.get(id); if (!d) world.deaths.set(id, d = { civ: 0, knight: 0, hero: 0 }); d.hero = d.hero || 0; return d; };
 const alive = (n) => n.state !== 'dead';
+const animsOf = (n) => (n.kind === 'beast' ? BEAST_ANIMS : PEOPLE_ANIMS[n.kind]);
 
 // `power` > 0.85 (gros coup chargé tout près) : il meurt en retombant.
 function hitNpc(n, dmg, kx, ky, power) {
   if (n.inside || !alive(n)) return;
   n.flash = 0.15;
-  const knight = n.kind === 'knight';
+  const knight = fighter(n);
+  if (n.type === 'rempart') dmg *= 0.6; // il absorbe une partie des coups
   // impact lourd ; les os craquent parfois (toujours quand le coup est très violent)
   sfx.bodyHit(knight, Math.random() < 0.35 || power > 0.6);
   if (knight) burst(n.x, n.y, n.z + n.jz + 16, ['#fff3b0', '#ffffff', '#dfe5ee'], 6, { up: 40, speed: 1.6, life: 0.4 });
   burst(n.x, n.y, n.z + n.jz + 12, BLOOD_COLS, knight ? 3 : 5, { up: 35, speed: 1.4, life: 0.6 });
+  if (n.kind === 'beast') {
+    // un animal : il détale, ou le sanglier s'énerve ; à 0 il meurt en retombant
+    n.hp -= dmg;
+    n.angry = true;
+    n.vx = kx * 3; n.vy = ky * 3;
+    if (n.hp <= 0) { n.air = true; n.dying = true; n.vz = 40 + power * 80; n.jz = 0.5; n.vx = kx * (2 + power * 5); n.vy = ky * (2 + power * 5); }
+    else if (BEASTS[n.type].flee) { n.state = 'flee'; n.fleeT = 4; }
+    return;
+  }
   crime(knight ? 1 : 2.5, n.x, n.y);
   if (n.state === 'ko') {
     // on achève celui qui est à terre
@@ -1342,10 +1570,14 @@ function hitNpc(n, dmg, kx, ky, power) {
     return;
   }
   n.hp -= dmg;
-  if (n.hp > 0) { n.state = 'hurt'; n.hurtT = 0.35; n.vx = kx * 3; n.vy = ky * 3; return; }
+  if (n.hp > 0) {
+    // un héros encaisse sans broncher la plupart du temps
+    if (n.kind === 'hero' && (n.state === 'special' || Math.random() < 0.7)) { n.vx = kx * 1.5; n.vy = ky * 1.5; return; }
+    n.state = 'hurt'; n.hurtT = 0.35; n.vx = kx * 3; n.vy = ky * 3; return;
+  }
   // KO : il vole et retombe sur le dos, des étoiles plein la tête
   n.state = 'ko';
-  n.koT = 4 + power * 4;
+  n.koT = n.kind === 'hero' ? 2.5 : 4 + power * 4;
   n.air = true;
   n.dying = power > 0.85;
   n.vx = kx * (2.5 + power * 7); n.vy = ky * (2.5 + power * 7);
@@ -1360,8 +1592,8 @@ function killNpc(n, crushed) {
   if (!alive(n)) return;
   n.state = 'dead'; n.anim = crushed ? 'crushed' : 'dead'; n.t = 0;
   n.deadT = 0; n.air = false; n.jz = 0; n.vx = n.vy = 0; n.alertT = 0;
-  deathsOf(n.v)[n.kind]++;
-  if (n.kind === 'knight') stats.knights++; else stats.victims++;
+  if (n.v) deathsOf(n.v)[n.kind]++;
+  if (n.kind === 'knight' || n.kind === 'hero') stats.knights++; else if (n.kind === 'beast') stats.prey = (stats.prey || 0) + 1; else stats.victims++;
   const h = world.hAt(Math.floor(n.x), Math.floor(n.y));
   bloods.push({ x: n.x, y: n.y, h, img: bloodImgs[crushed ? 2 : 1], age: 0 });
   if (bloods.length > 80) bloods.shift();
@@ -1369,7 +1601,76 @@ function killNpc(n, crushed) {
   sfx.bodyHit(n.kind === 'knight', true);
   sfx.splat();
   shake = Math.max(shake, crushed ? 4 : 2.5);
-  crime(4, n.x, n.y);
+  if (n.kind !== 'beast') crime(4, n.x, n.y);
+}
+
+// Chaque héros a son attaque spéciale, liée à son alter.
+function heroSpecial(n, d) {
+  const style = PEOPLE[n.type].style;
+  const tx = player.x, ty = player.y;
+  if (style === 'leap' && d > 2.5 && d < 9) n.sp = { kind: 'leap', t: 0, dur: 0.75, fx: n.x, fy: n.y, tx, ty };
+  else if (style === 'dash' && d > 2 && d < 9) n.sp = { kind: 'dash', t: 0, dur: 0.45, ux: (tx - n.x) / d, uy: (ty - n.y) / d, hit: false };
+  else if (style === 'ranged' && d > 2.2 && d < 10) n.sp = { kind: 'bolt', t: 0, dur: 0.75, tx, ty };
+  else if (style === 'melee' && d < 1.4) n.sp = { kind: 'smash', t: 0, dur: 0.7, hit: false };
+  else return false;
+  n.state = 'special';
+  n.alertT = 0.6;
+  n.dir = faceDir(tx - n.x, ty - n.y);
+  sfx.swordSwing();
+  return true;
+}
+
+// Renvoie true quand l'attaque spéciale est finie.
+function updateSpecial(n, dt) {
+  const S = n.sp;
+  S.t += dt / S.dur;
+  const u = Math.min(1, S.t);
+  if (S.kind === 'leap') {
+    // RESSORT bondit et retombe sur Brainless
+    n.x = S.fx + (S.tx - S.fx) * u; n.y = S.fy + (S.ty - S.fy) * u;
+    n.jz = Math.sin(Math.PI * u) * 42;
+    if (u >= 1) {
+      n.jz = 0;
+      fx.push({ kind: 'ring', x: n.x, y: n.y, z: n.z, t: 0, r: 1.6 });
+      burst(n.x, n.y, n.z, DUST_COLS, 20, { up: 40, speed: 2.5, life: 0.7 });
+      crackTile(Math.floor(n.x), Math.floor(n.y), 2);
+      sfx.slam(0.25); shake = Math.max(shake, 4);
+      if (Math.hypot(player.x - n.x, player.y - n.y) < 1.5) hurtPlayer(16, n.x, n.y);
+      n.cd = 2.6;
+    }
+  } else if (S.kind === 'dash') {
+    // TURBO fonce en ligne droite, moteurs à fond
+    npcMove(n, S.ux * 11 * dt, S.uy * 11 * dt);
+    burst(n.x - S.ux * 0.5, n.y - S.uy * 0.5, n.z + 6, ['#ffb347', '#c9d0e0', '#8a91a0'], 3, { up: 10, speed: 0.4, g: -10, life: 0.4 });
+    if (!S.hit && Math.hypot(player.x - n.x, player.y - n.y) < 0.9) { S.hit = true; hurtPlayer(14, n.x, n.y); }
+    if (u >= 1) { n.cd = 2.8; n.state = 'hurt'; n.hurtT = 0.6; return false; } // essoufflé après la charge
+  } else if (S.kind === 'bolt') {
+    // ECLAIR vise, puis la foudre tombe là où était Brainless
+    if (u < 0.45) { S.tx = player.x; S.ty = player.y; }
+    if (Math.random() < 0.4) burst(n.x, n.y, n.z + 18, ['#fff7a8', '#8fd8ff'], 1, { up: 20, speed: 0.6, life: 0.3 });
+    if (!S.mark) { S.mark = { kind: 'mark', x: S.tx, y: S.ty, t: 0, owner: S }; fx.push(S.mark); }
+    S.mark.x = S.tx; S.mark.y = S.ty;
+    if (u >= 1) {
+      S.mark.t = 9;
+      fx.push({ kind: 'bolt', x: S.tx, y: S.ty, z: groundZ(S.tx, S.ty), t: 0, seed: Math.random() * 1000 });
+      sfx.thunder(0.6); shake = Math.max(shake, 4);
+      burst(S.tx, S.ty, groundZ(S.tx, S.ty), ['#fff7a8', '#8fd8ff', '#ffffff'], 16, { up: 50, speed: 2, life: 0.5 });
+      crackTile(Math.floor(S.tx), Math.floor(S.ty), 2);
+      if (Math.hypot(player.x - S.tx, player.y - S.ty) < 1.1) hurtPlayer(15, S.tx, S.ty);
+      n.cd = 2.4;
+    }
+  } else if (S.kind === 'smash') {
+    // REMPART / ACIER : les deux poings abattus devant lui
+    if (!S.hit && u >= 0.65) {
+      S.hit = true;
+      fx.push({ kind: 'ring', x: n.x, y: n.y, z: n.z, t: 0, r: 1.4 });
+      sfx.slam(0.2); shake = Math.max(shake, 4);
+      crackTile(Math.floor(n.x), Math.floor(n.y), 1);
+      if (Math.hypot(player.x - n.x, player.y - n.y) < 1.6) hurtPlayer(n.type === 'acier' ? 18 : 15, n.x, n.y);
+    }
+    if (u >= 1) n.cd = 1.8;
+  }
+  return u >= 1;
 }
 
 function npcMove(n, dx, dy) {
@@ -1422,7 +1723,7 @@ function updateNpcs(dt) {
     n.cd -= dt; n.waveCd -= dt;
     if (n.inside) {
       // la nuit, ils dorment chez eux ; ils ressortent au matin
-      if (!night) { n.inside = false; n.state = 'wander'; n.wait = 1 + Math.random() * 3; }
+      if (!night && weather.rain < 0.4) { n.inside = false; n.state = 'wander'; n.wait = 1 + Math.random() * 3; }
       continue;
     }
     if (n.air) {
@@ -1443,11 +1744,12 @@ function updateNpcs(dt) {
     n.z += (groundZ(n.x, n.y) - n.z) * Math.min(1, dt * 12);
     const d = Math.hypot(player.x - n.x, player.y - n.y);
     let anim = 'idle';
-    switch (n.state) {
+    if (n.kind === 'beast') anim = updateBeast(n, dt, d);
+    else switch (n.state) {
       case 'ko':
         anim = 'ko';
         if (!n.air && (n.koT -= dt) <= 0) {
-          if (n.kind === 'knight') n.state = alarmed(n.v) ? 'chase' : 'guard'; else startFlee(n);
+          if (fighter(n)) { n.state = alarmed(n.v) ? 'chase' : 'guard'; if (n.kind === 'hero') n.hp = Math.max(n.hp, n.maxHp * 0.35); } else startFlee(n);
         }
         break;
       case 'hurt':
@@ -1465,7 +1767,7 @@ function updateNpcs(dt) {
       }
       case 'wander':
       case 'guard':
-        if (n.state === 'wander' && night && homeIntact(n.home)) {
+        if (n.state === 'wander' && (night || weather.rain > 0.6) && homeIntact(n.home)) {
           anim = 'walk';
           const [hx, hy] = n.home.door;
           steer(n, hx, hy, 1.1 * n.speedK, dt);
@@ -1474,7 +1776,7 @@ function updateNpcs(dt) {
         }
         if (n.kind === 'civ' && alarmed(n.v) && d < 7) { startFlee(n); break; }
         // un garde qui voit Brainless dans un village en alerte lui fonce dessus
-        if (n.kind === 'knight' && alarmed(n.v) && d < 8 && !player.dead) { n.state = 'chase'; n.alertT = 1.2; break; }
+        if (fighter(n) && alarmed(n.v) && d < 8 && !player.dead) { n.state = 'chase'; n.alertT = 1.2; break; }
         if (n.wait > 0) {
           n.wait -= dt;
           // au calme, ils saluent le monstre qui passe
@@ -1485,7 +1787,7 @@ function updateNpcs(dt) {
           if (n.waveT > 0) { n.waveT -= dt; anim = 'wave'; n.dir = faceDir(player.x - n.x, player.y - n.y); }
         } else {
           anim = 'walk';
-          steer(n, n.tx, n.ty, (n.kind === 'knight' ? 1.4 : 1.1) * n.speedK, dt);
+          steer(n, n.tx, n.ty, (fighter(n) ? 1.4 : 1.1) * n.speedK, dt);
           if (n.stuck > 0.8 || Math.hypot(n.tx - n.x, n.ty - n.y) < 0.15) {
             n.wait = 1.5 + Math.random() * 4; n.stuck = 0;
             pickTarget(n);
@@ -1497,9 +1799,17 @@ function updateNpcs(dt) {
         const v = world.villages.get(n.v);
         if ((!alarmed(n.v) && d > 6) || (v && Math.hypot(player.x - v.cx, player.y - v.cy) > v.R + 25)) { n.state = 'guard'; n.wait = 0; pickTarget(n); break; }
         if (player.dead) break;
+        if (n.kind === 'hero' && n.cd <= 0 && heroSpecial(n, d)) break;
+        if (n.kind === 'hero' && PEOPLE[n.type].style === 'ranged' && d < 3.5) {
+          // ECLAIR garde ses distances
+          anim = 'walk';
+          steer(n, n.x - (player.x - n.x), n.y - (player.y - n.y), 2.2, dt);
+          n.dir = faceDir(player.x - n.x, player.y - n.y);
+          break;
+        }
         if (d > 0.95) {
           anim = d > 3 ? 'run' : 'walk';
-          steer(n, player.x, player.y, d > 3 ? 3 : 2, dt);
+          steer(n, player.x, player.y, (d > 3 ? 3 : 2) * (n.kind === 'hero' ? 1.15 : 1), dt);
         } else {
           n.dir = faceDir(player.x - n.x, player.y - n.y);
           if (n.cd <= 0) { n.state = 'attack'; n.atkT = 0; n.hitDone = false; sfx.swordSwing(); }
@@ -1511,13 +1821,17 @@ function updateNpcs(dt) {
         n.atkT += dt / 0.5;
         if (!n.hitDone && n.atkT >= 0.55) {
           n.hitDone = true;
-          if (Math.hypot(player.x - n.x, player.y - n.y) < 1.35) hurtPlayer(7, n.x, n.y);
+          if (Math.hypot(player.x - n.x, player.y - n.y) < 1.35) hurtPlayer(n.kind === 'hero' ? 10 : 7, n.x, n.y);
         }
-        if (n.atkT >= 1) { n.state = 'chase'; n.cd = 0.8 + Math.random() * 0.6; }
+        if (n.atkT >= 1) { n.state = 'chase'; n.cd = (n.kind === 'hero' ? 0.6 : 0.8) + Math.random() * 0.6; }
+        break;
+      case 'special':
+        anim = 'special';
+        if (updateSpecial(n, dt)) { n.state = 'chase'; }
         break;
     }
     if (n.anim !== anim) { n.anim = anim; n.t = 0; }
-    n.t += dt * PEOPLE_ANIMS[n.kind][anim].fps;
+    n.t += dt * animsOf(n)[anim].fps;
   }
   // ils ne se marchent pas dessus, et s'écartent du chemin de Brainless
   for (let i = 0; i < npcs.length; i++) {
@@ -1549,6 +1863,204 @@ function updateScent(dt) {
       x, y, z: player.z + 20 + Math.random() * 10, vx: (player.x - x) / life, vy: (player.y - y) / life, vz: 6,
       g: 0, drag: 0, life, col: ['#ff6b7a', '#ff9aa8', '#c83444'][(Math.random() * 3) | 0], size: 1, streak: true,
     });
+  }
+}
+
+// ---------------------------------------------------------------- faune sauvage
+const BIOME = { [T.GRASS]: 'grass', [T.MEADOW]: 'meadow', [T.FOREST]: 'forest', [T.SNOW]: 'snow', [T.STONE]: 'stone' };
+let wildT = 0;
+
+// Des animaux apparaissent hors de l'écran autour de Brainless, selon le biome et l'heure.
+function updateWildlife(dt) {
+  wildT -= dt;
+  if (wildT > 0) return;
+  wildT = 1.5;
+  const night = darkness() > 0.5;
+  let count = 0;
+  for (let i = npcs.length - 1; i >= 0; i--) {
+    const n = npcs[i];
+    if (n.kind !== 'beast' || !alive(n)) continue;
+    const d = Math.hypot(n.x - player.x, n.y - player.y);
+    if (d > 34 || (BEASTS[n.type].night && !night && d > 16)) { npcs.splice(i, 1); continue; } // trop loin, ou le loup repart au matin
+    count++;
+  }
+  const want = [4, 8, 14][world.p.wildlife];
+  if (count >= want || player.dead) return;
+  for (let k = 0; k < 6; k++) {
+    const a = Math.random() * Math.PI * 2, r = 14 + Math.random() * 8;
+    const x = player.x + Math.cos(a) * r, y = player.y + Math.sin(a) * r;
+    const tx = Math.floor(x), ty = Math.floor(y), biome = BIOME[world.typeAt(tx, ty)];
+    if (!biome || !freeSpot(x, y) || villageAt(x, y, 6)) continue;
+    const types = Object.keys(BEASTS).filter((t) => BEASTS[t].biome.includes(biome) && (!BEASTS[t].night || night));
+    if (!types.length) continue;
+    const type = types[(Math.random() * types.length) | 0];
+    const n = BEASTS[type].pack ? 3 : type === 'rabbit' ? 2 : 1;
+    for (let i = 0; i < n; i++) {
+      const bx = x + (Math.random() - 0.5) * 2, by = y + (Math.random() - 0.5) * 2;
+      if (freeSpot(bx, by)) spawnBeast(type, bx, by);
+    }
+    return;
+  }
+}
+
+function spawnBeast(type, x, y) {
+  const B = BEASTS[type];
+  npcs.push({
+    type, kind: 'beast', x, y, z: groundZ(x, y), jz: 0, vz: 0, vx: 0, vy: 0, air: false, dir: (Math.random() * 8) | 0,
+    anim: 'idle', t: Math.random() * 4, state: 'graze', v: null, hp: B.hp, maxHp: B.hp, tx: x, ty: y, wait: Math.random() * 3,
+    alertT: 0, atkT: 0, cd: 0, flash: 0, stuck: 0, inside: false, fj: 0, fleeT: 0, angry: false, speedK: 1,
+  });
+}
+
+// Renvoie l'animation à jouer.
+function updateBeast(n, dt, d) {
+  const B = BEASTS[n.type];
+  if (n.air) return 'run';
+  const hostile = !player.dead && ((B.aggro && (d < B.aggro || (n.angry && d < 14))) || (B.hunt && d < B.hunt));
+  if (B.pack && n.hp <= 1) { n.state = 'flee'; n.fleeT = 5; } // le loup blessé s'enfuit
+  else if (hostile && n.state !== 'battack') n.state = 'charge';
+  else if (B.flee && d < B.flee * (player.sprinting ? 2 : 1) && n.state !== 'flee') { n.state = 'flee'; n.fleeT = 3 + Math.random() * 2; n.fj = (Math.random() - 0.5) * 1.5; }
+  if (n.state === 'flee') {
+    const ax = n.x - player.x, ay = n.y - player.y, l = Math.hypot(ax, ay) || 1;
+    // le lapin zigzague
+    const zz = n.type === 'rabbit' ? Math.sin(time * 9 + n.x) * 0.9 : 0, c = Math.cos(n.fj + zz), sn = Math.sin(n.fj + zz);
+    steer(n, n.x + (ax * c - ay * sn) / l * 2, n.y + (ax * sn + ay * c) / l * 2, B.speed, dt);
+    if (n.stuck > 0.5) { n.fj = (Math.random() - 0.5) * 3; n.stuck = 0; }
+    if ((n.fleeT -= dt) <= 0 && d > (B.flee || 6) * 1.6) n.state = 'graze';
+    return 'run';
+  }
+  if (n.state === 'charge') {
+    if (!hostile) { n.state = 'graze'; n.angry = false; return 'idle'; }
+    if (d > 0.9) { steer(n, player.x, player.y, B.speed, dt); return 'run'; }
+    n.dir = faceDir(player.x - n.x, player.y - n.y);
+    if (n.cd <= 0) { n.state = 'battack'; n.atkT = 0; n.hitDone = false; sfx.growl(); }
+    return 'idle';
+  }
+  if (n.state === 'battack') {
+    n.atkT += dt / 0.4;
+    if (!n.hitDone && n.atkT >= 0.5) { n.hitDone = true; if (d < 1.3) hurtPlayer(B.dmg, n.x, n.y); }
+    if (n.atkT >= 1) { n.state = 'charge'; n.cd = 1.1; }
+    return 'attack';
+  }
+  // il broute et se promène tranquillement
+  if (n.wait > 0) { n.wait -= dt; return 'idle'; }
+  steer(n, n.tx, n.ty, B.speed * 0.25, dt);
+  if (n.stuck > 0.6 || Math.hypot(n.tx - n.x, n.ty - n.y) < 0.2) {
+    n.wait = 2 + Math.random() * 5; n.stuck = 0;
+    const a = Math.random() * Math.PI * 2, r = 1 + Math.random() * 3;
+    if (freeSpot(n.x + Math.cos(a) * r, n.y + Math.sin(a) * r)) { n.tx = n.x + Math.cos(a) * r; n.ty = n.y + Math.sin(a) * r; }
+  }
+  return 'walk';
+}
+
+// ---------------------------------------------------------------- météo
+// Probabilités de chaque temps selon le réglage du monde (calme, variable, orageuse).
+const WEATHER_ODDS = [
+  { clear: 0.65, cloudy: 0.2, fog: 0.1, rain: 0.05, storm: 0 },
+  { clear: 0.4, cloudy: 0.2, fog: 0.12, rain: 0.2, storm: 0.08 },
+  { clear: 0.2, cloudy: 0.15, fog: 0.05, rain: 0.3, storm: 0.3 },
+];
+const weather = { kind: 'clear', left: 40, rain: 0, cloud: 0, fog: 0, storm: 0, flash: 0, boltT: 6, snow: false, drops: [], flakes: [] };
+const thunders = []; // grondements à venir (le son arrive après l'éclair)
+
+function updateWeather(dt) {
+  const W = weather;
+  if ((W.left -= dt) <= 0) {
+    const odds = WEATHER_ODDS[world.p.weather];
+    let r = Math.random();
+    W.kind = Object.keys(odds).find((k) => (r -= odds[k]) < 0) || 'clear';
+    W.left = 60 + Math.random() * 100;
+  }
+  const k = W.kind;
+  const ease = (v, t, sp) => v + (t - v) * Math.min(1, dt * sp);
+  W.cloud = ease(W.cloud, { clear: 0, cloudy: 0.6, fog: 0.35, rain: 0.8, storm: 1 }[k], 0.15);
+  W.rain = ease(W.rain, { rain: 0.7, storm: 1 }[k] || 0, 0.2);
+  W.fog = ease(W.fog, { fog: 1, rain: 0.15, storm: 0.1 }[k] || 0, 0.12);
+  W.storm = ease(W.storm, k === 'storm' ? 1 : 0, 0.2);
+  // en montagne et sur la neige, il neige au lieu de pleuvoir
+  const tt = world.typeAt(Math.floor(player.x), Math.floor(player.y));
+  W.snow = tt === T.SNOW || world.hAt(Math.floor(player.x), Math.floor(player.y)) >= 5;
+  W.flash = Math.max(0, W.flash - dt * 3);
+  if (W.storm > 0.5) {
+    windT = Math.max(windT, W.storm * 0.6);
+    if ((W.boltT -= dt) <= 0) { W.boltT = 3 + Math.random() * 7; strike(); }
+  }
+  for (let i = thunders.length - 1; i >= 0; i--) if ((thunders[i].t -= dt) <= 0) { sfx.thunder(thunders[i].p, 0); thunders.splice(i, 1); }
+}
+
+// La foudre tombe quelque part à l'écran : un arbre peut y passer… ou Brainless.
+function strike() {
+  let x = player.x + (Math.random() - 0.5) * 18, y = player.y + (Math.random() - 0.5) * 18;
+  // elle préfère ce qui dépasse : un arbre proche du point tiré au hasard
+  for (let k = 0; k < 12; k++) {
+    const tx = Math.floor(x + (Math.random() - 0.5) * 4), ty = Math.floor(y + (Math.random() - 0.5) * 4);
+    const info = OBJ_INFO[world.objAt(tx, ty)];
+    if (info && info.tree) { x = tx + 0.5; y = ty + 0.5; break; }
+  }
+  const z = groundZ(x, y), d = Math.hypot(x - player.x, y - player.y);
+  fx.push({ kind: 'bolt', x, y, z, t: 0, seed: Math.random() * 1000 });
+  weather.flash = 1;
+  thunders.push({ t: d * 0.09, p: Math.max(0.4, 1 - d / 25) });
+  burst(x, y, z + 4, ['#fff7a8', '#8fd8ff', '#ffffff', '#ffb347'], 20, { up: 60, speed: 2.2, life: 0.6 });
+  const tx = Math.floor(x), ty = Math.floor(y), info = OBJ_INFO[world.objAt(tx, ty)];
+  if (info && info.tree) damage(tx, ty, 99);
+  crackTile(tx, ty, 2);
+  for (const n of npcs) if (alive(n) && !n.inside && Math.hypot(n.x - x, n.y - y) < 1.3) hitNpc(n, 5, 0, 0, 0.5);
+  if (d < 1.4) {
+    if (has('storm')) { player.hp = Math.min(maxHp(), player.hp + 30); showMsg('FOUDRE ABSORBEE', 2); } // il se nourrit de l'orage
+    else hurtPlayer(12, x, y);
+  }
+}
+
+// Texture de brouillard : des nappes tramées qui dérivent (tuilée à l'écran).
+function fogBuffer() {
+  const w = 160, h = 120, b = makeBuffer(w, h);
+  // bruit raccordable : on mélange 4 copies décalées pour que les bords se rejoignent
+  const tile = (x, y, sx, sy, seed) => {
+    const n = (a, c) => valueNoise(a / sx, c / sy, seed);
+    return (n(x, y) * (w - x) * (h - y) + n(x - w, y) * x * (h - y) + n(x, y - h) * (w - x) * y + n(x - w, y - h) * x * y) / (w * h);
+  };
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const v = (tile(x, y, 26, 16, 7) * 0.65 + tile(x, y, 9, 6, 8) * 0.35 - 0.5) * 1.6 + 0.5;
+    const bay = ((x & 1) ^ (y & 1)) ? 0.04 : -0.04;
+    if (v + bay > 0.62) b.set(x, y, [226, 232, 240], 150);
+    else if (v + bay > 0.5 && (x + y) % 2 === 0) b.set(x, y, [214, 222, 232], 110);
+  }
+  return Object.assign(b, { ox: 0, oy: 0 });
+}
+
+function drawWeather(dt) {
+  const W = weather;
+  // pluie (ou neige) en espace écran
+  const want = Math.round((W.snow ? 150 : 230) * W.rain);
+  const list = W.snow ? W.flakes : W.drops;
+  (W.snow ? W.drops : W.flakes).length = 0;
+  while (list.length < want) list.push({ x: Math.random() * VW, y: Math.random() * VH, sp: 0.7 + Math.random() * 0.6, gy: VH * (0.3 + Math.random() * 0.75), ph: Math.random() * 6 });
+  if (list.length > want) list.length = want;
+  const wind = 0.35 + W.storm * 0.5;
+  for (const p of list) {
+    if (W.snow) {
+      p.y += dt * 22 * p.sp; p.x += Math.sin(time * 1.5 + p.ph) * dt * 10 + dt * 8 * wind;
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(Math.round(p.x), Math.round(p.y), p.sp > 0.95 ? 2 : 1, p.sp > 0.95 ? 2 : 1);
+    } else {
+      p.y += dt * 260 * p.sp; p.x += dt * 260 * p.sp * wind * 0.35;
+      ctx.fillStyle = p.sp > 1 ? 'rgba(214,230,255,0.8)' : 'rgba(170,198,236,0.65)';
+      for (let i = 0; i < 6; i++) ctx.fillRect(Math.round(p.x - i * wind * 0.4), Math.round(p.y - i), 1, 1);
+      if (p.y > p.gy) {
+        // éclaboussure au sol
+        ctx.fillStyle = 'rgba(220,236,255,0.7)';
+        ctx.fillRect(Math.round(p.x) - 1, Math.round(p.gy), 1, 1); ctx.fillRect(Math.round(p.x) + 1, Math.round(p.gy), 1, 1);
+      }
+    }
+    if (p.y > (W.snow ? VH : p.gy) || p.x > VW + 4) { p.y = -4 - Math.random() * 20; p.x = Math.random() * (VW + 40) - 40; p.gy = VH * (0.3 + Math.random() * 0.75); }
+  }
+  // brouillard qui dérive
+  if (W.fog > 0.02) {
+    ctx.globalAlpha = Math.min(0.85, W.fog * 0.8);
+    const fx0 = -Math.floor((time * 4) % fogImg.width), fy0 = -Math.floor((time * 1.5) % fogImg.height);
+    for (let y = fy0; y < VH; y += fogImg.height) for (let x = fx0; x < VW; x += fogImg.width) ctx.drawImage(fogImg, x, y);
+    ctx.globalAlpha = 1;
   }
 }
 
@@ -1615,7 +2127,8 @@ function nearestPrey() {
   for (let j = -3; j <= 3; j++) for (let i = -3; i <= 3; i++) {
     const v = world.villageIn(rx + i, ry + j);
     if (!v) continue;
-    const dd = world.deaths.get(v.id) || { civ: 0, knight: 0 }, left = v.folk - dd.civ + v.garrison - dd.knight;
+    const dd = world.deaths.get(v.id) || { civ: 0, knight: 0, hero: 0 };
+    const left = v.folk - dd.civ + v.garrison - dd.knight + (v.heroes || []).length - (dd.hero || 0);
     const d = Math.hypot(v.cx + 0.5 - player.x, v.cy + 0.5 - player.y);
     if (left > 0 && (!best || d < best.d)) best = { v, d, left };
   }
@@ -1787,7 +2300,7 @@ function render() {
       }
       ctx.globalAlpha = 1;
     }
-    if (d === pRow) rowEnts.push({ player: true, mx: player.x, my: player.y, depth: player.x + player.y });
+    if (d === pRow && mode === 'play') rowEnts.push({ player: true, mx: player.x, my: player.y, depth: player.x + player.y });
     const rn = npcRows.get(d);
     if (rn) for (const n of rn) rowEnts.push({ npc: n, mx: n.x, my: n.y, depth: n.x + n.y });
     if (rowEnts.length) {
@@ -1826,14 +2339,22 @@ function render() {
   if (player.charging) drawChargeAura(ox, oy);
   if (player.charging && player.chargeKind === 'punch') drawAim(ox, oy);
   // Brainless visible en transparence derrière les arbres
-  ctx.globalAlpha = 0.28;
-  drawPlayer(ox, oy, 0);
-  ctx.globalAlpha = 1;
+  if (mode === 'play') {
+    ctx.globalAlpha = 0.28;
+    drawPlayer(ox, oy, 0);
+    ctx.globalAlpha = 1;
+  }
 
   drawFlyers(ox, oy, false);
+  drawWeather(Math.min(0.05, time - lastRender)); lastRender = time;
   drawSky();
   drawGlows();
+  if (weather.flash > 0) {
+    ctx.fillStyle = `rgba(235,240,255,${weather.flash * 0.45})`;
+    ctx.fillRect(0, 0, VW, VH);
+  }
   drawFlyers(ox, oy, true);
+  if (mode !== 'play') return;
   drawFade();
   drawHUD();
 }
@@ -1876,20 +2397,26 @@ function drawNpc(n, ox, oy) {
   const jz = Math.round(n.jz);
   if (!alive(n)) {
     ctx.globalAlpha = Math.min(1, (150 - n.deadT) / 10);
-    ctx.drawImage(peopleImgs[n.type][n.anim][n.dir][0], sx - PEOPLE_OX, sy - PEOPLE_OY);
+    const im = peopleImgs[n.type][n.anim][n.dir][0];
+    ctx.drawImage(im, sx - im.ox, sy - im.oy);
     ctx.globalAlpha = 1;
+    if (n === player.nearCorpse) {
+      const l = { touch: 'N', keys: 'R', pad: 'L1' }[inputMode] + ': DEVORER';
+      drawText(ctx, l, Math.round(sx - textWidth(l) / 2), sy - 18, '#ff9aa8');
+    }
     return;
   }
   ctx.drawImage(shadows.s, sx - shadows.s.ox, sy - shadows.s.oy);
-  const A = PEOPLE_ANIMS[n.kind][n.anim];
-  const f = n.anim === 'attack' ? Math.min(A.frames - 1, Math.floor(Math.max(0, n.atkT) * A.frames)) : Math.floor(n.t) % A.frames;
+  const A = animsOf(n)[n.anim];
+  const f = n.anim === 'attack' ? Math.min(A.frames - 1, Math.floor(Math.max(0, n.atkT) * A.frames))
+    : n.anim === 'special' && n.sp ? Math.min(A.frames - 1, Math.floor(Math.min(1, n.sp.t) * A.frames)) : Math.floor(n.t) % A.frames;
   const img = peopleImgs[n.type][n.anim][n.dir][f];
-  ctx.drawImage(img, sx - PEOPLE_OX, sy - jz - PEOPLE_OY);
+  ctx.drawImage(img, sx - img.ox, sy - jz - img.oy);
   if (n.flash > 0) {
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     ctx.globalAlpha = 0.7;
-    ctx.drawImage(img, sx - PEOPLE_OX, sy - jz - PEOPLE_OY);
+    ctx.drawImage(img, sx - img.ox, sy - jz - img.oy);
     ctx.restore();
   }
   if (n.state === 'ko' && !n.air) {
@@ -1900,9 +2427,15 @@ function drawNpc(n, ox, oy) {
       ctx.fillRect(Math.round(sx + Math.cos(a) * 6), Math.round(sy - 9 + Math.sin(a) * 2), 1, 1);
     }
   }
-  if (n.alertT > 0) {
-    const h = n.kind === 'knight' ? 37 : n.type === 'child' ? 24 : 32;
-    drawText(ctx, '!', sx - 1, sy - jz - h, n.kind === 'knight' ? '#ff5a5e' : '#ffe28a');
+  if (n.kind === 'hero' && (n.state !== 'guard' || Math.hypot(n.x - player.x, n.y - player.y) < 6)) {
+    // nom et barre de vie du héros
+    const name = PEOPLE[n.type].name, w = 22, y = sy - jz - 44;
+    drawText(ctx, name, Math.round(sx - textWidth(name) / 2), y - 7, '#ffe28a');
+    ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(sx - w / 2 - 1, y - 1, w + 2, 4);
+    ctx.fillStyle = '#e8465e'; ctx.fillRect(sx - w / 2, y, Math.round(w * Math.max(0, n.hp) / n.maxHp), 2);
+  } else if (n.alertT > 0) {
+    const h = fighter(n) ? 37 : n.type === 'child' ? 24 : 32;
+    drawText(ctx, '!', sx - 1, sy - jz - h, fighter(n) ? '#ff5a5e' : '#ffe28a');
   }
 }
 
@@ -2103,6 +2636,28 @@ function drawFx(f, ox, oy) {
       ctx.fillRect(Math.round(sx + Math.cos(a) * r), Math.round(sy + Math.sin(a) * r * 0.5), 2, 1);
     }
     ctx.globalAlpha = 1;
+  } else if (f.kind === 'bolt') {
+    // éclair : un zigzag qui tombe du ciel
+    if (f.t > 0.3) return;
+    const sx = Math.round(ox + isoX(f.x, f.y)), sy = Math.round(oy + isoY(f.x, f.y) - f.z);
+    ctx.globalAlpha = 1 - f.t / 0.3;
+    let x = sx + Math.round((hash(f.seed | 0, 1, 3) - 0.5) * 30), y = sy - 140;
+    for (let i = 0; y < sy; i++) {
+      const ny = Math.min(sy, y + 6 + ((hash(f.seed | 0, i, 5) * 8) | 0));
+      const nx = sx + Math.round((x - sx) * 0.75 + (hash(f.seed | 0, i, 7) - 0.5) * 10 * (1 - y / sy));
+      for (let k = 0; k <= 8; k++) {
+        const px = Math.round(x + (nx - x) * k / 8), py = Math.round(y + (ny - y) * k / 8);
+        ctx.fillStyle = '#8fd8ff'; ctx.fillRect(px - 1, py, 3, 1);
+        ctx.fillStyle = '#ffffff'; ctx.fillRect(px, py, 1, 1);
+      }
+      x = nx; y = ny;
+    }
+    ctx.globalAlpha = 1;
+  } else if (f.kind === 'mark') {
+    // la cible d'ECLAIR au sol, qui clignote
+    const sx = ox + isoX(f.x, f.y), sy = oy + isoY(f.x, f.y) - groundZ(f.x, f.y);
+    ctx.fillStyle = Math.floor(time * 12) % 2 ? '#fff7a8' : '#8fd8ff';
+    for (let i = 0; i < 20; i++) { const a = i / 20 * Math.PI * 2; ctx.fillRect(Math.round(sx + Math.cos(a) * 12), Math.round(sy + Math.sin(a) * 6), 1, 1); }
   } else if (f.kind === 'collapse') {
     // la maison intacte s'enfonce dans la poussière et laisse voir la ruine
     const sx = ox + isoX(f.x, f.y), sy = oy + isoY(f.x, f.y) - f.gz;
@@ -2158,6 +2713,7 @@ const SKY = [
   [0.68, [255, 255, 255]], [0.76, [255, 160, 110]], [0.83, [70, 80, 150]], [1, [70, 80, 150]],
 ];
 
+let lastRender = 0;
 function drawSky() {
   let c = SKY[0][1];
   for (let i = 0; i < SKY.length - 1; i++) {
@@ -2167,6 +2723,9 @@ function drawSky() {
       break;
     }
   }
+  // ciel couvert : un peu plus sombre et plus bleu
+  const k = weather.cloud;
+  if (k > 0.01) c = [c[0] * (1 - k * 0.3), c[1] * (1 - k * 0.26), c[2] * (1 - k * 0.18)].map(Math.round);
   if (c[0] === 255 && c[1] === 255 && c[2] === 255) return;
   ctx.globalCompositeOperation = 'multiply';
   ctx.fillStyle = `rgb(${c[0]},${c[1]},${c[2]})`;
@@ -2190,7 +2749,7 @@ function drawSprintBar(x, y) {
 }
 
 function drawHpBar(x, y) {
-  const w = 52, fill = Math.round((w - 2) * player.hp / 100);
+  const w = 52, fill = Math.max(0, Math.round((w - 2) * player.hp / maxHp()));
   const low = player.hp < 30 && Math.floor(time * 5) % 2;
   drawText(ctx, 'VIE', x, y, player.regen ? '#c9d0ff' : '#ff9aa8');
   const bx = x + 26;
@@ -2202,6 +2761,24 @@ function drawHpBar(x, y) {
   ctx.fillRect(bx + 1, y, fill, 5);
   ctx.fillStyle = 'rgba(255,255,255,0.45)';
   ctx.fillRect(bx + 1, y, fill, 1);
+}
+
+function drawHungerBar(x, y) {
+  const w = 52, fill = Math.round((w - 2) * player.hunger / 100);
+  const low = player.hunger < 20 && Math.floor(time * 4) % 2;
+  drawText(ctx, 'FAIM', x, y, player.hunger < 20 ? '#ff7a7a' : '#ffb870');
+  const bx = x + 26;
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect(bx, y - 1, w, 7);
+  ctx.fillStyle = '#20243a';
+  ctx.fillRect(bx + 1, y, w - 2, 5);
+  ctx.fillStyle = low ? '#ff4d5e' : '#d9822b';
+  ctx.fillRect(bx + 1, y, fill, 5);
+  // évolution : un fil violet sous la barre
+  const lv = player.level, a = LEVEL_AT[lv - 1], b = LEVEL_AT[lv];
+  const evo = b === undefined ? 1 : (player.xp - a) / (b - a);
+  ctx.fillStyle = '#c9a0ff';
+  ctx.fillRect(bx + 1, y + 5, Math.round((w - 2) * Math.max(0, Math.min(1, evo))), 1);
 }
 
 // Le flair : une flèche autour de Brainless pointe vers la viande fraîche, avec la distance.
@@ -2233,6 +2810,20 @@ function drawScent() {
   ctx.globalAlpha = 1;
 }
 
+function drawHomeButton() {
+  homeBtn.x = VW - 32 - safe.r;
+  homeBtn.y = 11 + safe.t;
+  const x = homeBtn.x - 5, y = homeBtn.y - 4;
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.fillRect(x - 3, y - 3, 17, 14);
+  // petite maison pixel
+  ctx.fillStyle = '#ffffff';
+  for (let i = 0; i < 5; i++) ctx.fillRect(x + 5 - i, y + i, 1 + i * 2, 1);
+  ctx.fillRect(x + 1, y + 5, 9, 4);
+  ctx.fillStyle = '#20243a';
+  ctx.fillRect(x + 4, y + 6, 3, 3);
+}
+
 function drawMuteButton() {
   muteBtn.x = VW - 12 - safe.r;
   muteBtn.y = 11 + safe.t;
@@ -2260,15 +2851,21 @@ function drawHUD() {
   layoutButtons();
   const x0 = 6 + safe.l, y0 = 6 + safe.t;
   drawText(ctx, 'BRAINLESS', x0, y0, '#f6a6bd');
+  drawText(ctx, 'NIV ' + player.level, x0 + 40, y0, '#c9a0ff');
+  buttons.n.sub = player.nearCorpse ? 'DEVORER' : 'FLAIR';
   const night = darkness() > 0.5;
   drawText(ctx, (night ? 'NUIT' : 'JOUR') + '  ARBRES ' + stats.trees + '  MAISONS ' + stats.houses + '  VICTIMES ' + (stats.victims + stats.knights), x0, y0 + 8, '#e8f0ff');
   drawSprintBar(x0, y0 + 17);
   drawHpBar(x0, y0 + 26);
+  drawHungerBar(x0, y0 + 35);
+  if (player.alters.length) drawText(ctx, 'ALTERS: ' + player.alters.map((a) => ALTERS[a].name).join(' '), x0, y0 + 44, '#c9a0ff');
   drawScent();
   drawMuteButton();
+  drawHomeButton();
   if (msg) {
     ctx.globalAlpha = Math.min(1, msg.t / 0.6);
     drawText(ctx, msg.text, Math.round(VW / 2 - textWidth(msg.text) / 2), Math.round(VH * 0.3), '#ffe28a');
+    if (msg.sub) drawText(ctx, msg.sub, Math.round(VW / 2 - textWidth(msg.sub) / 2), Math.round(VH * 0.3) + 8, '#ffffff');
     ctx.globalAlpha = 1;
   }
 
@@ -2303,22 +2900,46 @@ let last = 0, saveT = 0;
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000 || 0);
   last = now;
-  update(dt);
+  if (mode === 'play') update(dt);
+  else updateMenu(dt);
   render();
   saveT += dt;
   if (saveT > 4) { saveT = 0; save(); }
   requestAnimationFrame(frame);
 }
 
+// Écran d'accueil : la caméra survole lentement le monde.
+function updateMenu(dt) {
+  time += dt;
+  tod = (tod + dt / DAY_LENGTH) % 1;
+  pollPad();
+  menuPad(pad, dt);
+  player.x += dt * 0.9; player.y -= dt * 0.35;
+  player.z += (groundZ(player.x, player.y) - player.z) * Math.min(1, dt * 2);
+  updateParticles(dt);
+  updateFlyers(dt);
+  for (let i = fx.length - 1; i >= 0; i--) if ((fx[i].t += dt) > 1.2) fx.splice(i, 1);
+}
+
 (async function start() {
-  load();
+  // fond de l'accueil : le dernier monde joué
+  const recent = listWorlds()[0];
+  if (recent) {
+    world = new World(recent.seed, recent.params);
+    const s = loadWorldData(recent.id);
+    if (s && typeof s.x === 'number') { player.x = s.x; player.y = s.y; tod = s.tod ?? tod; }
+  }
+  if (!recent || !player.x) { const sp = world.findSpawn(); player.x = sp.x; player.y = sp.y; }
+  initMenu({ onPlay: startWorld });
+  document.addEventListener('pointerdown', unlockAudio);
   if (location.hash === '#debug') {
-    window.BRAINLESS = { world, player, stats, O, T, decals, particles, npcs, damage, hurtPlayer,
+    window.BRAINLESS = { get world() { return world; }, player, startWorld, createWorld, listWorlds, quitToMenu, get mode() { return mode; }, stats, O, T, decals, particles, npcs, damage, hurtPlayer,
       vstate, crime, killNpc, hitNpc, nearestPrey, get scent() { return scent; },
-      get tod() { return tod; }, set tod(v) { tod = v; }, crackTile, craterTile, doSlam, doBigPunch };
+      get tod() { return tod; }, set tod(v) { tod = v; }, weather, spawnBeast, gainEvo, has, crackTile, craterTile, doSlam, doBigPunch };
   }
   await loadAssets();
   loading.style.display = 'none';
+  showMenu('title');
   requestAnimationFrame((t) => { last = t; frame(t); });
 })();
 

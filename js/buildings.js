@@ -736,6 +736,46 @@ function planks() {
   return Object.assign(outlineBuffer(b, 0.35), { ox: 10, oy: 7 });
 }
 
+// Remparts : un bloc de pierre par tuile, crénelé ; les tours sont plus hautes.
+function wallSprite(tower, state) {
+  const H = tower ? 32 : 22, h = tower ? 8.5 : 8;
+  const seed = (tower ? 91 : 37) + state * 13;
+  const cracks = state ? makeCracks(seed, h, H, 3) : [];
+  const stone = (q) => {
+    if (q.face === 't') return state ? 1 : 2;
+    const a = q.face === 'l' ? q.u : q.v;
+    if (cracks.length && onCrack(cracks, q.face, a, q.z)) return [12, 9, 8];
+    if (tower && Math.abs(a) < 0.7 && ((q.z > 12 && q.z < 17) || (q.z > 22 && q.z < 27))) return [16, 14, 18]; // meurtrières
+    const row = Math.floor(q.z / 3.2), aa = a + (row & 1) * 2.2;
+    let s = q.shade;
+    if (q.z / 3.2 - row < 0.25 || ((aa % 4.4) + 4.4) % 4.4 < 0.5) s--;
+    else { const r = hash(Math.floor(aa / 4.4), row, seed); if (r < 0.25) s--; else if (r > 0.85) s++; }
+    return Math.max(0, Math.min(3, s));
+  };
+  // créneaux : un merlon sur deux le long de chaque bord
+  const merlons = {
+    b: [-h, h, -h, h, H, H + 4], ramp: STONE, mat: stone,
+    inside(u, v, z) {
+      if (z < H || z > H + 4 || Math.abs(u) > h || Math.abs(v) > h) return false;
+      if (Math.abs(u) < h - 2 && Math.abs(v) < h - 2) return false;
+      if (state && hash(Math.floor(u / 4), Math.floor(v / 4), seed) < 0.45) return false; // créneaux arrachés
+      return ((Math.floor((u + 16) / 4) + Math.floor((v + 16) / 4)) & 1) === 0;
+    },
+  };
+  const top = state ? (u, v) => H - 3 - hash(Math.floor(u / 3), Math.floor(v / 3), seed) * 6 : null;
+  const body = top
+    ? { b: [-h, h, -h, h, 0, H], ramp: STONE, mat: stone, inside: (u, v, z) => Math.abs(u) <= h && Math.abs(v) <= h && z >= 0 && z <= top(u, v) }
+    : box(-h, h, -h, h, 0, H, STONE, stone);
+  const prims = [body];
+  if (!state) prims.push(merlons);
+  else prims.push(...rubble(seed, h, [STONE, STONE], 2, 3, false));
+  return renderSolids(prims, 56, 80, 28, 62);
+}
+
+function wallRubble() {
+  return renderSolids(rubble(55, 6, [STONE, STONE, STONE], 4, 5, true), 56, 56, 28, 40);
+}
+
 // Tous les sprites de village : S[id] = [{img, glow}…] (une seule frame sauf les blés).
 export function buildVillageSprites() {
   const S = {};
@@ -754,5 +794,10 @@ export function buildVillageSprites() {
   S[O.WHEAT] = wheatFrames().map(img => ({ img, glow: null }));
   S[O.CABBAGE] = [{ img: cabbage(), glow: null }];
   S[O.PLANKS] = [{ img: planks(), glow: null }];
+  S[O.WALL] = [wallSprite(false, 0)];
+  S[O.WALL_D] = [wallSprite(false, 1)];
+  S[O.WALL_TOWER] = [wallSprite(true, 0)];
+  S[O.WALL_TOWER_D] = [wallSprite(true, 1)];
+  S[O.WALL_R] = [wallRubble()];
   return S;
 }

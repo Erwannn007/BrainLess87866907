@@ -34,10 +34,62 @@
   #loading small { color: #8a93b8; font-size: 11px; letter-spacing: 2px; margin-top: 10px; }
   #track { width: 180px; height: 8px; margin-top: 18px; background: #1d2133; border: 2px solid #2e3450; }
   #bar { width: 0; height: 100%; background: #d8678a; }
+
+  /* ---- écran d'accueil ---- */
+  #menu {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    padding: calc(env(safe-area-inset-top) + 10px) calc(env(safe-area-inset-right) + 10px) calc(env(safe-area-inset-bottom) + 10px) calc(env(safe-area-inset-left) + 10px);
+    box-sizing: border-box; font: bold 13px/1.3 ui-monospace, Menlo, monospace; letter-spacing: 2px; color: #e8f0ff;
+    text-transform: uppercase; text-shadow: 2px 2px 0 rgba(0,0,0,0.6); -webkit-user-select: none; user-select: none;
+  }
+  #menu[hidden] { display: none; }
+  #menu .m-title { text-align: center; }
+  #menu h1 { margin: 0; font-size: 46px; letter-spacing: 8px; color: #f6a6bd; text-shadow: 4px 4px 0 #4e0c18, 8px 8px 0 rgba(0,0,0,0.45); }
+  #menu .m-title p { margin: 6px 0 26px; color: #ff9aa8; font-size: 12px; letter-spacing: 4px; }
+  #menu h2 { margin: 0 0 10px; font-size: 18px; color: #ffe28a; letter-spacing: 4px; }
+  #menu .m-panel {
+    background: rgba(11,13,20,0.86); border: 3px solid #2e3450; box-shadow: 0 0 0 3px #0b0d14, 6px 6px 0 3px rgba(0,0,0,0.4);
+    padding: 14px; width: min(620px, 100%); max-height: 100%; overflow-y: auto; box-sizing: border-box; -webkit-overflow-scrolling: touch;
+  }
+  #menu .m-panel.small { width: min(380px, 100%); }
+  #menu .m-note { margin: 0 0 10px; color: #8a93b8; font-size: 10px; }
+  #menu .m-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  #menu .btn {
+    font: inherit; letter-spacing: inherit; text-shadow: inherit; color: #fff; cursor: pointer; padding: 10px 14px;
+    border: 3px solid #14101e; border-radius: 0; box-shadow: inset -3px -3px 0 rgba(0,0,0,0.35), inset 3px 3px 0 rgba(255,255,255,0.25);
+  }
+  #menu .m-title .btn { font-size: 20px; padding: 12px 40px; }
+  #menu .btn:active { transform: translateY(2px); }
+  #menu .red { background: #e1465a; } #menu .green { background: #46aa6e; } #menu .grey { background: #4a5070; }
+  #menu .m-list { display: flex; flex-direction: column; gap: 6px; max-height: 46vh; overflow-y: auto; }
+  #menu .world {
+    font: inherit; letter-spacing: inherit; text-shadow: inherit; color: #e8f0ff; text-align: left; cursor: pointer; padding: 8px 10px;
+    background: #1d2133; border: 3px solid #2e3450; border-radius: 0; display: flex; flex-direction: column; gap: 3px;
+  }
+  #menu .world small { color: #8a93b8; font-size: 10px; }
+  #menu .world.sel { border-color: #f6a6bd; background: #2a2440; }
+  #menu .m-field { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; color: #ffe28a; }
+  #menu input {
+    flex: 1; min-width: 0; font: bold 16px ui-monospace, Menlo, monospace; letter-spacing: 2px; text-transform: uppercase; color: #fff;
+    background: #1d2133; border: 3px solid #2e3450; border-radius: 0; padding: 6px 8px; outline: none;
+  }
+  #menu input::placeholder { color: #5a6288; }
+  #menu .m-params { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 6px 14px; }
+  #menu .m-param { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px; border: 3px solid transparent; }
+  #menu .m-param span { font-size: 11px; color: #c9d0ff; }
+  #menu .m-param div { display: flex; }
+  #menu .opt {
+    font: bold 10px ui-monospace, Menlo, monospace; letter-spacing: 1px; color: #8a93b8; cursor: pointer; padding: 6px 6px;
+    background: #1d2133; border: 2px solid #2e3450; border-radius: 0; margin-left: -2px;
+  }
+  #menu .opt.sel { color: #fff; background: #7a5ad8; border-color: #b8a0ff; position: relative; }
+  #menu .focus { outline: 3px solid #ffe28a; outline-offset: 2px; }
+  #menu input.focus, #menu .m-param.focus { outline-offset: 0; }
 </style>
 </head>
 <body>
 <canvas id="game"></canvas>
+<div id="menu" hidden></div>
 <div id="loading">BRAINLESS<small>CUISSON DES SPRITES…</small><div id="track"><div id="bar"></div></div></div>
 <script type="module" src="js/main.js"></script>
 </body>

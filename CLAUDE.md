@@ -6,8 +6,8 @@ Safari iOS et installée sur l'écran d'accueil. Tout est en JS vanilla (modules
 aucune image ni son externe** : chaque sprite et chaque son est généré par code au lancement.
 
 Avant de créer ou de modifier un sprite, relis cette charte et regarde les planches de
-référence `docs/ref-brainless.png`, `docs/ref-nature.png`, `docs/ref-village.png` et
-`docs/ref-people.png` (avec l'outil Read) : tout ce qui est nouveau doit avoir l'air de sortir
+référence `docs/ref-brainless.png`, `docs/ref-nature.png`, `docs/ref-village.png`,
+`docs/ref-people.png` et `docs/ref-beasts.png` (avec l'outil Read) : tout ce qui est nouveau doit avoir l'air de sortir
 du même jeu.
 
 ---
@@ -167,6 +167,10 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
   est aplani, les arbres retirés, puis place + puits, bâtiments, chemins de chaque porte à la
   place, champs clôturés, objets, lanternes, quelques arbres. Un grand village est garanti près
   du départ.
+- **Villes fortifiées** (`planTown`, R 24) : enceinte carrée de remparts (`WALL`, `WALL_TOWER`,
+  1 tuile chacun, `tilebox` = toute la tuile bloque, 3 états jusqu'aux gravats), 4 portes flanquées
+  de tours, rues pavées en croix, grande place, ~30 bâtiments, étals et lanternes le long des rues.
+  Elles comblent l'eau à l'intérieur de leurs remparts. Garnison 10, 20 habitants, 1 à 3 héros.
 
 ## 7. Habitants (`js/people.js`)
 
@@ -187,6 +191,11 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
   la colère du village (`anger`) ; au-dessus de 1, la cloche sonne et seuls les gens de CE village
   assez proches réagissent (pas de messager). Les chevaliers abandonnent quand le village s'est
   calmé (25 s) ou quand Brainless quitte leur territoire.
+- **Héros** (`kind: 'hero'`, anims `+ special`) : REMPART (absorption, mêlée lourde), RESSORT
+  (bond sur Brainless), TURBO (charge en ligne droite), ACIER (poings de fer), ECLAIR (foudre à
+  distance, cible clignotante au sol). Combinaison, gants et bottes d'une couleur d'accent, masque
+  ou visière, cape, emblème. Nom et barre de vie au-dessus de la tête. Ils résistent à l'écrasement
+  tant qu'ils ont plus de 40 % de vie. Dévorer un héros donne son alter.
 - **Tuer** : la frappe au sol écrase tous ceux qui sont sous lui (`crushed`) ; frapper quelqu'un
   de KO à terre l'achève ; un gros coup chargé à bout portant tue en retombant.
 - Vie de Brainless : 100, super régénération après 3 s sans coup ; à 0 il s'effondre et se
@@ -194,11 +203,30 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
 - **Visée du gros coup** : pendant la charge (maintenir COUP), le stick oriente Brainless sans le
   déplacer (`player.aim`, direction continue, le sprite prend la plus proche des 8). Un cône en
   tirets jaunes (axe rouge) montre au sol la zone qui sera balayée et grandit avec la charge.
+- **Faim et évolution** : la faim descend (plus vite en sprint) ; vide, Brainless perd de la vie et
+  ne se régénère plus. Près d'un cadavre, le bouton N devient **DÉVORER** (`eat`, 5 bouchées).
+  Chaque proie rapporte de la nourriture et des points d'évolution (`mealOf`) ; les niveaux
+  (`LEVEL_AT`) donnent +15 de vie max et +12 % de force. Alters (`ALTERS`) : ABSORPTION (dégâts / 2),
+  BOND (saut x1.6 + onde de choc), MOTEUR (sprint x1.35, endurance), FER (coups x1.5), FOUDRE
+  (éclairs en chaîne sur les coups chargés, il se soigne avec la foudre de l'orage).
 - **Flair** (N / R / L1) : il lève la tête et renifle (`sniff`), puis une flèche, la distance et
   des filets d'odeur rouges indiquent pendant 12 s le village le plus proche qui a encore des
   vivants (`nearestPrey`).
 
-## 8. Effets visuels
+## 8. Faune et météo
+
+- **Faune** (`js/beasts.js`) : quadrupèdes en capsules, 56x56, origine (28, 44). Lapin (fuit en
+  zigzag), cerf (bois, fuit vite), sanglier (défenses, charge si on l'approche ou le frappe), loup
+  (meute de 3, chasse la nuit, fuit blessé). Ils apparaissent hors écran selon le biome et
+  repartent quand Brainless s'éloigne ; quantité réglée par le paramètre FAUNE.
+- **Météo** (`updateWeather`) : clair, couvert, brouillard, pluie, orage, tirés au sort selon le
+  paramètre METEO. Pluie = gouttes de 6 px en espace écran + éclaboussures ; neige à la place sur
+  la neige et en altitude ; brouillard = texture tramée raccordable qui dérive ; ciel couvert =
+  teinte plus sombre. L'orage agite la végétation et la foudre frappe (souvent un arbre) : éclair
+  en zigzag `#8fd8ff`/blanc, flash, tonnerre retardé selon la distance. Les villageois rentrent
+  quand il pleut fort.
+
+## 9. Effets visuels
 
 - **Particules** : 1–2 px, couleurs tirées de listes de 3–4 teintes de la matière
   (`LEAF_COLS`, `ROCK_COLS`, `WOOD_COLS`, `DUST_COLS`, `WATER_COLS`…).
@@ -217,7 +245,7 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
 - **Secousse d'écran** (`shake`) dosée selon l'impact : pas ≈ 1.5, coup ≈ 2.5, gros coup 5–16.
 - **Jour/nuit** : teinte `multiply` (`SKY` dans `main.js`). Les lucioles sont dessinées après la teinte.
 
-## 9. Interface
+## 10. Interface
 
 - Police pixel maison 3×5 (`js/font.js`), en majuscules, avec une ombre décalée de 1 px.
 - Boutons ronds pixel (`circleBuf`) : COUP rouge `[225,70,90]`, CHARGE violet
@@ -227,8 +255,14 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
 - 3 modes de contrôle (`inputMode`) : `touch` (boutons à l'écran), `keys` (clavier + souris, PC),
   `pad` (manette, `js/pad.js`, ex. AYN Thor). Les boutons tactiles ne s'affichent qu'en `touch` ;
   l'aide (`HINTS`) s'adapte au mode. Toute nouvelle action doit être jouable dans les 3 modes.
+- Bouton N (rose) : FLAIR, ou DÉVORER près d'un cadavre (R au clavier, L1 à la manette).
+  Icône maison en haut à droite (Échap, Start) : retour à l'accueil.
+- **Écran d'accueil** (`js/menu.js`, en HTML pour le clavier de l'iPhone) : titre, liste des
+  mondes, création d'un monde (nom, graine, 7 paramètres à 3 crans : villages, héros, faune,
+  météo, relief, eau, difficulté). Le monde défile en fond. Utilisable au doigt, au clavier et à
+  la manette. Mondes et sauvegardes dans `js/saves.js` (un monde = une clé `localStorage`).
 
-## 10. Son (`js/audio.js`)
+## 11. Son (`js/audio.js`)
 
 - Tout est synthétisé avec Web Audio : `noise()` (bruit filtré) et `tone()` (oscillateur avec
   glissement). On les combine en couches : un **impact grave** (sine 60–120 Hz qui descend), une
@@ -237,7 +271,7 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
 - Chaque nouvelle action visible a son son. On utilise `gate()` pour éviter les doublons quand
   beaucoup de choses cassent en même temps.
 
-## 11. Comment ajouter un nouveau sprite (méthode)
+## 12. Comment ajouter un nouveau sprite (méthode)
 
 1. Choisir la technique : volume (→ `renderModel` avec capsules/sphères) ou petit détail
    plat (→ `makeBuffer` + `outlineBuffer`).
@@ -251,6 +285,7 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
    - `node tools/preview.mjs village /tmp/x.png` (bâtiments x 3 états, objets, tuiles, fissures)
    - `node tools/preview.mjs people /tmp/x.png` (habitants à côté de Brainless)
    - `node tools/preview.mjs people-sheet /tmp/x.png knight attack` (une anim x 8 directions)
+   - `node tools/preview.mjs beasts /tmp/x.png` (la faune)
 
    Puis ouvrir le PNG avec Read et comparer aux planches `docs/ref-*.png`.
 5. Brancher le gameplay (`OBJ_INFO`, génération, sons, particules) et tester en jeu.
@@ -260,12 +295,12 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
    `node tools/preview.mjs people docs/ref-people.png`.
 7. Si Brainless change, régénérer les icônes : `node tools/make-icons.mjs`.
 
-## 12. Publication
+## 13. Publication
 
 - Branche `main` servie par GitHub Pages (racine). Pas d'étape de build.
 - **À chaque mise à jour, incrémenter `VERSION` dans `sw.js`** sinon l'iPhone garde
   l'ancienne version en cache. Tout nouveau fichier JS doit être ajouté à la liste `FILES`.
 - Test local : `python3 -m http.server 8765` puis `http://localhost:8765/` ; `#debug` à la
-  fin de l'URL expose `window.BRAINLESS` (monde, joueur, stats, habitants, `heat`, `tod`,
-  `doSlam`, `doBigPunch`…) pour les tests automatisés.
+  fin de l'URL expose `window.BRAINLESS` (monde, joueur, `createWorld`, `startWorld`, habitants,
+  `tod`, `weather`, `doSlam`, `doBigPunch`…) pour les tests automatisés.
 - Les commentaires et textes du jeu sont en français.

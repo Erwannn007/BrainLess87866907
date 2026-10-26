@@ -41,6 +41,7 @@ export const ANIMS = {
   swimfast: { frames: 8, fps: 11, loop: true }, // sprint dans l'eau
   down: { frames: 8, fps: 8, loop: false }, // à bout de forces, il s'effondre
   sniff: { frames: 12, fps: 8, loop: false }, // tête levée, il renifle l'air
+  eat: { frames: 12, fps: 6, loop: false }, // penché sur sa proie, il dévore
 };
 
 const smooth = (u) => u * u * (3 - 2 * u);
@@ -233,6 +234,23 @@ export function poseFor(anim, t) {
     p.jaw = 1;
     p.bob = k * 0.4;
     p.twist = -0.12 + j * 0.04;
+    return p;
+  }
+  if (anim === 'eat') {
+    // Accroupi, mains plaquées sur la proie, la tête plonge et arrache à chaque bouchée.
+    const bite = Math.sin(t * Math.PI * 2 * 4);
+    const p = keyed([
+      { t: 0, p: {} },
+      { t: 0.12, p: { handsAbs: 1, hL: [-6, 12, 2.4], hR: [6, 12, 2.4], crouch: 8, pitch: 1.05, headUp: -2, fL: [-5, -5, 0], fR: [5, -6, 0], curl: 1 } },
+      { t: 0.88, p: { handsAbs: 1, hL: [-6, 12, 2.4], hR: [6, 12, 2.4], crouch: 8, pitch: 1.05, headUp: -2, fL: [-5, -5, 0], fR: [5, -6, 0], curl: 1 } },
+      { t: 1, p: {} },
+    ], t);
+    if (t > 0.12 && t < 0.88) {
+      p.headUp += -1.5 + bite * 2.2; // plonge puis arrache
+      p.jaw = 0.8 + Math.max(0, bite) * 0.9;
+      p.twist = Math.sin(t * Math.PI * 2 * 2) * 0.12;
+      p.bob = Math.max(0, -bite) * 0.8;
+    }
     return p;
   }
   if (anim === 'sniff') {

@@ -7,6 +7,7 @@
 //   B (droite), R1, R2, L3 : sprint (maintenir)
 //   L1                    : flairer
 //   Select                : couper le son
+//   Start                 : retour à l'accueil
 const DEAD = 0.2;
 const prev = [];
 
@@ -21,7 +22,8 @@ let active = null; // la manette utilisée en dernier
 const down = (gp, i) => !!(gp.buttons[i] && (gp.buttons[i].pressed || gp.buttons[i].value > 0.5));
 
 export function pollPad() {
-  pad.jumpPressed = pad.punchPressed = pad.mutePressed = pad.sniffPressed = pad.any = false;
+  pad.jumpPressed = pad.punchPressed = pad.mutePressed = pad.sniffPressed = pad.startPressed = pad.any = false;
+  pad.pressed = [];
   const list = navigator.getGamepads ? navigator.getGamepads() : [];
   let gp = null;
   for (const g of list) {
@@ -55,6 +57,8 @@ export function pollPad() {
   pad.punchPressed = pressed(2);
   pad.mutePressed = pressed(8);
   pad.sniffPressed = pressed(4);
+  pad.startPressed = pressed(9);
+  pad.pressed = now.map((_, i) => pressed(i)); // fronts montants de tous les boutons (menus)
   pad.any = now.some(Boolean) || m > DEAD;
   prev[gp.index] = now;
   return pad;

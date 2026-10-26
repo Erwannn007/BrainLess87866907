@@ -382,6 +382,13 @@ export const sfx = {
     tone({ f: 70, f2: 28, gain: 0.9, dec: 0.5, delay: 0.55, rev: 0.4 });
     noise({ type: 'lowpass', f: 800, gain: 0.4, dec: 0.4, delay: 0.55 });
   },
+  // Tonnerre : un craquement sec si c'est tout près, puis un long grondement.
+  thunder(power = 1, delay = 0) {
+    if (!ready()) return;
+    if (delay < 0.25) noise({ type: 'highpass', f: 1800, gain: 0.5 * power, dec: 0.15, delay });
+    noise({ type: 'lowpass', f: 420, f2: 70, gain: 0.7 * power, a: 0.08, dec: 2.4, delay, rev: 0.6 });
+    tone({ f: 55, f2: 28, gain: 0.6 * power, a: 0.05, dec: 1.6, delay, rev: 0.4 });
+  },
   regen() {
     if (!ready() || !gate('regen', 2)) return;
     for (let i = 0; i < 4; i++) tone({ f: 300 + i * 120, f2: 420 + i * 140, type: 'triangle', gain: 0.04, dec: 0.15, delay: i * 0.09 });
@@ -460,14 +467,16 @@ function startAmbience() {
     src.start();
     return { fl, g };
   };
-  amb = { wind: mk('lowpass', 450, 0.7), water: mk('bandpass', 700, 0.8), birdT: 2, cricketT: 1, t: 0 };
+  amb = { wind: mk('lowpass', 450, 0.7), water: mk('bandpass', 700, 0.8), rain: mk('highpass', 2200, 0.5), birdT: 2, cricketT: 1, t: 0 };
 }
 
 // Appelée chaque frame : vent qui souffle, eau qui clapote, oiseaux le jour, grillons la nuit.
-export function updateAmbience(dt, { night, water, height }) {
+export function updateAmbience(dt, { night, water, height, rain = 0, storm = 0 }) {
   if (!ready() || !amb) return;
   const t = ctx.currentTime;
   amb.t += dt;
+  amb.rain.g.gain.setTargetAtTime(rain * 0.14, t, 0.5); // crépitement de la pluie
+  height += storm * 6; // l'orage fait souffler le vent
   const gust = 0.5 + 0.5 * Math.sin(amb.t * 0.37) * Math.sin(amb.t * 0.13 + 1);
   const windGain = 0.04 + gust * 0.06 + height * 0.02;
   amb.wind.g.gain.setTargetAtTime(windGain, t, 0.3);
@@ -475,7 +484,7 @@ export function updateAmbience(dt, { night, water, height }) {
   const lap = 0.5 + 0.5 * Math.sin(amb.t * 1.7) * Math.sin(amb.t * 0.9);
   amb.water.g.gain.setTargetAtTime(water * (0.05 + lap * 0.07), t, 0.2);
 
-  if (!night) {
+  if (!night && rain < 0.3) {
     amb.birdT -= dt;
     if (amb.birdT <= 0) {
       amb.birdT = rnd(1.5, 5);

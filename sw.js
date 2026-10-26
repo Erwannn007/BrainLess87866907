@@ -1,9 +1,9 @@
 // Cache hors-ligne : le jeu marche même sans réseau une fois ouvert.
 // Change VERSION à chaque mise à jour pour forcer le rafraîchissement.
-const VERSION = 'brainless-v14';
+const VERSION = 'brainless-v15';
 const FILES = [
   './', './index.html', './manifest.webmanifest',
-  './js/main.js', './js/world.js', './js/noise.js', './js/raster.js', './js/nomu.js', './js/sprites.js', './js/font.js', './js/audio.js', './js/pad.js', './js/buildings.js', './js/people.js',
+  './js/main.js', './js/world.js', './js/noise.js', './js/raster.js', './js/nomu.js', './js/sprites.js', './js/font.js', './js/audio.js', './js/pad.js', './js/buildings.js', './js/people.js', './js/saves.js', './js/menu.js', './js/beasts.js',
   './icons/icon-180.png', './icons/icon-192.png', './icons/icon-512.png',
 ];
 
