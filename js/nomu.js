@@ -26,9 +26,9 @@ export const ANIMS = {
   walk: { frames: 8, fps: 11, loop: true },
   run: { frames: 10, fps: 17, loop: true }, // galop de bête à quatre pattes
   punch: { frames: 8, fps: 18, loop: false },
-  jabL: { frames: 6, fps: 26, loop: false }, // direct du gauche
-  jabR: { frames: 6, fps: 24, loop: false }, // direct du droit
-  hook: { frames: 7, fps: 24, loop: false }, // crochet du gauche
+  jabL: { frames: 8, fps: 28, loop: false }, // swing du gauche, de l'extérieur vers l'intérieur
+  jabR: { frames: 8, fps: 28, loop: false }, // swing du droit
+  hook: { frames: 9, fps: 25, loop: false }, // gros crochet circulaire du gauche
   pcharge: { frames: 6, fps: 12, loop: true }, // arme le gros coup
   bigpunch: { frames: 10, fps: 18, loop: false }, // gros coup qui souffle tout devant
   charge: { frames: 8, fps: 10, loop: true }, // accroupi sur les coudes, il gonfle
@@ -244,16 +244,25 @@ export function poseFor(anim, t) {
     ], t);
   }
   if (anim === 'jabL' || anim === 'jabR' || anim === 'hook') {
-    // Garde de boxeur, pieds décalés, et le coup part des hanches.
+    // Grands swings : le bras part loin sur le côté, balaie en arc vers l'intérieur
+    // et finit en croisant devant lui ; les hanches et le buste tournent avec.
+    const big = anim === 'hook';
+    const m = anim === 'jabR' ? -1 : 1; // miroir gauche/droite
+    const k = big ? 1.25 : 1;
+    const mir = (v) => [v[0] * m, v[1], v[2]];
     const guard = { fL: [-4.5, 3, 0], fR: [4.5, -3, 0], hL: [-5, 9, 31], hR: [5, 7, 30], crouch: 2.5, lean: 2, jaw: 0.4 };
-    let hit;
-    if (anim === 'jabL') hit = { ...guard, hL: [-1, 22, 32], hR: [6, 6, 31], twist: -0.38, hipTwist: -0.2, lean: 4, fR: [4.5, -4, 1], jaw: 1 };
-    else if (anim === 'jabR') hit = { ...guard, hR: [1, 23, 32], hL: [-6, 8, 31], twist: 0.55, hipTwist: 0.35, lean: 4.5, fR: [4.5, -2, 1.5], fL: [-4.5, 4, 0], jaw: 1 };
-    else hit = { ...guard, hL: [3, 15, 32], hR: [6, 6, 31], twist: -0.65, hipTwist: -0.35, lean: 3, crouch: 3.5, fL: [-4.5, 3, 1], jaw: 1 };
-    const keys = [{ t: 0, p: guard }];
-    if (anim === 'hook') keys.push({ t: 0.2, p: { ...guard, hL: [-15, 8, 30], twist: 0.25, hipTwist: 0.15, crouch: 3.5 } }); // armé sur le côté
-    keys.push({ t: anim === 'hook' ? 0.42 : 0.32, p: hit }, { t: 0.55, p: hit }, { t: 1, p: guard });
-    return keyed(keys, t);
+    if (m < 0) { guard.fL = [-4.5, -3, 0]; guard.fR = [4.5, 3, 0]; }
+    const arm = m > 0 ? 'hL' : 'hR', other = m > 0 ? 'hR' : 'hL';
+    const off = mir([6, 7, 31]);
+    const pose = (hand, tw, ht, extra = {}) => ({ ...guard, [arm]: mir(hand), [other]: off, twist: tw * m, hipTwist: ht * m, ...extra });
+    return keyed([
+      { t: 0, p: guard },
+      { t: 0.2, p: pose([-17 * k, -1, big ? 25 : 28], 0.4 * k, 0.25, { crouch: big ? 4.5 : 3, lean: 1 }) }, // armé loin dehors
+      { t: 0.32, p: pose([-14 * k, 13, big ? 29 : 31], 0.05, 0.05, { lean: 3 }) }, // l'arc
+      { t: 0.44, p: pose([-1, 21, 32], -0.6 * k, -0.35 * k, { lean: 4.5, jaw: 1, [m > 0 ? 'fR' : 'fL']: mir([4.5, -4, 1.5]) }) }, // impact
+      { t: 0.62, p: pose([9 * k, 14, 29], -0.8 * k, -0.45 * k, { lean: 3.5, jaw: 0.8 }) }, // le bras traverse
+      { t: 1, p: guard },
+    ], t);
   }
   if (anim === 'pcharge') {
     // En position : jambes fléchies, poing droit tiré loin en arrière, le corps tremble et gonfle.

@@ -391,7 +391,7 @@ function damage(tx, ty, dmg) {
 
 // Enchaînement de boxeur : direct gauche, direct droit, crochet, et ça recommence.
 const JABS = ['jabL', 'jabR', 'hook'];
-const HIT_AT = { jabL: 0.32, jabR: 0.32, hook: 0.42, bigpunch: 0.22, slam: 0.44 };
+const HIT_AT = { jabL: 0.44, jabR: 0.44, hook: 0.44, bigpunch: 0.22, slam: 0.44 };
 
 function startJab() {
   if (!JABS.includes(player.action) && time - player.lastPunch > 0.45) player.combo = 0; // trop lent : on repart du direct gauche
@@ -652,7 +652,7 @@ function update(dt) {
     const [dx, dy] = dirWorld(player.dir);
     if (JABS.includes(act) && player.actionT > 0.1 && player.actionT < hitAt) tryMove(dx * dt * 1.6, dy * dt * 1.6);
     if (act === 'bigpunch' && player.actionT < 0.3) tryMove(dx * dt * 4.5, dy * dt * 4.5);
-    if (JABS.includes(act) && player.punchBuf && player.actionT >= 0.5) startJab();
+    if (JABS.includes(act) && player.punchBuf && player.actionT >= 0.6) startJab();
     else if (player.actionT >= 1) {
       if (JABS.includes(act)) player.lastPunch = time;
       player.action = null;
