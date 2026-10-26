@@ -7,6 +7,7 @@ try { muted = localStorage.getItem(MUTE_KEY) === '1'; } catch (e) { /* stockage 
 const last = {};
 
 export function isMuted() { return muted; }
+export function audioRunning() { return !!ctx && ctx.state === 'running'; }
 
 export function toggleMute() {
   muted = !muted;

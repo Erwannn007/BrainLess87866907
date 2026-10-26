@@ -1,0 +1,73 @@
+// Manette (API Gamepad, disposition "standard") : contrôles intégrés de l'AYN Thor,
+// manettes Xbox / PlayStation / Switch branchées sur PC ou Android.
+//
+//   stick gauche / croix : bouger        A (bas)    : sauter
+//   X (gauche)            : coup (maintenir = coup chargé)
+//   Y (haut)              : frappe au sol (maintenir pour charger)
+//   B (droite), R1, R2, L3 : sprint (maintenir)
+//   Select                : couper le son
+const DEAD = 0.2;
+const prev = [];
+
+export const pad = {
+  connected: false, x: 0, y: 0,
+  sprint: false, charge: false, punch: false,
+  jumpPressed: false, punchPressed: false, mutePressed: false, any: false,
+};
+
+let active = null; // la manette utilisée en dernier
+
+const down = (gp, i) => !!(gp.buttons[i] && (gp.buttons[i].pressed || gp.buttons[i].value > 0.5));
+
+export function pollPad() {
+  pad.jumpPressed = pad.punchPressed = pad.mutePressed = pad.any = false;
+  const list = navigator.getGamepads ? navigator.getGamepads() : [];
+  let gp = null;
+  for (const g of list) {
+    if (!g || !g.connected) continue;
+    // on prend celle sur laquelle on appuie, sinon la première
+    if (!gp) gp = g;
+    if (g.buttons.some((b) => b.pressed) || Math.hypot(g.axes[0] || 0, g.axes[1] || 0) > DEAD) { gp = g; break; }
+  }
+  pad.connected = !!gp;
+  if (!gp) { pad.x = pad.y = 0; pad.sprint = pad.charge = pad.punch = false; return pad; }
+  active = gp;
+
+  // stick avec zone morte radiale, croix en secours
+  let x = gp.axes[0] || 0, y = gp.axes[1] || 0;
+  const m = Math.hypot(x, y);
+  if (m < DEAD) { x = 0; y = 0; } else { const k = Math.min(1, (m - DEAD) / (1 - DEAD)) / m; x *= k; y *= k; }
+  if (down(gp, 14)) x = -1;
+  if (down(gp, 15)) x = 1;
+  if (down(gp, 12)) y = -1;
+  if (down(gp, 13)) y = 1;
+  if ((down(gp, 12) || down(gp, 13)) && (down(gp, 14) || down(gp, 15))) { x *= Math.SQRT1_2; y *= Math.SQRT1_2; }
+  pad.x = x; pad.y = y;
+
+  const was = prev[gp.index] || [];
+  const now = gp.buttons.map((_, i) => down(gp, i));
+  const pressed = (i) => now[i] && !was[i];
+  pad.sprint = now[1] || now[5] || now[7] || now[10];
+  pad.charge = now[3] || now[6];
+  pad.punch = now[2];
+  pad.jumpPressed = pressed(0);
+  pad.punchPressed = pressed(2);
+  pad.mutePressed = pressed(8);
+  pad.any = now.some(Boolean) || m > DEAD;
+  prev[gp.index] = now;
+  return pad;
+}
+
+// Vibration (Chrome Android / PC). Silencieux si la manette ne sait pas vibrer.
+let lastRumble = 0;
+export function rumble(strength, ms) {
+  if (!active || !active.vibrationActuator) return;
+  const now = performance.now();
+  if (now - lastRumble < 40) return;
+  lastRumble = now;
+  try {
+    active.vibrationActuator.playEffect('dual-rumble', {
+      duration: ms, strongMagnitude: Math.min(1, strength), weakMagnitude: Math.min(1, strength * 0.7),
+    }).catch(() => {});
+  } catch (e) { /* non supporté */ }
+}

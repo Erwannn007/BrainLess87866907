@@ -3,7 +3,8 @@ import { renderNomu, ANIMS, ORIGIN_X, ORIGIN_Y } from './nomu.js';
 import * as SP from './sprites.js';
 import { hash, makeBuffer } from './raster.js';
 import { drawText, textWidth } from './font.js';
-import { sfx, unlockAudio, toggleMute, isMuted, chargeStart, chargeUpdate, chargeStop, updateAmbience } from './audio.js';
+import { sfx, unlockAudio, toggleMute, isMuted, audioRunning, chargeStart, chargeUpdate, chargeStop, updateAmbience } from './audio.js';
+import { pad, pollPad, rumble } from './pad.js';
 
 const SEED = 87866907;
 const SAVE_KEY = 'brainless-save-v1';
@@ -133,6 +134,7 @@ const particles = [];
 const flyers = []; // papillons / lucioles
 const fx = []; // anneaux de choc, arbres qui tombent
 let shake = 0;
+let lastShake = 0;
 let hintT = 9;
 
 function load() {
@@ -159,6 +161,10 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) save(
 
 // ---------------------------------------------------------------- contrôles
 const input = { x: 0, y: 0, punch: false, jump: false };
+// Mode de contrôle affiché : 'touch' (boutons à l'écran), 'keys' (clavier/souris), 'pad' (manette)
+let inputMode = window.matchMedia && matchMedia('(pointer: coarse)').matches ? 'touch' : 'keys';
+function setMode(m) { if (m !== inputMode) { inputMode = m; hintT = 7; } }
+const mouse = { punch: false, charge: false };
 const joy = { id: null, bx: 0, by: 0, kx: 0, ky: 0 };
 const keys = new Set();
 const buttons = {
@@ -183,9 +189,9 @@ function held(k) {
   for (const t of btnTouches.values()) if (t.cur === k || (k === 's' && t.origin === 's')) return true;
   return false;
 }
-const sprintHeld = () => held('s') || keys.has('ShiftLeft') || keys.has('ShiftRight');
-const chargeHeld = () => held('b') || keys.has('KeyK') || keys.has('KeyE');
-const punchHeld = () => held('a') || keys.has('KeyJ');
+const sprintHeld = () => held('s') || keys.has('ShiftLeft') || keys.has('ShiftRight') || pad.sprint;
+const chargeHeld = () => held('b') || keys.has('KeyK') || keys.has('KeyE') || pad.charge || mouse.charge;
+const punchHeld = () => held('a') || keys.has('KeyJ') || pad.punch || mouse.punch;
 
 function buttonAt(x, y, slack) {
   let best = null, bd = 1e9;
@@ -208,6 +214,7 @@ const muteBtn = { x: 0, y: 0, r: 7 };
 function onTouchStart(e) {
   e.preventDefault();
   unlockAudio();
+  setMode('touch');
   for (const t of e.changedTouches) {
     const [x, y] = toGame(t);
     if (Math.hypot(x - muteBtn.x, y - muteBtn.y) < muteBtn.r + 6) { toggleMute(); sfx.ui(); continue; }
@@ -259,12 +266,49 @@ window.addEventListener('keydown', (e) => {
   if (e.repeat) return;
   keys.add(e.code);
   unlockAudio();
+  setMode('keys');
   if (e.code === 'KeyM') toggleMute();
+  if (e.code === 'KeyF') toggleFullscreen();
+  if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault(); // pas de défilement de page
   if (e.code === 'KeyJ') input.punch = true;
   if (e.code === 'Space') input.jump = true;
 });
 window.addEventListener('keyup', (e) => keys.delete(e.code));
-window.addEventListener('mousedown', unlockAudio);
+window.addEventListener('blur', () => { keys.clear(); mouse.punch = mouse.charge = false; });
+
+// Souris (PC) : clic gauche = coup (maintenir = coup chargé), clic droit = frappe au sol.
+canvas.addEventListener('mousedown', (e) => {
+  unlockAudio();
+  setMode('keys');
+  const x = e.clientX / cssPerPx, y = e.clientY / cssPerPx;
+  if (Math.hypot(x - muteBtn.x, y - muteBtn.y) < muteBtn.r + 6) { toggleMute(); sfx.ui(); return; }
+  if (e.button === 0) { mouse.punch = true; input.punch = true; }
+  if (e.button === 2) mouse.charge = true;
+});
+window.addEventListener('mouseup', (e) => {
+  if (e.button === 0) mouse.punch = false;
+  if (e.button === 2) mouse.charge = false;
+});
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+function toggleFullscreen() {
+  const d = document;
+  try {
+    if (!d.fullscreenElement && !d.webkitFullscreenElement) (d.documentElement.requestFullscreen || d.documentElement.webkitRequestFullscreen).call(d.documentElement);
+    else (d.exitFullscreen || d.webkitExitFullscreen).call(d);
+  } catch (e) { /* plein écran non disponible */ }
+}
+
+// Manette : lue à chaque image.
+function readPad() {
+  pollPad();
+  if (!pad.connected) return null;
+  if (pad.any) { setMode('pad'); unlockAudio(); }
+  if (pad.jumpPressed) input.jump = true;
+  if (pad.punchPressed) input.punch = true;
+  if (pad.mutePressed) toggleMute();
+  return pad.x || pad.y ? [pad.x, pad.y] : null;
+}
 
 function keyboardVector() {
   let x = 0, y = 0;
@@ -561,11 +605,15 @@ function update(dt) {
   tod = (tod + dt / DAY_LENGTH) % 1;
   hintT -= dt;
   windT = Math.max(0, windT - dt);
+  if (shake > lastShake + 0.8) rumble(shake / 12, 60 + shake * 20); // la manette vibre avec l'écran
   shake = Math.max(0, shake - dt * 20);
+  lastShake = shake;
 
   let ix = input.x, iy = input.y;
   const kb = keyboardVector();
   if (kb) [ix, iy] = kb;
+  const pv = readPad();
+  if (pv) [ix, iy] = pv;
   const mag = Math.min(1, Math.hypot(ix, iy));
   const wasSprinting = player.sprinting && !player.air;
   const prevMv = player.mv;
@@ -1293,6 +1341,12 @@ function drawMuteButton() {
   }
 }
 
+const HINTS = {
+  touch: ['MAINTIENS B POUR CHARGER', 'SPRINT: MAINTIENS >> EN MARCHANT'],
+  keys: ['ZQSD: BOUGER  MAJ: SPRINT  ESPACE: SAUT', 'J/CLIC: COUP (MAINTENIR = CHARGE)', 'K/CLIC DROIT: FRAPPE AU SOL  F: PLEIN ECRAN'],
+  pad: ['STICK: BOUGER  B/R2: SPRINT  A: SAUT', 'X: COUP (MAINTENIR = CHARGE)', 'Y: FRAPPE AU SOL  SELECT: SON'],
+};
+
 function drawHUD() {
   layoutButtons();
   const x0 = 6 + safe.l, y0 = 6 + safe.t;
@@ -1304,12 +1358,15 @@ function drawHUD() {
 
   if (hintT > 0) {
     ctx.globalAlpha = Math.min(1, hintT / 1.5);
-    const l1 = 'MAINTIENS B POUR CHARGER';
-    const l2 = 'SPRINT: MAINTIENS >> EN MARCHANT';
-    drawText(ctx, l1, Math.round(VW / 2 - textWidth(l1) / 2), Math.round(VH * 0.25), '#ffffff');
-    drawText(ctx, l2, Math.round(VW / 2 - textWidth(l2) / 2), Math.round(VH * 0.25) + 8, '#ffe28a');
+    const lines = HINTS[inputMode];
+    lines.forEach((l, i) => drawText(ctx, l, Math.round(VW / 2 - textWidth(l) / 2), Math.round(VH * 0.22) + i * 8, i ? '#ffe28a' : '#ffffff'));
     ctx.globalAlpha = 1;
   }
+  if (inputMode === 'pad' && !audioRunning() && !isMuted()) {
+    const l = 'SON: TOUCHE L\'ECRAN UNE FOIS';
+    drawText(ctx, l, Math.round(VW / 2 - textWidth(l) / 2), VH - 14 - safe.b, '#ffffff');
+  }
+  if (inputMode !== 'touch') return; // boutons tactiles seulement en jeu tactile
 
   if (joy.id !== null) {
     ctx.drawImage(ui.ring, Math.round(joy.bx - ui.ring.ox), Math.round(joy.by - ui.ring.oy));

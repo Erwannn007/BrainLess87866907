@@ -149,6 +149,9 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
   `[120,90,220]`, SAUT vert `[70,170,110]`, SPRINT jaune `[230,170,50]`. Le libellé est sous
   le bouton.
 - Toujours respecter les zones sûres iOS (`safe.t/r/b/l`).
+- 3 modes de contrôle (`inputMode`) : `touch` (boutons à l'écran), `keys` (clavier + souris, PC),
+  `pad` (manette, `js/pad.js`, ex. AYN Thor). Les boutons tactiles ne s'affichent qu'en `touch` ;
+  l'aide (`HINTS`) s'adapte au mode. Toute nouvelle action doit être jouable dans les 3 modes.
 
 ## 8. Son (`js/audio.js`)
 
