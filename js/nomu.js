@@ -10,6 +10,7 @@ const TEETH = ramp('#77746a', '#bbb6a4', '#e9e4d2', '#fffdf2');
 const EYE = ramp('#7c6a1c', '#c9b44a', '#eee298', '#fffbe0');
 const BEAK = ramp('#7a5208', '#c98f12', '#f2c230', '#ffe680');
 const BEAK_LOW = ramp('#5e3e06', '#a8760e', '#d9a924', '#f2cf5a');
+const CLAW = ramp('#6b6355', '#a39a86', '#d8d0bc', '#f4efe2');
 const MOUTH = [22, 6, 12];
 const PUPIL = [6, 4, 4];
 
@@ -19,9 +20,11 @@ export const SCALE = 0.72;
 export const ANIMS = {
   idle: { frames: 6, fps: 6, loop: true },
   walk: { frames: 8, fps: 11, loop: true },
-  run: { frames: 8, fps: 16, loop: true }, // galop à quatre pattes
+  run: { frames: 10, fps: 17, loop: true }, // galop de bête à quatre pattes
   punch: { frames: 8, fps: 18, loop: false },
-  smash: { frames: 12, fps: 15, loop: false },
+  charge: { frames: 8, fps: 10, loop: true }, // accroupi sur les coudes, il gonfle
+  slam: { frames: 12, fps: 16, loop: false }, // se relève, bras en l'air, frappe le sol
+  jump: { frames: 6, fps: 1, loop: false }, // piloté par la hauteur du saut
 };
 
 const smooth = (u) => u * u * (3 - 2 * u);
@@ -33,7 +36,7 @@ function basePose() {
     fL: [-4, 0, 0], fR: [4, 0, 0],
     hL: [-11, 2.5, 16], hR: [11, 2.5, 16],
     bob: 0, lean: 0, twist: 0, crouch: 0, lift: 0, breathe: 0, jaw: 0, nod: 0,
-    pitch: 0, headUp: 0, handsAbs: 0,
+    pitch: 0, headUp: 0, handsAbs: 0, elbowDown: 0, swell: 0, curl: 0,
   };
 }
 
@@ -82,24 +85,59 @@ export function poseFor(anim, t) {
     return p;
   }
   if (anim === 'run') {
-    // Galop : pattes arrière puis bras avant, le dos ondule.
+    // Galop bondissant : il s'étire (bras projetés loin devant, pattes loin derrière)
+    // puis se ramasse (dos voûté, pattes sous le ventre). Rotatif : gauche/droite décalés.
     const ph = t * TAU;
     const p = basePose();
-    const leg = (o) => [Math.sin(ph + o), Math.cos(ph + o)];
-    const [s1, c1] = leg(0), [s2, c2] = leg(0.6);
-    const [s3, c3] = leg(Math.PI), [s4, c4] = leg(Math.PI + 0.6);
-    p.fL = [-4, -7 + s1 * 7, Math.max(0, c1) * 5];
-    p.fR = [4, -7 + s2 * 7, Math.max(0, c2) * 5];
+    const reach = Math.sin(ph); // 1 = étiré, -1 = ramassé
+    const fwd = Math.cos(ph); // > 0 : les bras partent vers l'avant
+    const hand = (o) => [16 + Math.sin(ph + o) * 12, 2.6 + Math.max(0, Math.cos(ph + o)) * 8];
+    const foot = (o) => [-6 - Math.sin(ph + o) * 9, Math.max(0, -Math.cos(ph + o)) * 6];
+    const [hl, hlz] = hand(0), [hr, hrz] = hand(0.5);
+    const [fl, flz] = foot(0.3), [fr, frz] = foot(0.75);
     p.handsAbs = 1;
-    p.hL = [-6, 15 + s3 * 8, 2.8 + Math.max(0, c3) * 6];
-    p.hR = [6, 15 + s4 * 8, 2.8 + Math.max(0, c4) * 6];
-    p.crouch = 5;
-    p.bob = Math.sin(ph * 2) * 1.3;
-    p.pitch = 1.12 + Math.sin(ph) * 0.1;
-    p.headUp = 5;
-    p.jaw = 0.8;
-    p.twist = Math.sin(ph) * 0.06;
+    p.hL = [-6.5, hl, hlz];
+    p.hR = [6.5, hr, hrz];
+    p.fL = [-4, fl, flz];
+    p.fR = [4, fr, frz];
+    p.crouch = 6 + reach * 2;
+    p.pitch = 1.18 + reach * 0.2;
+    p.lift = Math.max(0, Math.sin(ph - 0.5)) * 3;
+    p.bob = -reach * 1.5;
+    p.headUp = 3 + fwd * 1.5;
+    p.jaw = 1.2;
+    p.twist = Math.sin(ph + 0.4) * 0.14;
+    p.curl = 1; // griffes en avant
     return p;
+  }
+  if (anim === 'charge') {
+    // Sur les coudes, tête basse, le corps gonfle et dégonfle.
+    const s = Math.sin(t * TAU);
+    const p = basePose();
+    p.handsAbs = 1;
+    p.elbowDown = 1;
+    p.hL = [-7, 19, 2.4];
+    p.hR = [7, 19, 2.4];
+    p.fL = [-5, -9, 0];
+    p.fR = [5, -9, 0];
+    p.crouch = 9;
+    p.pitch = 1.32;
+    p.headUp = 1 + s * 0.6;
+    p.breathe = s * 2;
+    p.swell = 0.06 + s * 0.07;
+    p.jaw = 0.6 + s * 0.4;
+    p.twist = Math.sin(t * TAU * 2) * 0.03;
+    return p;
+  }
+  if (anim === 'jump') {
+    // t : 0 décollage, 0.5 sommet, 1 atterrissage
+    return keyed([
+      { t: 0, p: { crouch: 4, lean: 3, hL: [-10, -4, 12], hR: [10, -4, 12] } },
+      { t: 0.25, p: { lean: 2, hL: [-8, 3, 44], hR: [8, 3, 44], fL: [-4, -3, 2], fR: [4, -5, 3], jaw: 1 } },
+      { t: 0.55, p: { crouch: 3, lean: 4, hL: [-9, 8, 26], hR: [9, 8, 26], fL: [-4, 4, 7], fR: [4, 2, 6], jaw: 1 } },
+      { t: 0.85, p: { lean: 3, hL: [-12, 6, 18], hR: [12, 6, 18], fL: [-4.5, 3, 1], fR: [4.5, -2, 1] } },
+      { t: 1, p: { crouch: 4, lean: 3, hL: [-11, 8, 10], hR: [11, 8, 10] } },
+    ], t);
   }
   if (anim === 'punch') {
     return keyed([
@@ -110,13 +148,14 @@ export function poseFor(anim, t) {
       { t: 1, p: {} },
     ], t);
   }
-  if (anim === 'smash') {
+  if (anim === 'slam') {
+    const crouched = { handsAbs: 1, elbowDown: 1, hL: [-7, 19, 2.4], hR: [7, 19, 2.4], fL: [-5, -9, 0], fR: [5, -9, 0], crouch: 9, pitch: 1.32, headUp: 1, swell: 0.1 };
     return keyed([
-      { t: 0, p: {} },
-      { t: 0.12, p: { crouch: 4, lean: 2, hL: [-10, 4, 14], hR: [10, 4, 14] } },
-      { t: 0.32, p: { hL: [-6, 3, 53], hR: [6, 3, 53], lift: 8, lean: -1.5, jaw: 1, fL: [-4, -1, 1], fR: [4, 1, 1] } },
-      { t: 0.48, p: { hL: [-5, 15, 7], hR: [5, 15, 7], crouch: 5, lean: 7, jaw: 1, fL: [-5.5, 0, 0], fR: [5.5, 0, 0] } },
-      { t: 0.75, p: { hL: [-5, 15, 7], hR: [5, 15, 7], crouch: 5, lean: 7, jaw: 0.7, fL: [-5.5, 0, 0], fR: [5.5, 0, 0] } },
+      { t: 0, p: crouched },
+      { t: 0.22, p: { hL: [-7, 2, 54], hR: [7, 2, 54], lift: 5, lean: -2, jaw: 1.4, swell: 0.12, fL: [-5, -1, 0], fR: [5, 1, 0], headUp: 2 } },
+      { t: 0.32, p: { hL: [-7, 2, 55], hR: [7, 2, 55], lift: 6, lean: -2, jaw: 1.4, swell: 0.12, fL: [-5, -1, 1], fR: [5, 1, 1], headUp: 2 } },
+      { t: 0.44, p: { handsAbs: 1, hL: [-6, 17, 2.5], hR: [6, 17, 2.5], crouch: 7, pitch: 0.9, jaw: 1.4, swell: 0.06, fL: [-6, -2, 0], fR: [6, -2, 0] } },
+      { t: 0.75, p: { handsAbs: 1, hL: [-6, 17, 2.5], hR: [6, 17, 2.5], crouch: 7, pitch: 0.9, jaw: 0.8, fL: [-6, -2, 0], fR: [6, -2, 0] } },
       { t: 1, p: {} },
     ], t);
   }
@@ -172,11 +211,24 @@ export function nomuParts(P) {
     const hand = P.handsAbs ? h : pitch(add(h, ub));
     const g = side < 0 ? 6 : 7;
     const sh = U([side * 8.6, -1, 34.5 + P.breathe * 0.4]);
-    const elbow = ik(sh, hand, 11, 10.5, [side * 0.7, -0.7, -0.2]);
+    const ed = P.elbowDown;
+    const elbow = ik(sh, hand, 11, 10.5, [side * (0.7 - ed * 0.3), -0.7 + ed * 0.5, -0.2 - ed * 1.2]);
     parts.push({ a: sh, r1: 4.6, ramp: SKIN, group: g });
     parts.push({ a: sh, b: elbow, r1: 4, r2: 3.4, ramp: SKIN, group: g });
     parts.push({ a: elbow, b: hand, r1: 3.6, r2: 3, ramp: SKIN, group: g });
     parts.push({ a: hand, r1: 3.2, ramp: SKIN, group: g });
+    // doigts griffus : prolongent l'avant-bras, s'écartent et se recourbent
+    let dx = hand[0] - elbow[0], dy = hand[1] - elbow[1], dz = hand[2] - elbow[2];
+    const dl = Math.hypot(dx, dy, dz) || 1;
+    dx /= dl; dy /= dl; dz /= dl;
+    for (const k of [-1, 0, 1]) {
+      const base = [hand[0] + dx * 2.2 + k * 1.4, hand[1] + dy * 2.2 + 0.6, hand[2] + dz * 2.2];
+      const tip = [base[0] + dx * 2.4 + k * 0.7, base[1] + dy * 2.4 + 1.2 + P.curl * 1.2, base[2] + dz * 2.4 - P.curl * 0.6];
+      parts.push({
+        a: base, b: tip, r1: 1.15, r2: 0.6, ramp: SKIN, group: g,
+        tex: (p) => (p.t > 0.55 ? CLAW[Math.min(3, p.shade + 1)] : p.shade),
+      });
+    }
   }
 
   // --- tête : cerveau à l'air, gros yeux, bec jaune plein de dents ---
@@ -219,9 +271,10 @@ export function dirFacing(k) {
 }
 
 export function renderNomu(anim, t, dir, extra = {}) {
-  return renderModel(nomuParts(poseFor(anim, t)), {
+  const P = poseFor(anim, t);
+  return renderModel(nomuParts(P), {
     w: extra.w || SPRITE_W, h: extra.h || SPRITE_H,
     ox: extra.ox ?? ORIGIN_X, oy: extra.oy ?? ORIGIN_Y,
-    facing: dirFacing(dir), scale: extra.scale || SCALE,
+    facing: dirFacing(dir), scale: (extra.scale || SCALE) * (1 + P.swell),
   });
 }

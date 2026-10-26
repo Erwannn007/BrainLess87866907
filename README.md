@@ -6,8 +6,11 @@ s'installe sur l'écran d'accueil (PWA, marche hors-ligne).
 
 ## Jouer
 - **iPhone** : ouvrir l'URL GitHub Pages dans Safari → Partager → *Sur l'écran d'accueil*.
-- Pouce gauche : joystick. Un peu poussé = il marche debout ; à fond = sprint à quatre pattes qui pulvérise arbres et rochers (barre de sprint en haut à gauche). **A** : coup de poing. **B** : smash au sol.
-- Clavier : flèches/ZQSD, Maj = marcher, Espace/J = coup, K/E = smash.
+- Pouce gauche : joystick pour marcher (debout).
+- **>> SPRINT** (maintenir) : galop de bête à quatre pattes qui pulvérise arbres et rochers, fait trembler l'écran et vide la barre de sprint.
+- **A COUP** : coup de poing. **^ SAUT** : saut (permet de grimper une marche de plus).
+- **B CHARGE** (maintenir) : il se met sur les coudes et gonfle ; au relâchement il lève les bras et frappe le sol. Plus la charge est longue, plus la zone détruite est grande.
+- Clavier : flèches/ZQSD, Maj = sprint, Espace = saut, J = coup, K (maintenir) = charge.
 - La position, les arbres abattus et l'heure sont sauvegardés automatiquement.
 
 ## Comment c'est fait
