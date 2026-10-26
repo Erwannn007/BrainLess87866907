@@ -120,7 +120,7 @@ const world = new World(SEED);
 const stats = { trees: 0, rocks: 0, smash: 0 };
 let tod = 0.3;
 let time = 0;
-const player = { x: 0, y: 0, z: 0, dir: 2, anim: 'idle', t: 0, action: null, actionT: 0, hitDone: false, dustT: 0 };
+const player = { x: 0, y: 0, z: 0, dir: 2, anim: 'idle', t: 0, action: null, actionT: 0, hitDone: false, dustT: 0, stamina: 1, tired: false, sprinting: false };
 const hits = new Map();
 const particles = [];
 const flyers = []; // papillons / lucioles
@@ -341,6 +341,23 @@ function doPunchHit() {
   else burst(hx, hy, gz + 18, ['#ffffff', '#d8e0f0'], 5, { up: 10, g: 0, life: 0.25, speed: 1.2 });
 }
 
+// En sprint, Brainless pulvérise tout ce qui se trouve devant lui.
+function trample(vx, vy) {
+  const fx0 = player.x + vx * 0.45, fy0 = player.y + vy * 0.45;
+  for (let ty = Math.floor(fy0) - 1; ty <= Math.floor(fy0) + 1; ty++) {
+    for (let tx = Math.floor(fx0) - 1; tx <= Math.floor(fx0) + 1; tx++) {
+      const o = world.objAt(tx, ty);
+      const info = OBJ_INFO[o];
+      if (!info) continue;
+      const d = Math.hypot(fx0 - (tx + 0.5), fy0 - (ty + 0.5));
+      if (d > (info.solid || 0.2) + 0.4) continue;
+      // détruit d'un coup, souche et cailloux compris
+      while (world.objAt(tx, ty) !== O.NONE && damage(tx, ty, 99)) { /* casse jusqu'au bout */ }
+      if (info.solid) shake = Math.max(shake, 3);
+    }
+  }
+}
+
 function doSmash() {
   stats.smash++;
   shake = 7;
@@ -391,11 +408,16 @@ function update(dt) {
     if (player.actionT >= 1) { player.action = null; player.t = 0; }
   } else {
     const mag = Math.min(1, Math.hypot(ix, iy));
+    // Sprint à quatre pattes : vide la barre ; une fois vide, il faut qu'elle remonte à 35 %.
+    if (player.stamina <= 0) player.tired = true;
+    if (player.tired && player.stamina >= 0.35) player.tired = false;
+    const run = mag > 0.72 && !player.tired;
+    player.sprinting = run && mag > 0.15;
     if (mag > 0.15) {
-      const run = mag > 0.72;
-      const speed = run ? 4.3 : 2.2;
+      const speed = run ? 5.6 : 2.2;
       const cx = ix / mag, ct = iy / mag;
       const vx = (cx + ct) / Math.SQRT2, vy = (ct - cx) / Math.SQRT2;
+      if (run) trample(vx, vy);
       tryMove(vx * speed * dt, vy * speed * dt);
       player.dir = ((Math.round(Math.atan2(ct, cx) / (Math.PI / 4)) % 8) + 8) % 8;
       setAnim(run ? 'run' : 'walk');
@@ -410,6 +432,8 @@ function update(dt) {
       }
     } else setAnim('idle');
   }
+  if (player.sprinting) player.stamina = Math.max(0, player.stamina - dt / 4.5);
+  else player.stamina = Math.min(1, player.stamina + dt / (player.tired ? 3 : 5));
   const A = ANIMS[player.anim];
   player.t += dt * A.fps;
 
@@ -693,16 +717,32 @@ function drawSky() {
   ctx.globalCompositeOperation = 'source-over';
 }
 
+function drawSprintBar(x, y) {
+  const w = 52, fill = Math.round((w - 2) * player.stamina);
+  const blink = player.tired && Math.floor(time * 6) % 2;
+  drawText(ctx, 'SPRINT', x, y, player.tired ? '#ff7a7a' : '#ffe28a');
+  const bx = x + 26;
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect(bx, y - 1, w, 7);
+  ctx.fillStyle = '#20243a';
+  ctx.fillRect(bx + 1, y, w - 2, 5);
+  ctx.fillStyle = player.tired ? (blink ? '#ff4d5e' : '#a8304a') : player.sprinting ? '#ffd23f' : '#f2a93b';
+  ctx.fillRect(bx + 1, y, fill, 5);
+  ctx.fillStyle = 'rgba(255,255,255,0.45)';
+  ctx.fillRect(bx + 1, y, fill, 1);
+}
+
 function drawHUD() {
   layoutButtons();
   const x0 = 6 + safe.l, y0 = 6 + safe.t;
   drawText(ctx, 'BRAINLESS', x0, y0, '#f6a6bd');
   const night = darkness() > 0.5;
   drawText(ctx, (night ? 'NUIT' : 'JOUR') + '  ARBRES ' + stats.trees + '  ROCHERS ' + stats.rocks, x0, y0 + 8, '#e8f0ff');
+  drawSprintBar(x0, y0 + 17);
 
   if (hintT > 0) {
     ctx.globalAlpha = Math.min(1, hintT / 1.5);
-    const l1 = 'GLISSE A GAUCHE POUR MARCHER';
+    const l1 = 'POUSSE A FOND POUR SPRINTER';
     const l2 = 'A: FRAPPER   B: SMASH';
     drawText(ctx, l1, Math.round(VW / 2 - textWidth(l1) / 2), Math.round(VH * 0.25), '#ffffff');
     drawText(ctx, l2, Math.round(VW / 2 - textWidth(l2) / 2), Math.round(VH * 0.25) + 8, '#ffe28a');
@@ -737,6 +777,7 @@ function frame(now) {
 
 (async function start() {
   load();
+  if (location.hash === '#debug') window.BRAINLESS = { world, player, stats, O };
   await loadAssets();
   loading.style.display = 'none';
   requestAnimationFrame((t) => { last = t; frame(t); });

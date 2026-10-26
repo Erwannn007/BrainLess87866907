@@ -6,7 +6,7 @@ s'installe sur l'écran d'accueil (PWA, marche hors-ligne).
 
 ## Jouer
 - **iPhone** : ouvrir l'URL GitHub Pages dans Safari → Partager → *Sur l'écran d'accueil*.
-- Pouce gauche : joystick (pousser à fond = courir). **A** : coup de poing. **B** : smash au sol.
+- Pouce gauche : joystick. Un peu poussé = il marche debout ; à fond = sprint à quatre pattes qui pulvérise arbres et rochers (barre de sprint en haut à gauche). **A** : coup de poing. **B** : smash au sol.
 - Clavier : flèches/ZQSD, Maj = marcher, Espace/J = coup, K/E = smash.
 - La position, les arbres abattus et l'heure sont sauvegardés automatiquement.
 
