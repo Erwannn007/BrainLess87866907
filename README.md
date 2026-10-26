@@ -10,6 +10,8 @@ s'installe sur l'écran d'accueil (PWA, marche hors-ligne).
 - **>> SPRINT** (maintenir) : galop de bête à quatre pattes qui pulvérise arbres et rochers, fait trembler l'écran et vide la barre de sprint.
 - **A COUP** : coup de poing. **^ SAUT** : saut (permet de grimper une marche de plus).
 - **B CHARGE** (maintenir) : il se met sur les coudes et gonfle ; au relâchement il lève les bras et frappe le sol. Plus la charge est longue, plus la zone détruite est grande.
+- Les boutons se combinent en glissant : pars de SPRINT et glisse sur SAUT ou COUP, il saute ou frappe sans arrêter de sprinter.
+- Demi-tour en plein sprint : il dérape et laisse des traces ; lâcher le sprint en pleine course : il freine.
 - Clavier : flèches/ZQSD, Maj = sprint, Espace = saut, J = coup, K (maintenir) = charge.
 - Son : tout est synthétisé en direct (pas, galop, coups, arbres qui craquent et tombent, rochers, charge, cri, frappe au sol, vent, eau, oiseaux le jour, grillons la nuit). Icône haut-parleur en haut à droite (ou M) pour couper.
 - La position, les arbres abattus et l'heure sont sauvegardés automatiquement.

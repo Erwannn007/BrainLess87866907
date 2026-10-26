@@ -124,7 +124,8 @@ const stats = { trees: 0, rocks: 0, smash: 0 };
 let tod = 0.3;
 let time = 0;
 const player = { x: 0, y: 0, z: 0, dir: 2, anim: 'idle', t: 0, action: null, actionT: 0, hitDone: false, dustT: 0, stamina: 1, tired: false, sprinting: false,
-  jz: 0, vz: 0, air: false, charging: false, charge: 0, slamPower: 0, runFrame: -1 };
+  jz: 0, vz: 0, air: false, charging: false, charge: 0, slamPower: 0, runFrame: -1,
+  slide: null, mv: null, idleT: 0 };
 let windT = 0; // rafale après une frappe au sol : la végétation s'agite
 const hits = new Map();
 const particles = [];
@@ -160,11 +161,14 @@ const input = { x: 0, y: 0, punch: false, jump: false };
 const joy = { id: null, bx: 0, by: 0, kx: 0, ky: 0 };
 const keys = new Set();
 const buttons = {
-  a: { x: 0, y: 0, r: 16, id: null, label: 'A', sub: 'COUP' },
-  b: { x: 0, y: 0, r: 14, id: null, label: 'B', sub: 'CHARGE' },
-  j: { x: 0, y: 0, r: 12, id: null, label: '^', sub: 'SAUT' },
-  s: { x: 0, y: 0, r: 12, id: null, label: '>>', sub: 'SPRINT' },
+  a: { x: 0, y: 0, r: 16, label: 'A', sub: 'COUP' },
+  b: { x: 0, y: 0, r: 14, label: 'B', sub: 'CHARGE' },
+  j: { x: 0, y: 0, r: 12, label: '^', sub: 'SAUT' },
+  s: { x: 0, y: 0, r: 12, label: '>>', sub: 'SPRINT' },
 };
+// Doigts posés sur les boutons : on peut glisser d'un bouton à l'autre.
+// Un doigt parti du SPRINT continue de sprinter même s'il glisse sur SAUT, COUP…
+const btnTouches = new Map(); // id -> { origin, cur }
 
 function layoutButtons() {
   const a = buttons.a;
@@ -174,9 +178,26 @@ function layoutButtons() {
   buttons.s.x = a.x - 40; buttons.s.y = a.y - 44;
 }
 
-const held = (k) => buttons[k].id !== null;
+function held(k) {
+  for (const t of btnTouches.values()) if (t.cur === k || (k === 's' && t.origin === 's')) return true;
+  return false;
+}
 const sprintHeld = () => held('s') || keys.has('ShiftLeft') || keys.has('ShiftRight');
 const chargeHeld = () => held('b') || keys.has('KeyK') || keys.has('KeyE');
+
+function buttonAt(x, y, slack) {
+  let best = null, bd = 1e9;
+  for (const k in buttons) {
+    const b = buttons[k], d = Math.hypot(x - b.x, y - b.y);
+    if (d < b.r + slack && d < bd) { bd = d; best = k; }
+  }
+  return best;
+}
+
+function pressButton(k) {
+  if (k === 'a') input.punch = true;
+  if (k === 'j') input.jump = true;
+}
 
 const toGame = (t) => [t.clientX / cssPerPx, t.clientY / cssPerPx];
 
@@ -187,17 +208,12 @@ function onTouchStart(e) {
   unlockAudio();
   for (const t of e.changedTouches) {
     const [x, y] = toGame(t);
-    let used = false;
     if (Math.hypot(x - muteBtn.x, y - muteBtn.y) < muteBtn.r + 6) { toggleMute(); sfx.ui(); continue; }
-    for (const k in buttons) {
-      const b = buttons[k];
-      if (!used && Math.hypot(x - b.x, y - b.y) < b.r + 6) {
-        b.id = t.identifier; used = true;
-        if (k === 'a') input.punch = true;
-        if (k === 'j') input.jump = true;
-      }
-    }
-    if (!used && joy.id === null && x < VW * 0.6) {
+    const k = buttonAt(x, y, 6);
+    if (k) {
+      btnTouches.set(t.identifier, { origin: k, cur: k });
+      pressButton(k);
+    } else if (joy.id === null && x < VW * 0.6) {
       joy.id = t.identifier; joy.bx = joy.kx = x; joy.by = joy.ky = y;
     }
   }
@@ -205,8 +221,18 @@ function onTouchStart(e) {
 function onTouchMove(e) {
   e.preventDefault();
   for (const t of e.changedTouches) {
-    if (t.identifier !== joy.id) continue;
     const [x, y] = toGame(t);
+    const bt = btnTouches.get(t.identifier);
+    if (bt) {
+      // glisser sur un autre bouton le déclenche
+      const k = buttonAt(x, y, 3);
+      if (k !== bt.cur) {
+        bt.cur = k;
+        if (k) pressButton(k);
+      }
+      continue;
+    }
+    if (t.identifier !== joy.id) continue;
     let dx = x - joy.bx, dy = y - joy.by;
     const d = Math.hypot(dx, dy), R = 24;
     if (d > R) { dx *= R / d; dy *= R / d; }
@@ -218,7 +244,7 @@ function onTouchEnd(e) {
   e.preventDefault();
   for (const t of e.changedTouches) {
     if (t.identifier === joy.id) { joy.id = null; input.x = input.y = 0; }
-    for (const k in buttons) if (buttons[k].id === t.identifier) buttons[k].id = null;
+    btnTouches.delete(t.identifier);
   }
 }
 canvas.addEventListener('touchstart', onTouchStart, { passive: false });
@@ -482,9 +508,11 @@ function update(dt) {
   const kb = keyboardVector();
   if (kb) [ix, iy] = kb;
   const mag = Math.min(1, Math.hypot(ix, iy));
+  const wasSprinting = player.sprinting && !player.air;
+  const prevMv = player.mv;
 
   // --- saut
-  if (input.jump && !player.air && !player.action && !player.charging) {
+  if (input.jump && !player.air && !player.action && !player.charging && !player.slide) {
     player.air = true;
     player.vz = JUMP_V * (player.sprinting ? 1.1 : 1);
     sfx.jump();
@@ -497,7 +525,7 @@ function update(dt) {
   }
 
   // --- charge (maintenir B) puis frappe au sol au relâchement
-  if (!player.action && !player.air) {
+  if (!player.action && !player.air && !player.slide) {
     if (chargeHeld()) {
       if (!player.charging) { player.charging = true; player.charge = 0; player.sprinting = false; setAnim('charge'); chargeStart(); }
       player.charge = Math.min(1, player.charge + dt / 1.6);
@@ -511,10 +539,12 @@ function update(dt) {
       startAction('slam');
     }
   }
-  if (input.punch && !player.action && !player.charging && !player.air) startAction('punch');
+  if (input.punch && !player.action && !player.charging && !player.air && !player.slide) startAction('punch');
   input.punch = input.jump = false;
 
-  if (player.action) {
+  if (player.slide) {
+    updateSlide(dt);
+  } else if (player.action) {
     const A = ANIMS[player.action];
     const dur = A.frames / A.fps;
     const prev = player.actionT;
@@ -533,22 +563,39 @@ function update(dt) {
     // Sprint à quatre pattes (bouton SPRINT) : vide la barre ; vide, il faut qu'elle remonte à 35 %.
     if (player.stamina <= 0 && !player.tired) { player.tired = true; sfx.tired(); }
     if (player.tired && player.stamina >= 0.35) player.tired = false;
-    const run = sprintHeld() && !player.tired && mag > 0.15;
+    // Petite tolérance : un joystick qui repasse par le centre pendant un demi-tour ne coupe pas le sprint.
+    player.idleT = mag > 0.15 ? 0 : player.idleT + dt;
+    const coasting = wasSprinting && player.mv && player.idleT < 0.12 && sprintHeld();
+    const run = sprintHeld() && !player.tired && (mag > 0.15 || coasting);
     if (!player.air) player.sprinting = run;
     if (mag > 0.15) {
-      const speed = player.sprinting ? 5.8 : 2.2;
       const cx = ix / mag, ct = iy / mag;
       const vx = (cx + ct) / Math.SQRT2, vy = (ct - cx) / Math.SQRT2;
-      if (player.sprinting && !player.air) trample(vx, vy);
-      tryMove(vx * speed * dt, vy * speed * dt);
-      player.dir = ((Math.round(Math.atan2(ct, cx) / (Math.PI / 4)) % 8) + 8) % 8;
-      setAnim(player.sprinting ? 'run' : 'walk');
-      if (!player.sprinting && !player.air) walkSteps();
-      if (player.sprinting && !player.air) sprintImpacts(vx, vy);
+      const newDir = ((Math.round(Math.atan2(ct, cx) / (Math.PI / 4)) % 8) + 8) % 8;
+      if (player.sprinting && !player.air && player.mv && vx * player.mv[0] + vy * player.mv[1] < -0.35) {
+        startSlide('skid', newDir); // demi-tour violent
+      } else {
+        const speed = player.sprinting ? 5.8 : 2.2;
+        if (player.sprinting && !player.air) trample(vx, vy);
+        tryMove(vx * speed * dt, vy * speed * dt);
+        player.dir = newDir;
+        player.mv = player.sprinting ? [vx, vy] : null;
+        setAnim(player.sprinting ? 'run' : 'walk');
+        if (!player.sprinting && !player.air) walkSteps();
+        if (player.sprinting && !player.air) sprintImpacts(vx, vy);
+      }
+    } else if (coasting && run) {
+      tryMove(player.mv[0] * 5.8 * dt, player.mv[1] * 5.8 * dt);
     } else {
       setAnim('idle');
       if (!player.air) player.sprinting = false;
     }
+    // il lâche le sprint en pleine course : il freine
+    if (wasSprinting && !player.sprinting && !player.slide && !player.air && prevMv) {
+      player.mv = prevMv;
+      startSlide('brake', player.dir);
+    }
+    if (!player.sprinting && !player.slide) player.mv = null;
   }
   if (player.sprinting && !player.air) player.stamina = Math.max(0, player.stamina - dt / 4.5);
   else if (!player.sprinting) player.stamina = Math.min(1, player.stamina + dt / (player.tired ? 3 : 5));
@@ -561,6 +608,7 @@ function update(dt) {
   for (const [k, st] of hits) { st.shake = Math.max(0, st.shake - dt); }
 
   updateParticles(dt);
+  for (let i = decals.length - 1; i >= 0; i--) if ((decals[i].age += dt) > 9) decals.splice(i, 1);
   updateAmbience(dt, { night: darkness() > 0.5, water: waterNearby(), height: world.hAt(Math.floor(player.x), Math.floor(player.y)) });
   updateFlyers(dt);
   for (let i = fx.length - 1; i >= 0; i--) {
@@ -611,6 +659,62 @@ function waterNearby() {
   for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) if (!world.walkable(px + dx, py + dy)) n++;
   waterCache = { t: time, v: Math.min(1, n / 25) };
   return waterCache.v;
+}
+
+// ---------------------------------------------------------------- dérapages
+const SLIDE = { skid: { dur: 0.62, v0: 6.2 }, brake: { dur: 0.5, v0: 5.8 } };
+const decals = []; // traces au sol
+
+function startSlide(kind, newDir) {
+  const [vx, vy] = player.mv;
+  player.slide = { kind, t: 0, vx, vy, dustT: 0, newDir, lx: player.x, ly: player.y, ...SLIDE[kind] };
+  player.sprinting = false;
+  player.mv = null;
+  if (kind === 'skid') player.dir = newDir; // il est déjà retourné, il glisse à reculons
+  setAnim(kind);
+  sfx.skid(SLIDE[kind].dur, kind === 'skid');
+  shake = Math.max(shake, kind === 'skid' ? 3 : 2);
+}
+
+function updateSlide(dt) {
+  const s = player.slide;
+  s.t += dt;
+  const u = Math.min(1, s.t / s.dur);
+  const sp = s.v0 * (1 - u) * (1 - u * 0.3);
+  tryMove(s.vx * sp * dt, s.vy * sp * dt);
+  if (sp > 2.5) trample(s.vx, s.vy);
+  shake = Math.max(shake, (s.kind === 'skid' ? 1.6 : 1) * (1 - u));
+  // traces continues entre la position précédente et l'actuelle, même si les images sautent
+  const dist = Math.hypot(player.x - s.lx, player.y - s.ly);
+  const n = Math.ceil(dist / 0.05);
+  for (let i = 1; i <= n; i++) addSkidMarks(s, s.lx + (player.x - s.lx) * i / n, s.ly + (player.y - s.ly) * i / n);
+  s.lx = player.x; s.ly = player.y;
+  s.dustT -= dt;
+  if (s.dustT <= 0) {
+    s.dustT = 0.04;
+    const t = world.typeAt(Math.floor(player.x), Math.floor(player.y));
+    const cols = t === T.SNOW ? ['#ffffff', '#dfe8f0'] : t === T.SAND ? DUST_COLS : ['#c9b58f', '#a8946e', '#6b4a2e', '#5fa843'];
+    burst(player.x - s.vx * 0.2, player.y - s.vy * 0.2, player.z, cols, 3, { up: 30 * (1 - u) + 8, speed: 1.5, g: 70, life: 0.5, spread: 1 });
+  }
+  if (u >= 1) {
+    player.slide = null;
+    player.t = 0;
+    // demi-tour fini et sprint toujours tenu : il repart aussitôt dans l'autre sens
+    if (s.kind === 'skid') player.dir = s.newDir;
+  }
+}
+
+const MARK_COLS = { [T.SAND]: '#a88b52', [T.SNOW]: '#9fb3c8', [T.STONE]: '#4f535c' };
+function addSkidMarks(s, cx, cy) {
+  const px = -s.vy, py = s.vx; // perpendiculaire à la glissade
+  const offs = s.kind === 'skid' ? [[-0.16, 0], [0.16, 0], [-0.34, 0.25], [0.34, 0.25]] : [[-0.14, 0.1], [0.14, 0.1]];
+  for (const [o, f] of offs) {
+    const x = cx + px * o + s.vx * f, y = cy + py * o + s.vy * f;
+    const tx = Math.floor(x), ty = Math.floor(y);
+    if (!world.walkable(tx, ty)) continue;
+    decals.push({ x, y, h: world.hAt(tx, ty), age: 0, col: MARK_COLS[world.typeAt(tx, ty)] || '#3d2b1a' });
+  }
+  if (decals.length > 1500) decals.splice(0, decals.length - 1500);
 }
 
 function startAction(a) {
@@ -700,6 +804,14 @@ function render() {
   const kMin = Math.floor((-ox - 16) / 16) - 1, kMax = Math.ceil((VW - ox + 16) / 16) + 1;
   const wf = (time * 3) | 0;
   const pRow = Math.floor(player.x + 0.35) + Math.floor(player.y + 0.35);
+  // traces de dérapage rangées par rangée pour être dessinées sur le sol, sous les objets
+  const decalRows = new Map();
+  for (const m of decals) {
+    const r = Math.floor(m.x) + Math.floor(m.y);
+    let l = decalRows.get(r);
+    if (!l) decalRows.set(r, l = []);
+    l.push(m);
+  }
 
   for (let d = dMin; d <= dMax; d++) {
     rowEnts.length = 0;
@@ -724,6 +836,15 @@ function render() {
       }
       const o = world.objAt(x, y);
       if (o) rowEnts.push({ o, x, y, sx, sy, depth: x + y + 1 });
+    }
+    const marks = decalRows.get(d);
+    if (marks) {
+      for (const m of marks) {
+        ctx.globalAlpha = Math.min(0.85, (9 - m.age) / 4);
+        ctx.fillStyle = m.col;
+        ctx.fillRect(Math.round(ox + isoX(m.x, m.y)) - 1, Math.round(oy + isoY(m.x, m.y) - m.h * 8), 3, 1);
+      }
+      ctx.globalAlpha = 1;
     }
     if (d === pRow) rowEnts.push({ player: true, depth: player.x + player.y });
     if (rowEnts.length) {
@@ -982,7 +1103,7 @@ function drawHUD() {
   for (const k of ['a', 'b', 'j', 's']) {
     const b = buttons[k];
     const img = ui[k];
-    const press = b.id !== null ? 1 : 0;
+    const press = held(k) ? 1 : 0;
     ctx.drawImage(img, b.x - img.ox, b.y - img.oy + press);
     drawText(ctx, b.label, Math.round(b.x - textWidth(b.label) / 2), b.y - 2 + press, '#ffffff');
     drawText(ctx, b.sub, Math.round(b.x - textWidth(b.sub) / 2), b.y + b.r + 3, '#ffffff');
@@ -1003,7 +1124,7 @@ function frame(now) {
 
 (async function start() {
   load();
-  if (location.hash === '#debug') window.BRAINLESS = { world, player, stats, O };
+  if (location.hash === '#debug') window.BRAINLESS = { world, player, stats, O, decals, particles };
   await loadAssets();
   loading.style.display = 'none';
   requestAnimationFrame((t) => { last = t; frame(t); });

@@ -29,6 +29,8 @@ export const ANIMS = {
   charge: { frames: 8, fps: 10, loop: true }, // accroupi sur les coudes, il gonfle
   slam: { frames: 12, fps: 16, loop: false }, // se relève, bras en l'air, frappe le sol
   jump: { frames: 6, fps: 1, loop: false }, // piloté par la hauteur du saut
+  skid: { frames: 4, fps: 20, loop: true }, // demi-tour en dérapage
+  brake: { frames: 4, fps: 20, loop: true }, // freinage en fin de sprint
 };
 
 const smooth = (u) => u * u * (3 - 2 * u);
@@ -131,6 +133,43 @@ export function poseFor(anim, t) {
     p.swell = 0.06 + s * 0.07;
     p.jaw = 0.6 + s * 0.4;
     p.twist = Math.sin(t * TAU * 2) * 0.03;
+    return p;
+  }
+  if (anim === 'skid') {
+    // Demi-tour violent : déjà tourné vers la nouvelle direction, il glisse à reculons,
+    // ventre au ras du sol, mains écartées plantées, pattes en appui, ça tremble.
+    const j = Math.sin(t * TAU), k = Math.cos(t * TAU * 2);
+    const p = basePose();
+    p.handsAbs = 1;
+    p.hL = [-11, 11 + j * 0.8, 2.5];
+    p.hR = [10, 14 - j * 0.8, 2.5];
+    p.fL = [-7, -3, 0];
+    p.fR = [7, -6, 0];
+    p.crouch = 8 + k * 0.5;
+    p.pitch = 1 + j * 0.05;
+    p.headUp = 2;
+    p.jaw = 1.3;
+    p.twist = 0.25 + j * 0.05;
+    p.curl = 1;
+    p.bob = k * 0.5;
+    return p;
+  }
+  if (anim === 'brake') {
+    // Freinage : il se cabre en arrière, talons plantés devant, une main traîne au sol.
+    const j = Math.sin(t * TAU), k = Math.cos(t * TAU * 2);
+    const p = basePose();
+    p.fL = [-5, 7 + j * 0.5, 0];
+    p.fR = [5, 4 - j * 0.5, 0];
+    p.crouch = 6 + k * 0.4;
+    p.pitch = -0.32;
+    p.lean = -1;
+    p.handsAbs = 1;
+    p.hL = [-11, -4, 2.6]; // traîne au sol
+    p.hR = [12, 3, 13];
+    p.headUp = 1;
+    p.jaw = 1;
+    p.bob = k * 0.4;
+    p.twist = -0.12 + j * 0.04;
     return p;
   }
   if (anim === 'jump') {

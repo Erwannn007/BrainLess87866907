@@ -212,6 +212,15 @@ export const sfx = {
     noise({ f: 1400, f2: 250, q: 0.7, gain: 0.2 + power * 0.2, a: 0.05, dec: 0.9 + power, delay: 0.5 });
     for (let i = 0; i < 4 + power * 6; i++) tone({ f: rnd(500, 1800), type: 'square', gain: 0.035, dec: 0.03, delay: 0.1 + Math.random() * 0.6 });
   },
+  // Griffes et pieds qui raclent le sol pendant un dérapage.
+  skid(dur, big) {
+    if (!ready() || !gate('skid', 0.15)) return;
+    noise({ f: 1100, f2: 380, q: 0.9, gain: big ? 0.45 : 0.32, a: 0.02, dec: dur });
+    noise({ type: 'lowpass', f: 600, f2: 150, gain: 0.3, a: 0.01, dec: dur * 0.9 });
+    tone({ f: 70, f2: 40, gain: 0.5, dec: 0.2 });
+    for (let i = 0; i < 5; i++) tone({ f: rnd(1500, 3000), type: 'square', gain: 0.025, dec: 0.02, delay: Math.random() * dur });
+    if (big) tone({ f: 170, f2: 120, type: 'sawtooth', gain: 0.12, a: 0.03, dec: 0.25, lp: 800 }); // grognement
+  },
   ui() {
     if (!ready()) return;
     tone({ f: 660, f2: 880, type: 'square', gain: 0.06, dec: 0.06 });
