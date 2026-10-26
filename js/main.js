@@ -1,4 +1,4 @@
-import { World, T, O, OBJ_INFO } from './world.js';
+import { World, T, O, OBJ_INFO, VG } from './world.js';
 import { buildVillageSprites } from './buildings.js';
 import { renderPerson, PEOPLE, PEOPLE_ANIMS, CIVILIANS, PEOPLE_OX, PEOPLE_OY } from './people.js';
 import { renderNomu, ANIMS, ORIGIN_X, ORIGIN_Y } from './nomu.js';
@@ -52,7 +52,7 @@ function toCanvas(buf) {
 
 // ---------------------------------------------------------------- assets
 const nomu = {}; // nomu[anim][dir][frame]
-let objSprites, objGlow, crackImgs, peopleImgs, waterImgs, foamImgs, rimImgs, shadows, ui;
+let objSprites, objGlow, crackImgs, peopleImgs, bloodImgs, waterImgs, foamImgs, rimImgs, shadows, ui;
 const blockCache = new Map();
 
 function block(type, h, v) {
@@ -105,6 +105,7 @@ async function loadAssets() {
     objSprites[id] = vs[id].map((s) => toCanvas(s.img));
     if (vs[id][0].glow) objGlow[id] = toCanvas(vs[id][0].glow);
   }
+  bloodImgs = [6, 9, 13].map((r, i) => toCanvas(SP.bloodBuffer(r, i * 17 + 3)));
   crackImgs = {};
   for (const m of ['earth', 'sand', 'stone', 'snow']) crackImgs[m] = [1, 2, 3].map((l) => [0, 1, 2, 3].map((v) => toCanvas(SP.crackBuffer(m, l, v))));
   done++; progress(); await tick();
@@ -123,6 +124,7 @@ async function loadAssets() {
     b: toCanvas(circleBuf(14, true, [120, 90, 220], 200)),
     j: toCanvas(circleBuf(12, true, [70, 170, 110], 200)),
     s: toCanvas(circleBuf(12, true, [230, 170, 50], 200)),
+    n: toCanvas(circleBuf(10, true, [200, 90, 120], 200)),
   };
   done += 3; progress();
 }
@@ -145,7 +147,7 @@ function circleBuf(r, fill, col, alpha) {
 
 // ---------------------------------------------------------------- état du jeu
 const world = new World(SEED);
-const stats = { trees: 0, rocks: 0, smash: 0, houses: 0, knights: 0, play: 0 };
+const stats = { trees: 0, rocks: 0, smash: 0, houses: 0, knights: 0, victims: 0, play: 0 };
 let tod = 0.3;
 let time = 0;
 const player = { x: 0, y: 0, z: 0, dir: 2, anim: 'idle', t: 0, action: null, actionT: 0, hitDone: false, dustT: 0, stamina: 1, tired: false, sprinting: false,
@@ -154,12 +156,9 @@ const player = { x: 0, y: 0, z: 0, dir: 2, anim: 'idle', t: 0, action: null, act
   chargeKind: null, punchHoldT: 0, punchPower: 0, combo: 0, lastPunch: -1, punchBuf: false,
   hp: 100, lastHurt: -99, invuln: 0, flash: 0, kb: null, dead: null, regen: false };
 const npcs = []; // villageois et chevaliers autour de Brainless
-const vstate = new Map(); // id du village -> { populated }
-// Méchanceté : monte quand Brainless casse le village ou frappe ses habitants. Les étoiles
-// font venir les chevaliers ; elle redescend quand il se fait oublier.
-let heat = 0, lastCrime = -99, crimeVillage = null, starFlash = 0;
-const STAR_AT = [1, 6, 14, 26, 40];
-const stars = () => STAR_AT.filter((v) => heat >= v).length;
+const vstate = new Map(); // id du village -> { populated, anger, alarm }
+const bloods = []; // flaques de sang au sol
+let scent = null; // après avoir flairé : { v, t } le village le plus proche
 let msg = null; // bandeau au milieu de l'écran : { text, t }
 function showMsg(text, dur = 2.5) { msg = { text, t: dur }; }
 let windT = 0; // rafale après une frappe au sol : la végétation s'agite
@@ -178,6 +177,7 @@ function load() {
       world.mods = new Map(s.mods || []);
       world.terr = new Map(s.terr || []);
       world.wear = new Map(s.wear || []);
+      world.deaths = new Map(s.deaths || []);
       Object.assign(stats, s.stats || {});
       tod = s.tod ?? tod;
       player.x = s.x; player.y = s.y;
@@ -190,13 +190,13 @@ function load() {
 
 function save() {
   try {
-    localStorage.setItem(SAVE_KEY, JSON.stringify({ x: player.x, y: player.y, tod, stats, mods: [...world.mods], terr: [...world.terr], wear: [...world.wear] }));
+    localStorage.setItem(SAVE_KEY, JSON.stringify({ x: player.x, y: player.y, tod, stats, mods: [...world.mods], terr: [...world.terr], wear: [...world.wear], deaths: [...world.deaths] }));
   } catch (e) { /* stockage indisponible */ }
 }
 document.addEventListener('visibilitychange', () => { if (document.hidden) save(); });
 
 // ---------------------------------------------------------------- contrôles
-const input = { x: 0, y: 0, punch: false, jump: false };
+const input = { x: 0, y: 0, punch: false, jump: false, sniff: false };
 // Mode de contrôle affiché : 'touch' (boutons à l'écran), 'keys' (clavier/souris), 'pad' (manette)
 let inputMode = window.matchMedia && matchMedia('(pointer: coarse)').matches ? 'touch' : 'keys';
 function setMode(m) { if (m !== inputMode) { inputMode = m; hintT = 7; } }
@@ -208,6 +208,7 @@ const buttons = {
   b: { x: 0, y: 0, r: 14, label: 'B', sub: 'CHARGE' },
   j: { x: 0, y: 0, r: 12, label: '^', sub: 'SAUT' },
   s: { x: 0, y: 0, r: 12, label: '>>', sub: 'SPRINT' },
+  n: { x: 0, y: 0, r: 10, label: 'N', sub: 'FLAIR' },
 };
 // Doigts posés sur les boutons : on peut glisser d'un bouton à l'autre.
 // Un doigt parti du SPRINT continue de sprinter même s'il glisse sur SAUT, COUP…
@@ -219,6 +220,7 @@ function layoutButtons() {
   buttons.b.x = a.x - 38; buttons.b.y = a.y + 4;
   buttons.j.x = a.x - 2; buttons.j.y = a.y - 44;
   buttons.s.x = a.x - 40; buttons.s.y = a.y - 44;
+  buttons.n.x = a.x - 72; buttons.n.y = a.y - 16;
 }
 
 function held(k) {
@@ -241,6 +243,7 @@ function buttonAt(x, y, slack) {
 function pressButton(k) {
   if (k === 'a') input.punch = true;
   if (k === 'j') input.jump = true;
+  if (k === 'n') input.sniff = true;
 }
 
 const toGame = (t) => [t.clientX / cssPerPx, t.clientY / cssPerPx];
@@ -308,6 +311,7 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault(); // pas de défilement de page
   if (e.code === 'KeyJ') input.punch = true;
   if (e.code === 'Space') input.jump = true;
+  if (e.code === 'KeyR') input.sniff = true;
 });
 window.addEventListener('keyup', (e) => keys.delete(e.code));
 window.addEventListener('blur', () => { keys.clear(); mouse.punch = mouse.charge = false; });
@@ -343,6 +347,7 @@ function readPad() {
   if (pad.jumpPressed) input.jump = true;
   if (pad.punchPressed) input.punch = true;
   if (pad.mutePressed) toggleMute();
+  if (pad.sniffPressed) input.sniff = true;
   return pad.x || pad.y ? [pad.x, pad.y] : null;
 }
 
@@ -616,7 +621,7 @@ function healGround(dt) {
 
 // Enchaînement de boxeur : direct gauche, direct droit, crochet, et ça recommence.
 const JABS = ['jabL', 'jabR', 'hook'];
-const HIT_AT = { jabL: 0.44, jabR: 0.44, hook: 0.44, bigpunch: 0.22, slam: 0.44 };
+const HIT_AT = { jabL: 0.44, jabR: 0.44, hook: 0.44, bigpunch: 0.22, slam: 0.44, sniff: 0.6 };
 
 function startJab() {
   if (!JABS.includes(player.action) && time - player.lastPunch > 0.45) player.combo = 0; // trop lent : on repart du direct gauche
@@ -631,7 +636,7 @@ function doPunchHit(strong) {
   const hx = player.x + dx * 0.85, hy = player.y + dy * 0.85;
   let who = null, wd = 0.85;
   for (const n of npcs) {
-    if (n.inside) continue;
+    if (n.inside || !alive(n)) continue;
     const d = Math.hypot(n.x - hx, n.y - hy);
     if (d < wd) { wd = d; who = n; }
   }
@@ -677,7 +682,7 @@ function trample(vx, vy) {
     }
   }
   for (const n of npcs) {
-    if (n.inside || Math.hypot(n.x - fx0, n.y - fy0) > 0.7 || time - (n.tramT ?? -9) < 0.5) continue;
+    if (n.inside || !alive(n) || Math.hypot(n.x - fx0, n.y - fy0) > 0.7 || time - (n.tramT ?? -9) < 0.5) continue;
     n.tramT = time;
     hitNpc(n, 2, vx, vy, 0.45);
   }
@@ -714,7 +719,7 @@ function doBigPunch(power) {
   blast(R, inCone, dmgAt);
   for (const n of npcs) {
     const rx = n.x - player.x, ry = n.y - player.y, d = Math.hypot(rx, ry) || 0.01;
-    if (n.inside || d > R || !inCone(rx, ry, d)) continue;
+    if (n.inside || !alive(n) || d > R || !inCone(rx, ry, d)) continue;
     hitNpc(n, dmgAt(d), dx * 0.7 + rx / d * 0.3, dy * 0.7 + ry / d * 0.3, power * (1 - d / R) + 0.3);
   }
   // le sol se fend dans le cône, et se creuse juste devant à pleine puissance
@@ -759,9 +764,13 @@ function doSlam(power) {
   const base = 2 + power * 8;
   const dmgAt = (d) => Math.max(1, Math.round(base * (1 - 0.75 * d / R)));
   blast(R, () => true, dmgAt);
+  // au centre, ceux qui sont sous lui sont écrasés ; plus loin ils sont projetés
+  const crushR = Math.max(1.3, R * 0.5);
   for (const n of npcs) {
     const rx = n.x - player.x, ry = n.y - player.y, d = Math.hypot(rx, ry) || 0.01;
-    if (!n.inside && d <= R) hitNpc(n, dmgAt(d), rx / d, ry / d, power * (1 - d / R) + 0.25);
+    if (n.inside || !alive(n) || d > R) continue;
+    if (d <= crushR && power >= 0.2) killNpc(n, true);
+    else hitNpc(n, dmgAt(d), rx / d, ry / d, power * (1 - d / R) + 0.25);
   }
   // cratère au centre, fissures tout autour
   for (let ty = Math.floor(player.y - R); ty <= Math.floor(player.y + R); ty++) {
@@ -829,8 +838,8 @@ const JUMP_V = 140, GRAVITY = 420;
 function update(dt) {
   time += dt;
   stats.play += dt;
-  starFlash = Math.max(0, starFlash - dt);
   if (msg && (msg.t -= dt) <= 0) msg = null;
+  for (let i = bloods.length - 1; i >= 0; i--) if ((bloods[i].age += dt) > 180) bloods.splice(i, 1);
   tod = (tod + dt / DAY_LENGTH) % 1;
   hintT -= dt;
   windT = Math.max(0, windT - dt);
@@ -849,7 +858,7 @@ function update(dt) {
 
   if (player.dead) {
     updateDead(dt);
-    input.punch = input.jump = false;
+    input.punch = input.jump = input.sniff = false;
   } else {
     // --- saut
     if (input.jump && !player.air && !player.action && !player.charging && !player.slide && player.water < 2) {
@@ -913,7 +922,13 @@ function update(dt) {
         else if (JABS.includes(player.action)) player.punchBuf = true; // le coup suivant part dès que possible
       }
     }
-    input.punch = input.jump = false;
+    // flairer : il s'arrête, lève la tête et renifle l'air
+    if (input.sniff && !player.action && !player.charging && !player.air && !player.slide && player.water < 2) {
+      player.sprinting = false;
+      startAction('sniff');
+      sfx.sniff();
+    }
+    input.punch = input.jump = input.sniff = false;
 
     if (player.slide) {
       updateSlide(dt);
@@ -926,6 +941,7 @@ function update(dt) {
       const hitAt = HIT_AT[act] ?? 0.4;
       if (prev < hitAt && player.actionT >= hitAt) {
         if (JABS.includes(act)) doPunchHit(act === 'hook');
+        else if (act === 'sniff') doSniff();
         else if (act === 'bigpunch') doBigPunch(player.punchPower);
         else doSlam(player.slamPower);
       }
@@ -1003,9 +1019,8 @@ function update(dt) {
   for (const [k, st] of hits) { st.shake = Math.max(0, st.shake - dt); }
   updateHealth(dt);
   updateVillages(dt);
-  updateKnights(dt);
   updateNpcs(dt);
-  updateHeat(dt);
+  updateScent(dt);
   healGround(dt);
 
   updateParticles(dt);
@@ -1144,11 +1159,10 @@ function updateDead(dt) {
     const sp = world.findSpawn();
     player.x = sp.x; player.y = sp.y; player.z = groundZ(sp.x, sp.y);
     player.hp = 100;
-    heat = 0; crimeVillage = null;
-    for (let i = npcs.length - 1; i >= 0; i--) {
-      const n = npcs[i];
-      if (n.kind === 'knight' && !n.guard) npcs.splice(i, 1);
-      else if (n.guard) { n.state = 'guard'; n.wait = 1; }
+    // il est loin : les villages se calment, les chevaliers retournent patrouiller
+    for (const st of vstate.values()) { st.anger = 0; st.alarm = -99; }
+    for (const n of npcs) {
+      if (n.kind === 'knight' && alive(n) && n.state !== 'ko') { n.state = 'guard'; n.wait = 1; }
       else if (n.state === 'flee') { n.state = 'wander'; n.wait = 1; }
     }
     showMsg('SUPER REGENERATION', 3);
@@ -1179,33 +1193,33 @@ function updateHealth(dt) {
 // ---------------------------------------------------------------- villageois et chevaliers
 function vstateOf(v) {
   let st = vstate.get(v.id);
-  if (!st) vstate.set(v.id, st = { populated: false });
+  if (!st) vstate.set(v.id, st = { populated: false, anger: 0, alarm: -99 });
   return st;
 }
+const alarmed = (id) => { const st = vstate.get(id); return !!st && time - st.alarm < 25; };
 
 function villageAt(x, y, margin = 6) {
   for (const v of world.villagesNear(x, y)) if (Math.hypot(x - v.cx, y - v.cy) < v.R + margin) return v;
   return null;
 }
 
-// Un méfait près d'un village : la méchanceté monte, les villageois proches s'enfuient.
+// Un méfait près d'un village. Pas de messager, pas de renforts : seuls les gens de CE
+// village qui sont assez près pour voir ou entendre réagissent. Un épi piétiné ne suffit
+// pas, il faut que la colère du village dépasse 1.
 function crime(amount, x, y) {
   const v = villageAt(x, y, 8);
   if (!v) return;
-  const before = stars();
-  heat = Math.min(50, heat + amount);
-  lastCrime = time;
-  crimeVillage = v;
-  for (const n of npcs) if (n.kind === 'civ' && !n.inside && Math.hypot(n.x - x, n.y - y) < 14) startFlee(n);
-  if (stars() > before) { sfx.bell(); starFlash = 1.5; }
-}
-
-function updateHeat(dt) {
-  if (heat <= 0) return;
-  // tant qu'un chevalier le talonne, on ne l'oublie pas
-  const chased = npcs.some((n) => n.kind === 'knight' && (n.state === 'chase' || n.state === 'attack') && Math.hypot(n.x - player.x, n.y - player.y) < 9);
-  if (time - lastCrime > 8 && !chased) heat = Math.max(0, heat - dt * 1.5);
-  if (heat === 0) crimeVillage = null;
+  const st = vstateOf(v);
+  st.anger = Math.min(20, st.anger + amount);
+  if (st.anger < 1) return;
+  if (time - st.alarm > 25) sfx.bell(); // la cloche sonne
+  st.alarm = time;
+  for (const n of npcs) {
+    if (n.v !== v.id || n.inside || !alive(n)) continue;
+    const dn = Math.hypot(n.x - x, n.y - y), dp = Math.hypot(n.x - player.x, n.y - player.y);
+    if (n.kind === 'civ' && dn < 14) startFlee(n);
+    if (n.kind === 'knight' && n.state === 'guard' && (dn < 16 || dp < 10)) { n.state = 'chase'; n.alertT = 1.2; }
+  }
 }
 
 function freeSpot(x, y) {
@@ -1228,7 +1242,8 @@ function spawnNpc(type, x, y, v, home) {
 
 function populate(v) {
   const homes = v.houses.filter((h) => h.type !== 'tower' && h.type !== 'barn');
-  const count = Math.min(12, 2 + v.houses.length);
+  const dead = deathsOf(v.id);
+  const count = v.folk - dead.civ;
   for (let i = 0; i < count; i++) {
     const home = homes.length ? homes[i % homes.length] : null;
     const type = CIVILIANS[(Math.random() * CIVILIANS.length) | 0];
@@ -1238,10 +1253,14 @@ function populate(v) {
       if (freeSpot(x, y)) { spawnNpc(type, x, y, v, home); break; }
     }
   }
-  // un garde patrouille dans les villages qui ont une tour
-  if (v.tower) {
-    const [x, y] = v.tower.door;
-    if (freeSpot(x, y)) { const g = spawnNpc('knight', x, y, v, null); g.state = 'guard'; g.guard = true; }
+  // la garnison : ceux qui sont encore en vie patrouillent dans le village
+  const doors = (v.tower ? [v.tower] : []).concat(v.houses);
+  for (let i = 0; i < v.garrison - dead.knight; i++) {
+    for (let k = 0; k < 10; k++) {
+      const [x, y] = doors[(i + k) % doors.length].door;
+      const jx = x + (Math.random() - 0.5) * 1.5, jy = y + Math.random();
+      if (freeSpot(jx, jy)) { const g = spawnNpc('knight', jx, jy, v, null); g.state = 'guard'; g.wait = Math.random() * 3; break; }
+    }
   }
 }
 
@@ -1258,38 +1277,15 @@ function updateVillages(dt) {
   for (const [id, st] of vstate) {
     if (!st.populated) continue;
     const v = world.villages.get(id);
+    st.anger *= 0.9; // la colère retombe doucement
     if (v && Math.hypot(player.x - v.cx, player.y - v.cy) < v.R + 40) continue;
     st.populated = false;
-    for (let i = npcs.length - 1; i >= 0; i--) if (npcs[i].v === id && (npcs[i].kind === 'civ' || npcs[i].guard)) npcs.splice(i, 1);
+    for (let i = npcs.length - 1; i >= 0; i--) if (npcs[i].v === id) npcs.splice(i, 1);
   }
   const inside = near.find((v) => Math.hypot(player.x - v.cx, player.y - v.cy) < v.R + 3);
   if (inside && inside !== curVillage && !player.dead) showMsg(inside.name, 2.5);
   if (inside) curVillage = inside;
   else if (curVillage && Math.hypot(player.x - curVillage.cx, player.y - curVillage.cy) > curVillage.R + 10) curVillage = null;
-}
-
-// Les chevaliers arrivent par la tour (ou les portes du village) selon le nombre d'étoiles.
-let knightT = 0;
-function updateKnights(dt) {
-  knightT -= dt;
-  const want = [0, 1, 2, 3, 5, 7][stars()];
-  const active = npcs.filter((n) => n.kind === 'knight' && !n.beaten && n.state !== 'guard' && n.state !== 'leave').length;
-  if (want <= active || knightT > 0 || !crimeVillage || player.dead) return;
-  knightT = 2.2;
-  const g = npcs.find((n) => n.state === 'guard');
-  if (g) { g.state = 'chase'; g.alertT = 1.2; return; }
-  const v = crimeVillage;
-  let spot = null;
-  for (const h of (v.tower ? [v.tower] : []).concat(v.houses)) {
-    const [x, y] = h.door;
-    if (Math.hypot(x - player.x, y - player.y) < 22 && freeSpot(x, y) && homeIntact(h)) { spot = [x, y]; break; }
-  }
-  for (let k = 0; k < 20 && !spot; k++) {
-    const a = Math.random() * Math.PI * 2, x = player.x + Math.cos(a) * 12, y = player.y + Math.sin(a) * 12;
-    if (freeSpot(x, y)) spot = [x, y];
-  }
-  if (!spot) return;
-  spawnNpc('knight', spot[0], spot[1], v, null).alertT = 1.2;
 }
 
 function startFlee(n) {
@@ -1314,20 +1310,24 @@ function releaseHome(ax, ay) {
   }
 }
 
+const BLOOD_COLS = ['#6e0e18', '#a01824', '#d02c36', '#3e060c'];
+const deathsOf = (id) => { let d = world.deaths.get(id); if (!d) world.deaths.set(id, d = { civ: 0, knight: 0 }); return d; };
+const alive = (n) => n.state !== 'dead';
+
+// `power` > 0.85 (gros coup chargé tout près) : il meurt en retombant.
 function hitNpc(n, dmg, kx, ky, power) {
-  if (n.inside) return;
+  if (n.inside || !alive(n)) return;
   n.flash = 0.15;
-  if (n.kind === 'knight') {
-    sfx.clank();
-    burst(n.x, n.y, n.z + n.jz + 16, ['#fff3b0', '#ffffff', '#dfe5ee'], 6, { up: 40, speed: 1.6, life: 0.4 });
-    crime(0.4, n.x, n.y);
-  } else {
-    sfx.land(false);
-    crime(2.5, n.x, n.y);
-  }
+  const knight = n.kind === 'knight';
+  // impact lourd ; les os craquent parfois (toujours quand le coup est très violent)
+  sfx.bodyHit(knight, Math.random() < 0.35 || power > 0.6);
+  if (knight) burst(n.x, n.y, n.z + n.jz + 16, ['#fff3b0', '#ffffff', '#dfe5ee'], 6, { up: 40, speed: 1.6, life: 0.4 });
+  burst(n.x, n.y, n.z + n.jz + 12, BLOOD_COLS, knight ? 3 : 5, { up: 35, speed: 1.4, life: 0.6 });
+  crime(knight ? 1 : 2.5, n.x, n.y);
   if (n.state === 'ko') {
+    // on achève celui qui est à terre
+    if (!n.air) { killNpc(n, false); return; }
     n.vx += kx * 2; n.vy += ky * 2;
-    if (!n.air) { n.air = true; n.vz = 40; n.jz = 0.5; }
     return;
   }
   n.hp -= dmg;
@@ -1336,10 +1336,29 @@ function hitNpc(n, dmg, kx, ky, power) {
   n.state = 'ko';
   n.koT = 4 + power * 4;
   n.air = true;
+  n.dying = power > 0.85;
   n.vx = kx * (2.5 + power * 7); n.vy = ky * (2.5 + power * 7);
   n.vz = 50 + power * 110; n.jz = Math.max(n.jz, 0.5);
-  if (n.kind === 'knight') { stats.knights++; n.beaten = true; } else sfx.scream(PEOPLE[n.type].voice * 1.15);
+  if (!knight) sfx.scream(PEOPLE[n.type].voice * 1.15);
   shake = Math.max(shake, 2 + power * 3);
+}
+
+// Mort pour de bon : le cadavre reste un moment dans une flaque de sang, et le village
+// a un habitant (ou un chevalier) de moins, pour toujours.
+function killNpc(n, crushed) {
+  if (!alive(n)) return;
+  n.state = 'dead'; n.anim = crushed ? 'crushed' : 'dead'; n.t = 0;
+  n.deadT = 0; n.air = false; n.jz = 0; n.vx = n.vy = 0; n.alertT = 0;
+  deathsOf(n.v)[n.kind]++;
+  if (n.kind === 'knight') stats.knights++; else stats.victims++;
+  const h = world.hAt(Math.floor(n.x), Math.floor(n.y));
+  bloods.push({ x: n.x, y: n.y, h, img: bloodImgs[crushed ? 2 : 1], age: 0 });
+  if (bloods.length > 80) bloods.shift();
+  burst(n.x, n.y, n.z + 4, BLOOD_COLS, crushed ? 30 : 16, { up: crushed ? 70 : 45, speed: crushed ? 2.6 : 1.6, big: 0.5 });
+  sfx.bodyHit(n.kind === 'knight', true);
+  sfx.splat();
+  shake = Math.max(shake, crushed ? 4 : 2.5);
+  crime(4, n.x, n.y);
 }
 
 function npcMove(n, dx, dy) {
@@ -1383,6 +1402,11 @@ function updateNpcs(dt) {
   const night = darkness() > 0.6;
   for (let i = npcs.length - 1; i >= 0; i--) {
     const n = npcs[i];
+    if (!alive(n)) {
+      // le cadavre finit par disparaître (le sang reste un peu plus)
+      if ((n.deadT += dt) > 150) npcs.splice(i, 1);
+      continue;
+    }
     n.alertT = Math.max(0, n.alertT - dt); n.flash = Math.max(0, n.flash - dt);
     n.cd -= dt; n.waveCd -= dt;
     if (n.inside) {
@@ -1398,6 +1422,7 @@ function updateNpcs(dt) {
         n.jz = 0; n.air = false; n.vx *= 0.25; n.vy *= 0.25;
         burst(n.x, n.y, n.z, DUST_COLS, 6, { up: 20, speed: 1.2, g: 60, life: 0.5, spread: 1 });
         if (n.kind === 'knight') sfx.knightDown(); else sfx.step('grass', 0.6);
+        if (n.dying) { killNpc(n, false); continue; }
       }
     } else if (Math.abs(n.vx) + Math.abs(n.vy) > 0.05) {
       npcMove(n, n.vx * dt, n.vy * dt);
@@ -1411,7 +1436,7 @@ function updateNpcs(dt) {
       case 'ko':
         anim = 'ko';
         if (!n.air && (n.koT -= dt) <= 0) {
-          if (n.kind === 'knight') n.state = 'leave'; else startFlee(n);
+          if (n.kind === 'knight') n.state = alarmed(n.v) ? 'chase' : 'guard'; else startFlee(n);
         }
         break;
       case 'hurt':
@@ -1424,7 +1449,7 @@ function updateNpcs(dt) {
         const c = Math.cos(n.fj), sn = Math.sin(n.fj);
         steer(n, n.x + (ax * c - ay * sn) / l * 2, n.y + (ax * sn + ay * c) / l * 2, 3.2 * n.speedK, dt);
         if (n.stuck > 0.6) { n.fj = (Math.random() - 0.5) * 3; n.stuck = 0; }
-        if ((n.fleeT -= dt) <= 0 && d > 11 && time - lastCrime > 6) { n.state = 'wander'; n.wait = 2; }
+        if ((n.fleeT -= dt) <= 0 && d > 11 && !alarmed(n.v)) { n.state = 'wander'; n.wait = 2; }
         break;
       }
       case 'wander':
@@ -1436,11 +1461,13 @@ function updateNpcs(dt) {
           if (Math.hypot(hx - n.x, hy - n.y) < 0.4 || n.stuck > 3) n.inside = true;
           break;
         }
-        if (n.kind === 'civ' && heat >= 1 && d < 7) { startFlee(n); break; }
+        if (n.kind === 'civ' && alarmed(n.v) && d < 7) { startFlee(n); break; }
+        // un garde qui voit Brainless dans un village en alerte lui fonce dessus
+        if (n.kind === 'knight' && alarmed(n.v) && d < 8 && !player.dead) { n.state = 'chase'; n.alertT = 1.2; break; }
         if (n.wait > 0) {
           n.wait -= dt;
           // au calme, ils saluent le monstre qui passe
-          if (n.kind === 'civ' && heat < 1 && d < 4.5 && n.waveCd <= 0 && !player.dead) {
+          if (n.kind === 'civ' && !alarmed(n.v) && d < 4.5 && n.waveCd <= 0 && !player.dead) {
             n.waveT = 2; n.waveCd = 14 + Math.random() * 10;
             sfx.hello(PEOPLE[n.type].voice);
           }
@@ -1454,8 +1481,10 @@ function updateNpcs(dt) {
           }
         }
         break;
-      case 'chase':
-        if (heat <= 0) { n.state = n.guard ? 'guard' : 'leave'; break; }
+      case 'chase': {
+        // il abandonne si le village s'est calmé, ou si Brainless est sorti de son territoire
+        const v = world.villages.get(n.v);
+        if ((!alarmed(n.v) && d > 6) || (v && Math.hypot(player.x - v.cx, player.y - v.cy) > v.R + 25)) { n.state = 'guard'; n.wait = 0; pickTarget(n); break; }
         if (player.dead) break;
         if (d > 0.95) {
           anim = d > 3 ? 'run' : 'walk';
@@ -1465,6 +1494,7 @@ function updateNpcs(dt) {
           if (n.cd <= 0) { n.state = 'attack'; n.atkT = 0; n.hitDone = false; sfx.swordSwing(); }
         }
         break;
+      }
       case 'attack':
         anim = 'attack';
         n.atkT += dt / 0.5;
@@ -1474,14 +1504,6 @@ function updateNpcs(dt) {
         }
         if (n.atkT >= 1) { n.state = 'chase'; n.cd = 0.8 + Math.random() * 0.6; }
         break;
-      case 'leave': {
-        anim = 'walk';
-        if (!n.beaten && heat >= 1) { n.state = 'chase'; break; }
-        const ax = n.x - player.x, ay = n.y - player.y, l = Math.hypot(ax, ay) || 1;
-        steer(n, n.x + ax / l * 2, n.y + ay / l * 2, 1.6, dt);
-        if (d > 18) { npcs.splice(i, 1); continue; }
-        break;
-      }
     }
     if (n.anim !== anim) { n.anim = anim; n.t = 0; }
     n.t += dt * PEOPLE_ANIMS[n.kind][anim].fps;
@@ -1489,10 +1511,10 @@ function updateNpcs(dt) {
   // ils ne se marchent pas dessus, et s'écartent du chemin de Brainless
   for (let i = 0; i < npcs.length; i++) {
     const a = npcs[i];
-    if (a.inside || a.air) continue;
+    if (a.inside || a.air || !alive(a)) continue;
     for (let j = i + 1; j < npcs.length; j++) {
       const b = npcs[j];
-      if (b.inside || b.air) continue;
+      if (b.inside || b.air || !alive(b)) continue;
       const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy);
       if (d > 0.45 || d === 0) continue;
       const k = (0.45 - d) / d * 0.5;
@@ -1500,6 +1522,22 @@ function updateNpcs(dt) {
     }
     const dx = a.x - player.x, dy = a.y - player.y, d = Math.hypot(dx, dy);
     if (d < 0.6 && d > 0 && !player.dead) npcMove(a, dx / d * (0.6 - d), dy / d * (0.6 - d));
+  }
+}
+
+// Après avoir flairé : des filets d'odeur arrivent de la direction du village jusqu'à son nez.
+function updateScent(dt) {
+  if (!scent) return;
+  if ((scent.t -= dt) <= 0) { scent = null; return; }
+  const dx = scent.v.cx + 0.5 - player.x, dy = scent.v.cy + 0.5 - player.y, d = Math.hypot(dx, dy) || 1;
+  if (d < scent.v.R) return; // il y est
+  if (Math.random() < dt * 14 * Math.min(1, scent.t / 2)) {
+    const ux = dx / d, uy = dy / d, side = (Math.random() - 0.5) * 2.5, far = 3 + Math.random() * 3, life = 0.9 + Math.random() * 0.5;
+    const x = player.x + ux * far - uy * side, y = player.y + uy * far + ux * side;
+    particles.push({
+      x, y, z: player.z + 20 + Math.random() * 10, vx: (player.x - x) / life, vy: (player.y - y) / life, vz: 6,
+      g: 0, drag: 0, life, col: ['#ff6b7a', '#ff9aa8', '#c83444'][(Math.random() * 3) | 0], size: 1, streak: true,
+    });
   }
 }
 
@@ -1557,6 +1595,27 @@ function addSkidMarks(s, cx, cy) {
     decals.push({ x, y, h: world.hAt(tx, ty), age: 0, col: MARK_COLS[world.typeAt(tx, ty)] || '#3d2b1a' });
   }
   if (decals.length > 1500) decals.splice(0, decals.length - 1500);
+}
+
+// Le village le plus proche qui a encore des habitants vivants (jusqu'à ~3 régions).
+function nearestPrey() {
+  const rx = Math.floor(player.x / VG), ry = Math.floor(player.y / VG);
+  let best = null;
+  for (let j = -3; j <= 3; j++) for (let i = -3; i <= 3; i++) {
+    const v = world.villageIn(rx + i, ry + j);
+    if (!v) continue;
+    const dd = world.deaths.get(v.id) || { civ: 0, knight: 0 }, left = v.folk - dd.civ + v.garrison - dd.knight;
+    const d = Math.hypot(v.cx + 0.5 - player.x, v.cy + 0.5 - player.y);
+    if (left > 0 && (!best || d < best.d)) best = { v, d, left };
+  }
+  return best;
+}
+
+function doSniff() {
+  const p = nearestPrey();
+  if (!p) { showMsg('RIEN A FLAIRER...', 2.5); return; }
+  scent = { v: p.v, t: 12 };
+  sfx.growl();
 }
 
 function startAction(a) {
@@ -1663,6 +1722,12 @@ function render() {
   }
   // traces de dérapage rangées par rangée pour être dessinées sur le sol, sous les objets
   const decalRows = new Map();
+  for (const m of bloods) {
+    const r = Math.floor(m.x) + Math.floor(m.y);
+    let l = decalRows.get(r);
+    if (!l) decalRows.set(r, l = []);
+    l.push(m);
+  }
   for (const m of decals) {
     const r = Math.floor(m.x) + Math.floor(m.y);
     let l = decalRows.get(r);
@@ -1700,6 +1765,11 @@ function render() {
     const marks = decalRows.get(d);
     if (marks) {
       for (const m of marks) {
+        if (m.img) {
+          ctx.globalAlpha = Math.min(1, (180 - m.age) / 20);
+          ctx.drawImage(m.img, Math.round(ox + isoX(m.x, m.y) - m.img.ox), Math.round(oy + isoY(m.x, m.y) - m.h * 8 - m.img.oy));
+          continue;
+        }
         ctx.globalAlpha = Math.min(0.85, (9 - m.age) / 4);
         ctx.fillStyle = m.col;
         ctx.fillRect(Math.round(ox + isoX(m.x, m.y)) - 1, Math.round(oy + isoY(m.x, m.y) - m.h * 8), 3, 1);
@@ -1792,6 +1862,12 @@ function drawFade() {
 function drawNpc(n, ox, oy) {
   const sx = ox + Math.round(isoX(n.x, n.y)), sy = oy + Math.round(isoY(n.x, n.y)) - Math.round(n.z);
   const jz = Math.round(n.jz);
+  if (!alive(n)) {
+    ctx.globalAlpha = Math.min(1, (150 - n.deadT) / 10);
+    ctx.drawImage(peopleImgs[n.type][n.anim][n.dir][0], sx - PEOPLE_OX, sy - PEOPLE_OY);
+    ctx.globalAlpha = 1;
+    return;
+  }
   ctx.drawImage(shadows.s, sx - shadows.s.ox, sy - shadows.s.oy);
   const A = PEOPLE_ANIMS[n.kind][n.anim];
   const f = n.anim === 'attack' ? Math.min(A.frames - 1, Math.floor(Math.max(0, n.atkT) * A.frames)) : Math.floor(n.t) % A.frames;
@@ -2087,22 +2163,33 @@ function drawHpBar(x, y) {
   ctx.fillRect(bx + 1, y, fill, 1);
 }
 
-// Étoiles de recherche : plus il y en a, plus il vient de chevaliers.
-const STAR = ['..#..', '.###.', '#####', '.###.', '.#.#.'];
-function drawStars(x, y) {
-  drawText(ctx, 'RECHERCHE', x, y, '#ffe28a');
-  const n = stars();
-  for (let i = 0; i < 5; i++) {
-    const on = i < n;
-    const col = on ? (starFlash > 0 && Math.floor(time * 10) % 2 ? '#ffffff' : '#ffd23f') : '#3a3550';
-    for (let r = 0; r < 5; r++) for (let c = 0; c < 5; c++) {
-      if (STAR[r][c] !== '#') continue;
-      ctx.fillStyle = 'rgba(0,0,0,0.6)';
-      ctx.fillRect(x + 40 + i * 7 + c + 1, y + r + 1, 1, 1);
-      ctx.fillStyle = col;
-      ctx.fillRect(x + 40 + i * 7 + c, y + r, 1, 1);
+// Le flair : une flèche autour de Brainless pointe vers la viande fraîche, avec la distance.
+function drawScent() {
+  if (!scent) return;
+  const v = scent.v, dx = v.cx + 0.5 - player.x, dy = v.cy + 0.5 - player.y, d = Math.hypot(dx, dy);
+  ctx.globalAlpha = Math.min(1, scent.t / 1.5);
+  const here = d < v.R;
+  const l1 = 'VIANDE FRAICHE', l2 = here ? v.name + ' - ICI' : v.name + '  ' + Math.round(d) + ' PAS';
+  const y = Math.round(VH * 0.18);
+  drawText(ctx, l1, Math.round(VW / 2 - textWidth(l1) / 2), y, '#ff6b7a');
+  drawText(ctx, l2, Math.round(VW / 2 - textWidth(l2) / 2), y + 8, '#ffd0d6');
+  if (!here) {
+    // direction à l'écran
+    let sdx = (dx - dy) * 16, sdy = (dx + dy) * 8;
+    const l = Math.hypot(sdx, sdy) || 1;
+    sdx /= l; sdy /= l;
+    const cx = VW / 2 + sdx * (26 + Math.sin(time * 6) * 2), cy = VH / 2 + sdy * 26 - 6;
+    const px = -sdy, py = sdx;
+    for (let yy = -8; yy <= 8; yy++) for (let xx = -8; xx <= 8; xx++) {
+      // triangle : pointe devant, base derrière
+      const a = xx * sdx + yy * sdy, b = xx * px + yy * py;
+      if (a < -3 || a > 5 || Math.abs(b) > (5 - a) * 0.55) continue;
+      const edge = a < -2 || a > 4 || Math.abs(b) > (5 - a) * 0.55 - 1;
+      ctx.fillStyle = edge ? '#4e0c18' : '#ff5a5e';
+      ctx.fillRect(Math.round(cx + xx), Math.round(cy + yy), 1, 1);
     }
   }
+  ctx.globalAlpha = 1;
 }
 
 function drawMuteButton() {
@@ -2123,9 +2210,9 @@ function drawMuteButton() {
 }
 
 const HINTS = {
-  touch: ['MAINTIENS B POUR CHARGER', 'SPRINT: MAINTIENS >> EN MARCHANT'],
-  keys: ['ZQSD: BOUGER  MAJ: SPRINT  ESPACE: SAUT', 'J/CLIC: COUP (MAINTENIR = CHARGE)', 'K/CLIC DROIT: FRAPPE AU SOL  F: PLEIN ECRAN'],
-  pad: ['STICK: BOUGER  B/R2: SPRINT  A: SAUT', 'X: COUP (MAINTENIR = CHARGE)', 'Y: FRAPPE AU SOL  SELECT: SON'],
+  touch: ['MAINTIENS B POUR CHARGER', 'SPRINT: MAINTIENS >> EN MARCHANT', 'N: FLAIRER LA VIANDE FRAICHE'],
+  keys: ['ZQSD: BOUGER  MAJ: SPRINT  ESPACE: SAUT', 'J/CLIC: COUP (MAINTENIR = CHARGE)', 'K/CLIC DROIT: FRAPPE AU SOL  R: FLAIRER', 'F: PLEIN ECRAN'],
+  pad: ['STICK: BOUGER  B/R2: SPRINT  A: SAUT', 'X: COUP (MAINTENIR = CHARGE)', 'Y: FRAPPE AU SOL  L1: FLAIRER', 'SELECT: SON'],
 };
 
 function drawHUD() {
@@ -2133,10 +2220,10 @@ function drawHUD() {
   const x0 = 6 + safe.l, y0 = 6 + safe.t;
   drawText(ctx, 'BRAINLESS', x0, y0, '#f6a6bd');
   const night = darkness() > 0.5;
-  drawText(ctx, (night ? 'NUIT' : 'JOUR') + '  ARBRES ' + stats.trees + '  ROCHERS ' + stats.rocks + '  MAISONS ' + stats.houses, x0, y0 + 8, '#e8f0ff');
+  drawText(ctx, (night ? 'NUIT' : 'JOUR') + '  ARBRES ' + stats.trees + '  MAISONS ' + stats.houses + '  VICTIMES ' + (stats.victims + stats.knights), x0, y0 + 8, '#e8f0ff');
   drawSprintBar(x0, y0 + 17);
   drawHpBar(x0, y0 + 26);
-  if (heat > 0) drawStars(x0, y0 + 35);
+  drawScent();
   drawMuteButton();
   if (msg) {
     ctx.globalAlpha = Math.min(1, msg.t / 0.6);
@@ -2160,7 +2247,7 @@ function drawHUD() {
     ctx.drawImage(ui.ring, Math.round(joy.bx - ui.ring.ox), Math.round(joy.by - ui.ring.oy));
     ctx.drawImage(ui.knob, Math.round(joy.kx - ui.knob.ox), Math.round(joy.ky - ui.knob.oy));
   }
-  for (const k of ['a', 'b', 'j', 's']) {
+  for (const k of ['a', 'b', 'j', 's', 'n']) {
     const b = buttons[k];
     const img = ui[k];
     const press = held(k) ? 1 : 0;
@@ -2186,7 +2273,7 @@ function frame(now) {
   load();
   if (location.hash === '#debug') {
     window.BRAINLESS = { world, player, stats, O, T, decals, particles, npcs, damage, hurtPlayer,
-      get heat() { return heat; }, set heat(v) { heat = v; lastCrime = time; crimeVillage = villageAt(player.x, player.y, 30); },
+      vstate, crime, killNpc, hitNpc, nearestPrey, get scent() { return scent; },
       get tod() { return tod; }, set tod(v) { tod = v; }, crackTile, craterTile, doSlam, doBigPunch };
   }
   await loadAssets();

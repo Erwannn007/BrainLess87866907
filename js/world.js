@@ -70,7 +70,7 @@ for (const name in BUILDINGS) {
 }
 
 const CS = 32;
-const VG = 80; // une région de 80x80 tuiles a au plus un village
+export const VG = 80; // une région de 80x80 tuiles a au plus un village
 export const VILLAGE_KINDS = ['HAMEAU', 'VILLAGE', 'GRAND VILLAGE'];
 
 export class World {
@@ -81,6 +81,7 @@ export class World {
     this.terr = new Map(); // "x,y" -> [type, hauteur, instant] : sol creusé par les coups
     this.wear = new Map(); // "x,y" -> [niveau 1..3, instant] : sol fissuré
     this.villages = new Map();
+    this.deaths = new Map(); // id du village -> { civ, knight } : les morts ne reviennent pas
     this._lastKey = null;
     this._lastChunk = null;
   }
@@ -335,7 +336,8 @@ export class World {
     }
     if (hv === null) return null;
 
-    const v = { id: rx + ',' + ry, kind, name: VILLAGE_KINDS[kind], cx, cy, R, hv, cells: new Map(), houses: [], tower: null };
+    // garnison : un nombre fixe de chevaliers par village, sans renforts
+    const v = { id: rx + ',' + ry, kind, name: VILLAGE_KINDS[kind], cx, cy, R, hv, cells: new Map(), houses: [], tower: null, garrison: [1, 3, 5][kind], folk: 0 };
     const K = (x, y) => x + ',' + y;
     const occ = new Set(); // tuiles réservées (bâtiments + leur marge)
     const bld = new Set(); // tuiles sous un bâtiment
@@ -377,6 +379,8 @@ export class World {
         break;
       }
     }
+
+    v.folk = Math.min(12, 2 + v.houses.length);
 
     // chemins de terre de chaque porte jusqu'à la place
     for (const h of v.houses) {

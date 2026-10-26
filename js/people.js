@@ -1,6 +1,6 @@
 // Villageois et chevaliers : petits squelettes en capsules, comme Brainless, cuits en
 // frames x 8 directions. Un humain fait ~27 px de haut (Brainless ~40 px).
-import { renderModel, ramp, rotZ, add, ik } from './raster.js';
+import { renderModel, ramp, rotZ, add, ik, hash, makeBuffer } from './raster.js';
 import { dirFacing } from './nomu.js';
 
 const SKIN_A = ramp('#7a4632', '#b5714f', '#e0a27a', '#f6c9a0');
@@ -23,6 +23,7 @@ const SHOE = ramp('#1a100a', '#2e1c10', '#4a2e1a', '#6b4426');
 const WOODC = ramp('#3d2614', '#5e3d22', '#86593a', '#a87a52');
 const PLUME = ramp('#5e0c18', '#9c1628', '#d22838', '#ff5a5e');
 const EYE = [24, 16, 14];
+const BLOOD = ramp('#3e060c', '#6e0e18', '#a01824', '#d02c36');
 
 // Les habitants. `voice` = hauteur du cri (Hz).
 export const PEOPLE = {
@@ -38,11 +39,12 @@ export const CIVILIANS = ['farmer', 'woman', 'child', 'elder', 'merchant'];
 export const PEOPLE_ANIMS = {
   civ: {
     idle: { frames: 4, fps: 4 }, walk: { frames: 6, fps: 9 }, flee: { frames: 6, fps: 13 },
-    wave: { frames: 4, fps: 7 }, ko: { frames: 1, fps: 1 },
+    wave: { frames: 4, fps: 7 }, ko: { frames: 1, fps: 1 }, dead: { frames: 1, fps: 1 }, crushed: { frames: 1, fps: 1 },
   },
   knight: {
     idle: { frames: 4, fps: 4 }, walk: { frames: 6, fps: 9 }, run: { frames: 6, fps: 12 },
     attack: { frames: 6, fps: 12 }, hurt: { frames: 2, fps: 8 }, ko: { frames: 1, fps: 1 },
+    dead: { frames: 1, fps: 1 }, crushed: { frames: 1, fps: 1 },
   },
 };
 
@@ -99,8 +101,9 @@ export function personPose(kind, anim, t) {
     p.hR = [5 + Math.sin(ph) * 1.6, 1.2, 21.5];
     p.twist = 0.1 + s * 0.05;
     p.bob = Math.abs(s) * 0.3;
-  } else if (anim === 'ko') {
+  } else if (anim === 'ko' || anim === 'dead' || anim === 'crushed') {
     p.fall = 1;
+    p.blood = anim !== 'ko' ? 1 : 0;
     p.hL = [-6.5, 1.5, 11]; p.hR = [6.5, 0, 12];
     p.fL = [-2.6, 0, 0]; p.fR = [2.4, 1, 0];
     p.sword = [0.9, 0.2, 0.3];
@@ -241,6 +244,17 @@ export function personParts(type, P) {
     if (D.beret) parts.push({ a: add(head, rotZ([0, -0.7, hr * 0.95], P.twist)), r1: hr * 0.68, ramp: D.beret, group: 10 });
   }
 
+  // mort : du sang sur les vêtements et la peau
+  if (P.blood) {
+    for (const part of parts) {
+      const t0 = part.tex;
+      part.tex = (p) => {
+        const r = t0 ? t0(p) : p.shade;
+        if (r === null) return null;
+        return hash(p.x >> 1, p.y, 77) < 0.3 ? BLOOD[Math.min(3, Math.max(1, p.shade))] : r;
+      };
+    }
+  }
   // KO : tout le corps bascule sur le dos
   if (P.fall) {
     const th = P.fall * Math.PI / 2, cs = Math.cos(th), sn = Math.sin(th);
@@ -252,8 +266,27 @@ export function personParts(type, P) {
 
 export function renderPerson(type, anim, t, dir) {
   const D = PEOPLE[type];
-  return renderModel(personParts(type, personPose(D.kind, anim, t)), {
+  const buf = renderModel(personParts(type, personPose(D.kind, anim, t)), {
     w: PEOPLE_W, h: PEOPLE_H, ox: PEOPLE_OX, oy: PEOPLE_OY,
     facing: dirFacing(dir), scale: D.scale || 1,
   });
+  return anim === 'crushed' ? squash(buf, dir) : buf;
+}
+
+// Écrasé par la frappe au sol : le corps est aplati contre le sol et élargi, éclaboussé de sang.
+function squash(src, seed) {
+  const { w, h, ox, oy } = src;
+  const out = makeBuffer(w, h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const sx = Math.round(ox + (x - ox) / 1.25), sy = Math.round(oy + (y - oy) / 0.42);
+    if (sx < 0 || sy < 0 || sx >= w || sy >= h) continue;
+    const o = (sy * w + sx) * 4;
+    if (src.data[o + 3]) out.set(x, y, [src.data[o], src.data[o + 1], src.data[o + 2]]);
+  }
+  for (let i = 0; i < 26; i++) {
+    const a = hash(i, seed, 3) * Math.PI * 2, r = 6 + hash(i, seed, 4) * 9;
+    const x = Math.round(ox + Math.cos(a) * r), y = Math.round(oy + Math.sin(a) * r * 0.45);
+    if (!out.get(x, y)) out.set(x, y, BLOOD[1 + (i % 3)]);
+  }
+  return Object.assign(out, { ox, oy });
 }

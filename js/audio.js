@@ -320,6 +320,37 @@ export const sfx = {
     noise({ type: 'highpass', f: 5000, gain: 0.25, dec: 0.08 });
     tone({ f: 110, f2: 60, gain: 0.35, dec: 0.1 });
   },
+  // Coup encaissé par un habitant : impact lourd, armure qui sonne, et parfois des os qui craquent.
+  bodyHit(armor, crack) {
+    if (!ready() || !gate('body', 0.05)) return;
+    tone({ f: rnd(70, 85), f2: 30, gain: 0.95, dec: 0.25, rev: 0.2 });
+    noise({ type: 'lowpass', f: 650, gain: 0.55, dec: 0.16 });
+    tone({ f: 140, f2: 60, type: 'triangle', gain: 0.35, dec: 0.12 });
+    if (armor) {
+      tone({ f: rnd(2200, 2700), gain: 0.07, dec: 0.3 });
+      noise({ type: 'highpass', f: 5000, gain: 0.16, dec: 0.06 });
+    }
+    if (crack) {
+      for (let i = 0; i < 3; i++) noise({ f: rnd(2400, 3400), q: 3, gain: 0.32, dec: 0.035, delay: 0.02 + i * rnd(0.02, 0.035) });
+      for (let i = 0; i < 3; i++) tone({ f: rnd(1100, 2400), type: 'square', gain: 0.04, dec: 0.02, delay: 0.03 + i * 0.03 });
+    }
+  },
+  splat() {
+    if (!ready() || !gate('splat', 0.08)) return;
+    noise({ type: 'lowpass', f: 900, f2: 280, gain: 0.55, dec: 0.28 });
+    noise({ f: 420, q: 1.5, gain: 0.3, dec: 0.2, delay: 0.02 });
+    tone({ f: 90, f2: 38, gain: 0.6, dec: 0.25 });
+  },
+  sniff() {
+    if (!ready() || !gate('sniff', 0.8)) return;
+    for (let i = 0; i < 4; i++) noise({ f: 1500 + i * 150, q: 2.2, gain: 0.16, a: 0.03, dec: 0.08, delay: 0.25 + i * 0.17 });
+    noise({ f: 900, q: 1.2, gain: 0.12, a: 0.15, dec: 0.3, delay: 0.95 }); // grande inspiration
+  },
+  growl() {
+    if (!ready() || !gate('growl', 0.8)) return;
+    tone({ f: 120, f2: 85, type: 'sawtooth', gain: 0.22, a: 0.08, dec: 0.6, lp: 500 });
+    tone({ f: 61, f2: 43, type: 'square', gain: 0.08, a: 0.08, dec: 0.6, lp: 300 });
+  },
   swordSwing() {
     if (!ready() || !gate('sword', 0.08)) return;
     noise({ f: 900, f2: 3200, q: 2, gain: 0.2, a: 0.04, dec: 0.12 });

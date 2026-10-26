@@ -391,6 +391,25 @@ export function crackBuffer(mat, level, v) {
   return Object.assign(b, { ox: 16, oy: 0 });
 }
 
+// Flaque de sang au sol (ellipse 2:1 aux bords irréguliers, quelques gouttes autour).
+export function bloodBuffer(rw, seed) {
+  const B = ramp('#3e060c', '#6e0e18', '#a01824', '#d02c36');
+  const w = rw * 2 + 10, h = rw + 8;
+  const b = makeBuffer(w, h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const dx = (x + 0.5 - w / 2) / rw, dy = (y + 0.5 - h / 2) / (rw / 2);
+    const d = dx * dx + dy * dy, edge = 0.7 + hash(x >> 1, y, seed) * 0.45;
+    if (d > edge) continue;
+    const r = hash(x, y, seed + 1);
+    b.set(x, y, B[d > edge - 0.25 ? 0 : r > 0.93 ? 3 : r < 0.3 ? 1 : 2]);
+  }
+  for (let i = 0; i < rw; i++) {
+    const a = hash(i, seed, 2) * Math.PI * 2, r = rw * (1.05 + hash(i, seed, 3) * 0.4);
+    b.set(Math.round(w / 2 + Math.cos(a) * r), Math.round(h / 2 + Math.sin(a) * r * 0.5), B[1]);
+  }
+  return Object.assign(b, { ox: w / 2, oy: h / 2 });
+}
+
 // Lignes de bord : 0 haut-gauche, 1 haut-droite, 2 bas-droite, 3 bas-gauche.
 export function edgeBuffer(edge, color, alpha, thick = 1) {
   const b = makeBuffer(TILE_W, TILE_H);

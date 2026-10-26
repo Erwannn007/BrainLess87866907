@@ -19,7 +19,9 @@ s'installe sur l'écran d'accueil (PWA, marche hors-ligne).
 - Son : tout est synthétisé en direct (pas, galop, coups, arbres qui craquent et tombent, rochers, charge, cri, frappe au sol, vent, eau, oiseaux le jour, grillons la nuit). Icône haut-parleur en haut à droite (ou M) pour couper.
 - **Villages** : hameaux, villages et grands villages (chaumières, maisons à colombages, granges, auberges, tours de guet, puits, étals, champs). Chaque bâtiment tremble sous les coups, s'abîme puis s'effondre ; un coup chargé rase tout ce qui est près et abîme ce qui est plus loin. La nuit, les fenêtres et les lanternes s'allument.
 - **Habitants** : paysans, paysannes, enfants, anciens, marchands. Ils te saluent quand tu es calme, rentrent dormir la nuit, fuient en criant si tu fais le méchant.
-- **Recherche** : casser le village fait monter les étoiles, et des chevaliers viennent te combattre. Barre de VIE ; Brainless se régénère tout seul. À 0, il s'effondre et se réveille au départ.
+- **Chevaliers** : chaque village a sa propre garnison (1, 3 ou 5 chevaliers), sans renforts. Si tu fais le méchant, la cloche sonne et ceux qui sont assez près te chargent. Barre de VIE ; Brainless se régénère tout seul. À 0, il s'effondre et se réveille au départ.
+- **Tuer** : la frappe au sol écrase ceux qui sont sous toi ; frapper quelqu'un de KO l'achève. Les morts ne reviennent pas.
+- **Flair** (bouton N, touche R, L1 à la manette) : Brainless lève la tête, renifle, et une flèche indique le village le plus proche où il reste de la viande fraîche.
 - **Sol abîmé** : les coups chargés fissurent le sol et creusent des cratères ; l'herbe repousse avec le temps.
 - La position, les arbres abattus, les maisons détruites, le sol creusé et l'heure sont sauvegardés automatiquement.
 

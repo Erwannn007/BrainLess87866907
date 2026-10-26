@@ -40,6 +40,7 @@ export const ANIMS = {
   tread: { frames: 8, fps: 7, loop: true }, // nage sur place
   swimfast: { frames: 8, fps: 11, loop: true }, // sprint dans l'eau
   down: { frames: 8, fps: 8, loop: false }, // à bout de forces, il s'effondre
+  sniff: { frames: 12, fps: 8, loop: false }, // tête levée, il renifle l'air
 };
 
 const smooth = (u) => u * u * (3 - 2 * u);
@@ -232,6 +233,13 @@ export function poseFor(anim, t) {
     p.jaw = 1;
     p.bob = k * 0.4;
     p.twist = -0.12 + j * 0.04;
+    return p;
+  }
+  if (anim === 'sniff') {
+    // Il se redresse, lève le bec au ciel et renifle par petits coups.
+    const up = { lean: -2.2, pitch: -0.3, headUp: 7.5, jaw: 0.35, hL: [-10, 0, 13], hR: [10, 0, 13], crouch: 1, breathe: 1 };
+    const p = keyed([{ t: 0, p: {} }, { t: 0.22, p: up }, { t: 0.85, p: up }, { t: 1, p: {} }], t);
+    if (t > 0.22 && t < 0.85) { p.nod = Math.sin(t * Math.PI * 2 * 7) * 1.1; p.breathe = 1 + Math.sin(t * Math.PI * 2 * 3.5); }
     return p;
   }
   if (anim === 'down') {

@@ -5,6 +5,7 @@
 //   X (gauche)            : coup (maintenir = coup chargé)
 //   Y (haut)              : frappe au sol (maintenir pour charger)
 //   B (droite), R1, R2, L3 : sprint (maintenir)
+//   L1                    : flairer
 //   Select                : couper le son
 const DEAD = 0.2;
 const prev = [];
@@ -12,7 +13,7 @@ const prev = [];
 export const pad = {
   connected: false, x: 0, y: 0,
   sprint: false, charge: false, punch: false,
-  jumpPressed: false, punchPressed: false, mutePressed: false, any: false,
+  jumpPressed: false, punchPressed: false, mutePressed: false, sniffPressed: false, any: false,
 };
 
 let active = null; // la manette utilisée en dernier
@@ -20,7 +21,7 @@ let active = null; // la manette utilisée en dernier
 const down = (gp, i) => !!(gp.buttons[i] && (gp.buttons[i].pressed || gp.buttons[i].value > 0.5));
 
 export function pollPad() {
-  pad.jumpPressed = pad.punchPressed = pad.mutePressed = pad.any = false;
+  pad.jumpPressed = pad.punchPressed = pad.mutePressed = pad.sniffPressed = pad.any = false;
   const list = navigator.getGamepads ? navigator.getGamepads() : [];
   let gp = null;
   for (const g of list) {
@@ -53,6 +54,7 @@ export function pollPad() {
   pad.jumpPressed = pressed(0);
   pad.punchPressed = pressed(2);
   pad.mutePressed = pressed(8);
+  pad.sniffPressed = pressed(4);
   pad.any = now.some(Boolean) || m > DEAD;
   prev[gp.index] = now;
   return pad;

@@ -173,15 +173,27 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
 - Même moteur que Brainless (capsules + sphères, `renderModel`), environ 27 px de haut (enfant
   ~19 px), 48x54, origine (24, 45). Visage = partie avant de la tête (`dot(n, fc)`), cheveux au-dessus.
 - Villageois : paysan (chapeau de paille), paysanne (robe, tablier, foulard), enfant, ancien
-  (barbe, canne, dos voûté), marchand (béret, tablier). Anims : `idle walk flee wave ko`.
+  (barbe, canne, dos voûté), marchand (béret, tablier). Anims : `idle walk flee wave ko dead crushed`.
 - Chevalier : armure `#353b48 #626b7c #9aa3b4 #dfe5ee`, tabard bleu à croix dorée, plumet rouge,
-  épée, bouclier. Anims : `idle walk run attack hurt ko`.
+  épée, bouclier. Anims : `idle walk run attack hurt ko dead crushed`.
+- Morts : `dead` = la pose KO tachée de sang (`#3e060c #6e0e18 #a01824 #d02c36`), `crushed` = la
+  même image aplatie (x1.25 en largeur, x0.42 en hauteur) et éclaboussée. Au sol, une flaque
+  (`bloodBuffer`) qui s'efface en 3 min ; le cadavre en 2 min 30.
 - Comportement : ils se promènent, saluent Brainless quand il est calme, rentrent dormir la nuit,
   s'enfuient en criant quand il fait le méchant, volent et tombent KO (étoiles) quand on les frappe.
-- **Méchanceté** (`heat`) : casser le village ou frapper ses habitants la fait monter. Étoiles à
-  1/6/14/26/40 → 1, 2, 3, 5, 7 chevaliers qui sortent de la tour ou des portes. Elle redescend
-  quand plus aucun chevalier ne le talonne. Vie de Brainless : 100, super régénération après 3 s
-  sans coup ; à 0 il s'effondre et se réveille au départ.
+- **Garnisons, pas de renforts** : chaque village a un nombre fixe d'habitants (`folk`) et de
+  chevaliers (`garrison` : hameau 1, village 3, grand village 5) qui patrouillent. Les morts sont
+  comptés par village (`world.deaths`, sauvegardé) et ne reviennent jamais. Un méfait fait monter
+  la colère du village (`anger`) ; au-dessus de 1, la cloche sonne et seuls les gens de CE village
+  assez proches réagissent (pas de messager). Les chevaliers abandonnent quand le village s'est
+  calmé (25 s) ou quand Brainless quitte leur territoire.
+- **Tuer** : la frappe au sol écrase tous ceux qui sont sous lui (`crushed`) ; frapper quelqu'un
+  de KO à terre l'achève ; un gros coup chargé à bout portant tue en retombant.
+- Vie de Brainless : 100, super régénération après 3 s sans coup ; à 0 il s'effondre et se
+  réveille au départ, et les villages se calment.
+- **Flair** (N / R / L1) : il lève la tête et renifle (`sniff`), puis une flèche, la distance et
+  des filets d'odeur rouges indiquent pendant 12 s le village le plus proche qui a encore des
+  vivants (`nearestPrey`).
 
 ## 8. Effets visuels
 
