@@ -41,21 +41,23 @@ export const BEAST_W = 56, BEAST_H = 56, BEAST_OX = 28, BEAST_OY = 44;
 // Pose : position des 4 pattes (décalage avant/arrière et levée), tête, corps.
 function pose(type, anim, t) {
   const ph = t * Math.PI * 2, s = Math.sin(ph), c = Math.cos(ph);
+  // foulées et pas proportionnés à la longueur des pattes (un lapin ne fait pas des pas de cerf)
+  const k = Math.min(1, BEASTS[type].legLen / 7);
   const p = { legs: [[0, 0], [0, 0], [0, 0], [0, 0]], headDown: 0, bob: 0, lunge: 0, dead: anim === 'dead' || anim === 'crushed' };
   // ordre des pattes : avant gauche, avant droite, arrière gauche, arrière droite
   if (anim === 'idle') { p.headDown = type === 'wolf' ? 0 : 0.6 + 0.4 * Math.max(0, s); p.bob = s * 0.15; } // le loup ne broute pas
   else if (anim === 'walk') {
-    const leg = (o) => [Math.sin(ph + o) * 1.6, Math.max(0, Math.cos(ph + o)) * 1];
+    const leg = (o) => [Math.sin(ph + o) * 1.6 * k, Math.max(0, Math.cos(ph + o)) * k];
     p.legs = [leg(0), leg(Math.PI), leg(Math.PI), leg(0)];
     p.bob = Math.abs(s) * 0.3;
   } else if (anim === 'run') {
     // galop bondissant : les pattes avant ensemble, puis les arrière
-    const leg = (o) => [Math.sin(ph + o) * 3, Math.max(0, Math.cos(ph + o)) * 2.2];
+    const leg = (o) => [Math.sin(ph + o) * 3 * k, Math.max(0, Math.cos(ph + o)) * 2.2 * k];
     p.legs = [leg(0), leg(0.3), leg(Math.PI), leg(Math.PI + 0.3)];
     p.bob = Math.max(0, s) * 1.4;
   } else if (anim === 'attack') {
     p.lunge = Math.sin(t * Math.PI) * 3; p.headDown = 0.8 - Math.sin(t * Math.PI) * 1.2;
-    p.legs = [[1.5, 0.5], [1.5, 0.5], [-1.5, 0], [-1.5, 0]];
+    p.legs = [[1.5 * k, 0.5 * k], [1.5 * k, 0.5 * k], [-1.5 * k, 0], [-1.5 * k, 0]];
   }
   return p;
 }

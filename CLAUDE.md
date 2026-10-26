@@ -55,13 +55,17 @@ du même jeu.
   - `group` : les parties d'un même groupe n'ont pas de ligne de contour entre elles.
   - `facing = [cx, ct]` : direction du regard dans le plan caméra. Le personnage a 8 directions,
     `dirFacing(k)` avec `k * 45°`, et `k = 2` = face caméra.
-- `ik(racine, bout, l1, l2, plier)` : genoux et coudes en cinématique inverse.
+- `ik(racine, bout, l1, l2, plier)` : genoux et coudes en cinématique inverse (le bout est
+  maintenu à bonne distance de la racine, sinon le genou part à l'infini).
 - **Planches de sprites** (`toSprite` / `draw` dans `main.js`) : au chargement, chaque sprite cuit
   (Brainless, habitants, animaux, bâtiments, objets, fissures, sang) est rogné au plus près de son
   dessin puis rangé dans une planche de 2048x2048. On le dessine avec `draw(sprite, x, y)` (coin
   haut-gauche = position du point d'ancrage moins `sprite.ox/oy`), jamais avec `ctx.drawImage`
   directement. Tout tient aujourd'hui dans une seule planche (~17 Mo). Les tuiles, l'eau, les
   ombres et les boutons restent de petits canvas à part.
+- Les cadres de cuisson sont larges exprès (le rognage les rend gratuits) : un membre ne doit
+  jamais toucher le bord du cadre, sinon il est coupé net. Vérifier avec un scan de toutes les
+  frames avant d'ajouter un modèle.
 - `makeBuffer(w, h)` + `outlineBuffer(buf, k)` : dessin pixel par pixel (fleurs, herbes, UI).
 
 ## 4. Brainless (`js/nomu.js`)
@@ -84,7 +88,7 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
 | Yeux | `#7c6a1c #c9b44a #eee298 #fffbe0` (pupille 1 px) |
 | Pointes des griffes | `#3a3f78 #585ea0 #8086c4 #aab0e0` |
 
-- Sprite : 64×76, origine (32, 62), `SCALE = 0.75`, environ 40 px de haut debout.
+- Sprite : 88×88, origine (44, 70), `SCALE = 0.75`, environ 40 px de haut debout.
 - Une animation = une fonction `poseFor(anim, t)` qui renvoie une pose. On l'écrit soit avec des
   sinus (cycles : marche, galop, nage), soit avec `keyed([{t, p}])` (actions : coups, frappe au
   sol, saut). Paramètres d'une pose : `fL fR` (pieds), `hL hR` (mains), `bob lean twist hipTwist
@@ -181,7 +185,7 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
 ## 7. Habitants (`js/people.js`)
 
 - Même moteur que Brainless (capsules + sphères, `renderModel`), environ 27 px de haut (enfant
-  ~19 px), 48x54, origine (24, 45). Visage = partie avant de la tête (`dot(n, fc)`), cheveux au-dessus.
+  ~19 px), 64x62, origine (32, 50). Visage = partie avant de la tête (`dot(n, fc)`), cheveux au-dessus.
 - Villageois : paysan (chapeau de paille), paysanne (robe, tablier, foulard), enfant, ancien
   (barbe, canne, dos voûté), marchand (béret, tablier). Anims : `idle walk flee wave ko dead crushed`.
 - Chevalier : armure `#353b48 #626b7c #9aa3b4 #dfe5ee`, tabard bleu à croix dorée, plumet rouge,

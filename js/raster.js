@@ -35,6 +35,12 @@ export function ik(root, end, l1, l2, bend) {
   let d = Math.hypot(dx, dy, dz);
   const max = l1 + l2 - 0.01;
   if (d > max) { const k = max / d; dx *= k; dy *= k; dz *= k; d = max; }
+  // bout collé à la racine : sans ça, le genou partirait à l'infini (division par ~0)
+  const min = Math.abs(l1 - l2) + 0.05;
+  if (d < min) {
+    if (d < 1e-6) { dx = 0; dy = 0; dz = -1; d = 1; }
+    const k = min / d; dx *= k; dy *= k; dz *= k; d = min;
+  }
   const a = (l1 * l1 - l2 * l2 + d * d) / (2 * d);
   const h = Math.sqrt(Math.max(0, l1 * l1 - a * a));
   const ux = dx / d, uy = dy / d, uz = dz / d;

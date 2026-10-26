@@ -18,7 +18,7 @@ const CLAW = ramp('#3a3f78', '#585ea0', '#8086c4', '#aab0e0');
 const MOUTH = [22, 6, 12];
 const PUPIL = [6, 4, 4];
 
-export const SPRITE_W = 64, SPRITE_H = 76, ORIGIN_X = 32, ORIGIN_Y = 62;
+export const SPRITE_W = 88, SPRITE_H = 88, ORIGIN_X = 44, ORIGIN_Y = 70;
 export const SCALE = 0.75;
 
 export const ANIMS = {

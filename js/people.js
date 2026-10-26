@@ -76,7 +76,7 @@ export const PEOPLE_ANIMS = {
   },
 };
 
-export const PEOPLE_W = 48, PEOPLE_H = 54, PEOPLE_OX = 24, PEOPLE_OY = 45;
+export const PEOPLE_W = 64, PEOPLE_H = 62, PEOPLE_OX = 32, PEOPLE_OY = 50;
 const TAU = Math.PI * 2;
 
 function basePose() {
