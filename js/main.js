@@ -154,6 +154,7 @@ const player = { x: 0, y: 0, z: 0, dir: 2, anim: 'idle', t: 0, action: null, act
   jz: 0, vz: 0, air: false, charging: false, charge: 0, slamPower: 0, runFrame: -1,
   slide: null, mv: null, idleT: 0, water: 0, rippleT: 0,
   chargeKind: null, punchHoldT: 0, punchPower: 0, combo: 0, lastPunch: -1, punchBuf: false,
+  aim: null, // pendant la charge du coup : direction visée (vecteur monde), plus fine que les 8 directions
   hp: 100, lastHurt: -99, invuln: 0, flash: 0, kb: null, dead: null, regen: false };
 const npcs = []; // villageois et chevaliers autour de Brainless
 const vstate = new Map(); // id du village -> { populated, anger, alarm }
@@ -689,8 +690,10 @@ function trample(vx, vy) {
 }
 
 // Gros coup chargé : une bourrasque part droit devant et rase tout dans un cône.
+const aimDir = () => player.aim || dirWorld(player.dir);
+
 function doBigPunch(power) {
-  const [dx, dy] = dirWorld(player.dir);
+  const [dx, dy] = aimDir();
   const R = 2.2 + power * 4.5, half = 0.45 + power * 0.15;
   sfx.bigPunch(power);
   shake = Math.min(15, 5 + power * 9);
@@ -897,6 +900,12 @@ function update(dt) {
       if (player.charging && player.chargeKind === 'punch') {
         if (punchHeld()) {
           player.charge = Math.min(1, player.charge + dt / 1.3);
+          // il reste planté mais pivote pour viser : le stick oriente le coup sans le faire avancer
+          if (mag > 0.3) {
+            const cx = ix / mag, ct = iy / mag;
+            player.aim = [(cx + ct) / Math.SQRT2, (ct - cx) / Math.SQRT2];
+            player.dir = ((Math.round(Math.atan2(ct, cx) / (Math.PI / 4)) % 8) + 8) % 8;
+          }
           const [dx, dy] = dirWorld(player.dir), [rx, ry] = dirWorld((player.dir + 2) % 8);
           chargeEffects(dt, player.x - dx * 0.35 + rx * 0.3, player.y - dy * 0.35 + ry * 0.3, player.z + 18);
           chargeUpdate(player.charge);
@@ -914,6 +923,7 @@ function update(dt) {
         player.charging = true;
         player.chargeKind = 'punch';
         player.charge = 0;
+        player.aim = dirWorld(player.dir);
         player.sprinting = false;
         setAnim('pcharge');
         chargeStart();
@@ -948,10 +958,11 @@ function update(dt) {
       // petit pas en avant à chaque coup, grosse fente pour le coup chargé
       const [dx, dy] = dirWorld(player.dir);
       if (JABS.includes(act) && player.actionT > 0.1 && player.actionT < hitAt) tryMove(dx * dt * 1.6, dy * dt * 1.6);
-      if (act === 'bigpunch' && player.actionT < 0.3) tryMove(dx * dt * 4.5, dy * dt * 4.5);
+      if (act === 'bigpunch' && player.actionT < 0.3) { const [ax, ay] = aimDir(); tryMove(ax * dt * 4.5, ay * dt * 4.5); }
       if (JABS.includes(act) && player.punchBuf && player.actionT >= 0.6) startJab();
       else if (player.actionT >= 1) {
         if (JABS.includes(act)) player.lastPunch = time;
+        if (act === 'bigpunch') player.aim = null;
         player.action = null;
         player.t = 0;
       }
@@ -1813,6 +1824,7 @@ function render() {
   }
   ctx.globalAlpha = 1;
   if (player.charging) drawChargeAura(ox, oy);
+  if (player.charging && player.chargeKind === 'punch') drawAim(ox, oy);
   // Brainless visible en transparence derrière les arbres
   ctx.globalAlpha = 0.28;
   drawPlayer(ox, oy, 0);
@@ -1993,6 +2005,35 @@ function drawPlayer(ox, oy, withShadow) {
     ctx.drawImage(img, sx - ORIGIN_X, sy - gz - jz - ORIGIN_Y);
     ctx.restore();
   }
+}
+
+// Visée du gros coup : le cône qui sera balayé, en pointillés au sol, qui grandit avec la charge.
+function drawAim(ox, oy) {
+  const [dx, dy] = aimDir();
+  const c = player.charge, R = 2.2 + c * 4.5, half = 0.45 + c * 0.15;
+  const base = Math.atan2(dy, dx), z = player.z;
+  const pts = [];
+  const march = (time * 2) % 0.35;
+  for (const side of [-1, 1]) {
+    const a = base + side * half, ux = Math.cos(a), uy = Math.sin(a);
+    for (let r = 0.8 + march; r < R; r += 0.35) for (const k of [0, 0.1]) pts.push([player.x + ux * (r + k), player.y + uy * (r + k), 0]);
+  }
+  const n = Math.ceil(half * R * 12);
+  for (let i = 0; i <= n; i++) {
+    const a = base + (i / n * 2 - 1) * half;
+    pts.push([player.x + Math.cos(a) * R, player.y + Math.sin(a) * R, 0]);
+  }
+  for (let r = 1 + march; r < R * 0.7; r += 0.35) pts.push([player.x + dx * r, player.y + dy * r, 1]); // l'axe du coup
+  // ombre sombre dessous, puis pointillés clairs teintés par la charge
+  const pulse = 0.85 + Math.sin(time * 10) * 0.15;
+  for (const pass of [0, 1]) {
+    ctx.globalAlpha = pass ? pulse : 0.75;
+    for (const [x, y, axis] of pts) {
+      ctx.fillStyle = pass ? (axis ? chargeCols()[1] : '#ffe28a') : '#1a0e08';
+      ctx.fillRect(Math.round(ox + isoX(x, y)) - 1 + pass * 0, Math.round(oy + isoY(x, y) - z) + (pass ? 0 : 1), 2, 1);
+    }
+  }
+  ctx.globalAlpha = 1;
 }
 
 function drawChargeAura(ox, oy) {

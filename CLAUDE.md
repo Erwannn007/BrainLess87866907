@@ -191,6 +191,9 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
   de KO à terre l'achève ; un gros coup chargé à bout portant tue en retombant.
 - Vie de Brainless : 100, super régénération après 3 s sans coup ; à 0 il s'effondre et se
   réveille au départ, et les villages se calment.
+- **Visée du gros coup** : pendant la charge (maintenir COUP), le stick oriente Brainless sans le
+  déplacer (`player.aim`, direction continue, le sprite prend la plus proche des 8). Un cône en
+  tirets jaunes (axe rouge) montre au sol la zone qui sera balayée et grandit avec la charge.
 - **Flair** (N / R / L1) : il lève la tête et renifle (`sniff`), puis une flèche, la distance et
   des filets d'odeur rouges indiquent pendant 12 s le village le plus proche qui a encore des
   vivants (`nearestPrey`).
