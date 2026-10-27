@@ -497,7 +497,7 @@ export function poseFor(anim, t) {
   if (anim === 'sniff') {
     // Il se redresse, bascule la tête en arrière, le bec pointé vers le ciel, et renifle l'air par
     // petits coups secs (le bec monte et descend un peu, la gueule s'entrouvre à chaque bouffée).
-    const up = { lean: -2.6, pitch: -0.32, headUp: 4, tilt: 1.45, jaw: 0.25, hL: [-10, 0, 13], hR: [10, 0, 13], crouch: 1, breathe: 1 };
+    const up = { lean: -2.6, pitch: -0.32, headUp: 4, tilt: 1.45, jaw: 0.25, hL: [-17, 3, 17], hR: [17, 3, 17], crouch: 1.5, breathe: 1, fL: [-5.5, 0.5, 0], fR: [5.5, -0.5, 0] }; // bras écartés, appuis larges
     const p = keyed([{ t: 0, p: {} }, { t: 0.22, p: up }, { t: 0.85, p: up }, { t: 1, p: {} }], t);
     if (t > 0.22 && t < 0.85) {
       const sn = Math.sin(t * Math.PI * 2 * 7);
