@@ -282,9 +282,10 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
   (`player.achieved`). Compteurs dans `stats` (mangés, héros, creusés, posés, encagés, expéditions,
   champions, fossiles).
 - **Tanière vivante** : un habitant porté en entrant dans un abri devient **prisonnier** (`captive`,
-  `kidnap` : perdu pour son village). Lâché près d'une **cage** (`O.CAGE`, dessinée en deux moitiés autour
-  de lui, `cageFront`), il y est enfermé et secoue les barreaux ; libre, il file vers la sortie et
-  s'échappe. On le reprend, on le tue, on le dévore. Prisonniers sauvés par lieu (`captives`).
+  `kidnap` : perdu pour son village). Les mains prises, le bouton N devient **ENFERMER** près d'une cage
+  libre (`lockInCage` ; `O.CAGE`, dessinée en deux moitiés autour de lui, `cageFront`) ou **POSER**
+  (`putDown` : reposé debout, sans le jeter) ; il passe aussi les portes en le portant. Encagé, il secoue
+  les barreaux ; libre, il file vers la sortie et s'échappe. On le reprend, on le tue, on le dévore. Prisonniers sauvés par lieu (`captives`).
   **Présentoir** (`O.RACK`, N : EXPOSER) : casque/bouclier 1, emblème 2, couronne 3 -> +3 % de force par
   point (`trophyBonus`, 45 % au plus). **Trouvailles** en creusant (`Den.secretAt`, une fois par tuile,
   `found`) : coffre enfoui (`Den.loot`), ossements (viande), **ancien Nomu** fossilisé (`O.FOSSIL`,

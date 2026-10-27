@@ -1460,6 +1460,11 @@ function update(dt) {
     // les mains prises, il peut encore passer une porte (avec un prisonnier dans les bras)
     const near0 = player.action || player.nearCorpse ? null : builtNear();
     player.interact = player.held ? (near0 && (near0.enter || near0.exit) ? near0 : null) : near0;
+    if (player.held && !player.interact && !player.action) {
+      // les mains prises : une cage libre à côté -> ENFERMER, sinon POSER
+      const [hx, hy] = dirWorld(player.dir), cg = player.held.n && alive(player.held.n) && player.held.n.kind !== 'beast' && (cageNear(player.x + hx * 0.6, player.y + hy * 0.6) || cageNear(player.x, player.y));
+      player.interact = cg ? { cage: cg } : { putDown: true };
+    }
     if (input.sniff && player.held && player.interact && !player.air) { interact(player.interact); input.sniff = false; }
     if (input.sniff && !player.action && !player.charging && !player.held && !player.air && !player.slide && player.water < 2) {
       player.sprinting = false;
@@ -4039,6 +4044,36 @@ function cageNear(x, y) {
   }
   return null;
 }
+// Il met celui qu'il tient dans la cage (bouton N : ENFERMER, ou lâché juste à côté).
+function lockInCage(n, cg) {
+  if (player.held && player.held.n === n) { player.held = null; player.aiming = false; player.grabArm = false; }
+  n.held = false;
+  kidnap(n);
+  Object.assign(n, { x: cg[0] + 0.5, y: cg[1] + 0.5, z: groundZ(cg[0] + 0.5, cg[1] + 0.5), jz: 0, vx: 0, vy: 0, vz: 0, air: false, thrown: null, dying: false, state: 'wander', caged: true, cage: cg });
+  stats.caged++;
+  showMsg('PRISONNIER ENCAGE', 2.5, 'TUE-LE QUAND TU AURAS FAIM');
+  sfx.clank();
+}
+// Il repose doucement ce qu'il tient, debout devant lui (bouton N : POSER) : un prisonnier reste
+// libre dans la tanière, un villageois dehors détale ; un objet est simplement posé.
+function putDown() {
+  const h = player.held;
+  if (!h) return;
+  if (!h.n) { dropHeld(); return; }
+  const n = h.n, [dx, dy] = dirWorld(player.dir);
+  player.held = null; player.aiming = false; player.grabArm = false;
+  n.held = false;
+  let x = player.x + dx * 0.7, y = player.y + dy * 0.7;
+  if (blockedFor(n, x, y, groundZ(x, y), true)) { x = player.x; y = player.y; }
+  Object.assign(n, { x, y, z: groundZ(x, y), jz: 0, vx: 0, vy: 0, vz: 0, air: false, thrown: null, dying: false });
+  if (!alive(n)) return;
+  if (n.captive) n.state = 'wander';
+  else if (n.kind === 'beast') { n.state = 'flee'; n.fleeT = 4; }
+  else if (n.kind === 'civ') startFlee(n);
+  else { n.state = 'hurt'; n.hurtT = 0.4; }
+  sfx.grab(0.5);
+}
+
 function updateCaptive(n, dt, d) {
   if (n.caged) {
     if (world.objAt(n.cage[0], n.cage[1]) !== O.CAGE) { n.caged = false; return 'idle'; } // la cage est cassée
@@ -4231,11 +4266,13 @@ function builtNear() {
 const INTERACT_LABEL = { [O.CHEST]: 'OUVRIR', [O.NEST]: 'DORMIR', [O.CAMPFIRE]: 'CUIRE', [O.RACK]: 'EXPOSER', [O.FOSSIL]: 'EXAMINER' };
 const TROPHIES = ['crown', 'emblem', 'helmet', 'shield']; // dans l'ordre où il les expose
 const trophyWorth = (id) => (id === 'crown' ? 3 : id === 'emblem' ? 2 : 1);
-const interactLabel = (b) => (b.enter ? 'ENTRER' : b.exit ? 'SORTIR' : INTERACT_LABEL[b.o]);
+const interactLabel = (b) => (b.enter ? 'ENTRER' : b.exit ? 'SORTIR' : b.cage ? 'ENFERMER' : b.putDown ? 'POSER' : INTERACT_LABEL[b.o]);
 
 function interact(b) {
   if (b.enter) { enterBuilding(b); return; }
   if (b.exit) { exitRealm(); return; }
+  if (b.cage) { if (player.held && player.held.n) lockInCage(player.held.n, b.cage); return; }
+  if (b.putDown) { putDown(); return; }
   if (b.o === O.RACK) {
     // un trophée de chasse accroché : il en tire de la force (voir strength)
     const k = b.tx + ',' + b.ty, list = world.racks.get(k) || [], id = TROPHIES.find((t) => countItem(t));
@@ -5364,14 +5401,7 @@ function releaseHeld(ux, uy, power, gentle) {
     const n = h.n;
     n.held = false;
     const cg = alive(n) && n.kind !== 'beast' && (gentle || power < 0.35) && cageNear(x, y);
-    if (cg) {
-      kidnap(n);
-      Object.assign(n, { x: cg[0] + 0.5, y: cg[1] + 0.5, z: groundZ(cg[0] + 0.5, cg[1] + 0.5), jz: 0, vx: 0, vy: 0, vz: 0, air: false, thrown: null, dying: false, state: 'wander', caged: true, cage: cg });
-      stats.caged++;
-      showMsg('PRISONNIER ENCAGE', 2.5, 'TUE-LE QUAND TU AURAS FAIM');
-      sfx.clank();
-      return;
-    }
+    if (cg) { lockInCage(n, cg); return; }
     n.thrown = th;
     Object.assign(n, { x, y, fz, vx: ux * v, vy: uy * v, vz, air: true, rot: 0 });
     if (alive(n)) {
@@ -6846,6 +6876,11 @@ function drawHUD() {
   drawText(ctx, 'BRAINLESS', x0, y0, '#f6a6bd');
   drawText(ctx, 'NIV ' + player.level, x0 + 40, y0, '#c9a0ff');
   buttons.n.sub = player.nearCorpse ? 'DEVORER' : player.interact ? interactLabel(player.interact) : 'FLAIR';
+  if (player.interact && inputMode !== 'touch' && !player.dead) {
+    // au clavier et à la manette (pas de bouton à l'écran) : l'action au-dessus de lui
+    const l = { keys: 'R', pad: 'L1' }[inputMode] + ': ' + interactLabel(player.interact);
+    drawText(ctx, l, Math.round(VW / 2 - textWidth(l) / 2), Math.round(VH / 2 - 60), '#ff9aa8');
+  }
   buttons.g.sub = player.held ? 'LANCER' : 'PRENDRE';
   buttons.a.sub = player.held ? 'ECRASER' : 'COUP';
   const night = outsideDark() > 0.5;
