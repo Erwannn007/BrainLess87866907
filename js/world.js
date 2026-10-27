@@ -630,6 +630,7 @@ export class Den extends World {
     super(seed + 4242);
     this.den = true;
     this.realm = 'den';
+    this.exitKey = '0,-3'; // l'échelle
   }
   villageIn() { return null; }
   solid(x, y) { const t = this.typeAt(x, y); return t === T.EARTH || t === T.EARTH_STONE || t === T.EARTH_IRON || t === T.BEDROCK; }
@@ -665,6 +666,7 @@ export class Room extends World {
     this.w = R.w; this.h = R.h;
     this.floorT = R.floor; this.wallT = R.wall;
     this.door = [Math.floor(R.w / 2), R.h];
+    this.exitKey = this.door[0] + ',' + this.door[1];
     this.items = new Map(R.items.map(([x, y, o, k]) => [x + ',' + y, [o, k]]));
     for (const [k, [, r]] of this.items) if (r) this.rots.set(k, r);
     this.village = kind !== 'hut';

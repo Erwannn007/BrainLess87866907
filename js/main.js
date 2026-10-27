@@ -772,7 +772,7 @@ function leafColsFor(o) {
 function damage(tx, ty, dmg) {
   const o = world.objAt(tx, ty);
   const info = OBJ_INFO[o];
-  if (!info) return false;
+  if (!info || info.exit) return false; // la porte d'un intérieur, l'échelle de la tanière : incassables
   if (info.part) return damage(tx + info.part[0], ty + info.part[1], dmg);
   if (info.building) return damageBuilding(tx, ty, dmg);
   const cx = tx + 0.5, cy = ty + 0.5, gz = world.hAt(tx, ty) * 8;
@@ -2954,7 +2954,7 @@ function openBuild() {
   const s = player.inv[player.sel], sel = s && ITEMS[s.id].kind === 'place' ? s.id : null;
   const tab = sel ? Math.max(0, buildTabs().findIndex((t) => t.ids.includes(sel))) : 0;
   build = { cx: player.x, cy: player.y, cz: player.z, vx: 0, vy: 0, tab, sel, rot: 0, ptr: null, lift: null, pick: null, hover: null,
-    undo: [], t: 0, ox: 0, oy: 0, btns: [], touches: new Map(), pan2: null };
+    undo: [], t: 0, ox: 0, oy: 0, btns: [], touches: new Map(), pan2: null, pend: null, pendBox: null };
   uiTouch = null;
   sfx.ui();
 }
@@ -2984,6 +2984,8 @@ function tileAtScreen(px, py) {
 // commun des 4 tuiles pour un abri.
 const anchorScreen = (o, tx, ty) => [build.ox + isoX(tx, ty), build.oy + isoY(tx, ty) - world.hAt(tx, ty) * 8 + (big(o) ? 0 : 8)];
 // La construction dont le dessin est sous le doigt (un mur, un abri dépassent de leur tuile).
+// On regarde les pixels du dessin (pas son cadre) : une étagère devant ne vole pas le doigt.
+const opaqueAt = (img, lx, ly) => !!img.page && img.page.c.getImageData(img.sx + lx, img.sy + ly, 1, 1).data[3] > 0;
 function builtAtScreen(px, py) {
   const t0 = tileAtScreen(px, py);
   if (!t0) return null;
@@ -2992,10 +2994,13 @@ function builtAtScreen(px, py) {
     const a = world.anchorOf(t0.tx + dx, t0.ty + dy) || [t0.tx + dx, t0.ty + dy];
     const [tx, ty] = a, o = world.objAt(tx, ty);
     if (!OBJ_INFO[o] || !OBJ_INFO[o].built || (best && tx + ty <= best.tx + best.ty)) continue;
-    const img = spriteOf(o, world.rotAt(tx, ty)), [ax, ay] = anchorScreen(o, tx, ty), gx = ax - img.ox, gy = ay - img.oy;
-    if (px >= gx && px < gx + img.w && py >= gy && py < gy + img.h) best = { tx, ty };
+    const img = spriteOf(o, world.rotAt(tx, ty)), [ax, ay] = anchorScreen(o, tx, ty), lx = Math.floor(px - ax + img.ox), ly = Math.floor(py - ay + img.oy);
+    if (lx >= 0 && lx < img.w && ly >= 0 && ly < img.h && opaqueAt(img, lx, ly)) best = { tx, ty };
   }
-  return best;
+  if (best) return best;
+  // un tapis, un piège : on peut aussi toucher sa tuile
+  const a = world.anchorOf(t0.tx, t0.ty) || [t0.tx, t0.ty], o = world.objAt(a[0], a[1]);
+  return OBJ_INFO[o] && OBJ_INFO[o].built ? { tx: a[0], ty: a[1] } : null;
 }
 const buildAim = (x, y) => tileAtScreen(x, y - (inputMode === 'touch' ? TOUCH_LIFT : 0));
 const centerTile = () => tileAtScreen(VW / 2, VH / 2 + 14);
@@ -3193,8 +3198,8 @@ function buildUndo() {
 }
 
 // TOURNER : ce qu'il tient, sinon la construction choisie (sur place), sinon la prochaine posée.
-function buildRotate() {
-  const B = build, turn = (o, k) => (o === O.FENCE_X ? [O.FENCE_Y, 0] : o === O.FENCE_Y ? [O.FENCE_X, 0] : [o, (k + 1) & 3]);
+function buildRotate(dir = 1) {
+  const B = build, turn = (o, k) => (o === O.FENCE_X ? [O.FENCE_Y, 0] : o === O.FENCE_Y ? [O.FENCE_X, 0] : [o, (k + dir + 4) & 3]);
   if (B.lift) { if (canRot(B.lift.o)) [B.lift.o, B.lift.k] = turn(B.lift.o, B.lift.k); }
   else if (B.pick) {
     const { tx, ty } = B.pick, o = world.objAt(tx, ty);
@@ -3204,19 +3209,19 @@ function buildRotate() {
     world.setRot(tx, ty, nk);
     placedFx.set(tx + ',' + ty, rt() - 0.12);
     burst(tx + 0.5, ty + 0.5, world.hAt(tx, ty) * 8, DUST_COLS, 5, { up: 15, speed: 1, life: 0.4, spread: 1 });
-  } else B.rot = (B.rot + 1) & 3;
+  } else B.rot = (B.rot + dir + 4) & 3;
   sfx.ui();
 }
 function buildCycle(k) {
   const ids = buildTabs()[build.tab].ids, i = ids.indexOf(build.sel);
   build.sel = ids[i < 0 ? (k > 0 ? 0 : ids.length - 1) : (i + k + ids.length) % ids.length];
-  build.pick = null;
+  build.pick = null; build.pend = null;
   sfx.ui();
 }
 function buildTab(i) {
   const n = buildTabs().length;
   build.tab = ((i % n) + n) % n;
-  if (!buildTabs()[build.tab].ids.includes(build.sel)) build.sel = null;
+  if (!buildTabs()[build.tab].ids.includes(build.sel)) { build.sel = null; build.pend = null; }
   sfx.ui();
 }
 function buildCenter() { build.cx = player.x; build.cy = player.y; build.vx = build.vy = 0; sfx.ui(); }
@@ -3280,7 +3285,7 @@ function buildMove(x, y) {
   if (!P.moved && P.kind !== 'lift' && Math.hypot(x - P.x0, y - P.y0) > 5) {
     P.moved = true;
     // on tire une construction du tiroir (un outil, lui, se choisit simplement)
-    if (P.kind === 'card' && !isTool(P.id)) { P.kind = 'drag'; B.sel = P.id; B.pick = null; sfx.grabReach(); }
+    if (P.kind === 'card' && !isTool(P.id)) { P.kind = 'drag'; B.sel = P.id; B.pick = null; B.pend = null; sfx.grabReach(); }
   }
   if (P.kind === 'map' && P.moved) {
     panBy(dx, dy);
@@ -3294,23 +3299,36 @@ function buildUp(x, y) {
   if (!P) return;
   B.ptr = null;
   const L = buildLayout(), overTray = inRect(L.tray, x, y);
-  if (P.kind === 'card') { B.sel = B.sel === P.id ? null : P.id; B.pick = null; sfx.ui(); return; } // un toucher : choisir / reposer
+  if (P.kind === 'card') { B.sel = B.sel === P.id ? null : P.id; B.pick = null; B.pend = null; sfx.ui(); return; } // un toucher : choisir / reposer
   if (P.kind === 'drag') { const t = !overTray && buildAim(x, y); if (t) buildPlace(P.id, t.tx, t.ty); return; }
   if (P.kind === 'lift') { buildDrop(overTray ? null : buildAim(x, y), overTray); return; }
   if (P.kind === 'paint') return;
   if (P.moved) { if (rt() - P.tm > 0.08) B.vx = B.vy = 0; return; } // fin d'un glissé : l'élan continue
+  // toucher l'aperçu en attente : on le pose
+  if (B.pend && B.pendBox && inRect(B.pendBox, x, y)) { buildConfirm(); return; }
   const t = tileAtScreen(x, y);
   if (!t) return;
   const bt = builtAtScreen(x, y);
-  // toucher une construction posée la choisit (TOURNER, ou la maintenir pour la déplacer)
-  if (bt && (!B.sel || (B.pick && B.pick.tx === bt.tx && B.pick.ty === bt.ty))) {
+  // toucher une construction posée la choisit (ses flèches la tournent, la maintenir la déplace)
+  if (bt) {
     B.pick = B.pick && B.pick.tx === bt.tx && B.pick.ty === bt.ty ? null : bt;
-    B.sel = null;
+    B.pend = null;
     sfx.ui();
     return;
   }
   B.pick = null;
-  if (B.sel && !isTool(B.sel)) buildPlace(B.sel, t.tx, t.ty);
+  if (!B.sel || isTool(B.sel)) return;
+  // au doigt, ce qui s'oriente passe d'abord par un aperçu avec ses flèches et POSER
+  if (inputMode === 'touch' && canRot(ITEMS[B.sel].obj)) {
+    if (B.pend && B.pend.tx === t.tx && B.pend.ty === t.ty) buildConfirm();
+    else { B.pend = { tx: t.tx, ty: t.ty }; sfx.ui(); }
+    return;
+  }
+  buildPlace(B.sel, t.tx, t.ty);
+}
+function buildConfirm() {
+  const B = build;
+  if (B.pend && B.sel && buildPlace(B.sel, B.pend.tx, B.pend.ty)) B.pend = null;
 }
 // Deux doigts : la caméra glisse, quoi que fasse le premier doigt.
 function buildPan2(touches) {
@@ -3428,9 +3446,43 @@ function buildCell(x, y, sx, top) {
 }
 
 // Ce qui va être posé (ou ce qu'on déplace) sur la tuile visée : vert si c'est possible, rouge sinon.
+// Petit bouton posé dans le monde (flèches pour tourner, POSER) : indigo en relief, ou doré.
+function worldButton(x, y, w, gold, draw0, fn) {
+  x = Math.round(x); y = Math.round(y);
+  ctx.fillStyle = BUI.ink; ctx.fillRect(x, y, w, 12);
+  ctx.fillStyle = gold ? BUI.gold : BUI.base; ctx.fillRect(x + 1, y + 1, w - 2, 10);
+  ctx.fillStyle = gold ? BUI.goldHi : BUI.hi; ctx.fillRect(x + 1, y + 1, w - 2, 1);
+  ctx.fillStyle = gold ? BUI.goldLo : BUI.ink; ctx.fillRect(x + 1, y + 10, w - 2, 1);
+  draw0(x, y);
+  build.btns.push({ x: x - 4, y: y - 4, w: w + 8, h: 20, fn }); // plus large que le dessin, pour le doigt
+}
+function arrowGlyph(x, y, dir, col) {
+  ctx.fillStyle = col;
+  for (let i = 0; i < 4; i++) ctx.fillRect(dir < 0 ? x + 2 + i : x + 8 - i, y + 6 - i, 1, 1 + 2 * i); // la pointe
+  ctx.fillRect(dir < 0 ? x + 6 : x + 3, y + 5, 2, 3); // la queue
+}
+// Les flèches de part et d'autre d'une construction (ou de son aperçu), et POSER dessous.
+function rotControls(o, k, tx, ty, ok) {
+  const img = spriteOf(o, k), [ax, ay] = anchorScreen(o, tx, ty);
+  const gx = ax - img.ox, gy = ay - img.oy, my = gy + Math.max(0, img.h / 2 - 6);
+  const left = Math.min(gx - 14, ax - 26), right = Math.max(gx + img.w + 3, ax + 15);
+  worldButton(left, my, 11, false, (x, y) => arrowGlyph(x, y, -1, '#ffffff'), () => buildRotate(-1));
+  worldButton(right, my, 11, false, (x, y) => arrowGlyph(x, y, 1, '#ffffff'), () => buildRotate(1));
+  if (ok !== undefined) {
+    const w = textWidth('POSER') + 9;
+    worldButton(ax - w / 2, ay + 9, w, ok, (x, y) => drawText(ctx, 'POSER', x + 5, y + 3, ok ? BUI.ink : BUI.dim, null), buildConfirm);
+  }
+}
+
 function drawBuildGhost(ox, oy) {
   const B = build, P = B.ptr, L = buildLayout();
-  // la construction choisie sur place : son contour doré qui pulse
+  B.btns.length = 0;
+  B.pendBox = null;
+  // il est là (caché pendant qu'on bâtit) : sa tuile en pointillés rouges
+  ctx.globalAlpha = 0.7;
+  outlineAt(Math.floor(player.x), Math.floor(player.y), BUI.redHi, true);
+  ctx.globalAlpha = 1;
+  // la construction choisie sur place : son contour doré qui pulse, ses flèches
   if (B.pick) {
     const o = world.objAt(B.pick.tx, B.pick.ty);
     if (!OBJ_INFO[o] || !OBJ_INFO[o].built) B.pick = null;
@@ -3438,7 +3490,21 @@ function drawBuildGhost(ox, oy) {
       ctx.globalAlpha = 0.6 + Math.sin(rt() * 7) * 0.35;
       for (const [x, y] of footprint(o, B.pick.tx, B.pick.ty)) outlineAt(x, y, BUI.goldHi, false);
       ctx.globalAlpha = 1;
+      if (canRot(o) && !B.lift) rotControls(o, world.rotAt(B.pick.tx, B.pick.ty), B.pick.tx, B.pick.ty);
     }
+  }
+  // l'aperçu en attente (au doigt) : posé en transparence, flèches pour l'orienter, POSER
+  if (B.pend && B.sel && !isTool(B.sel) && !(P && (P.kind === 'drag' || P.kind === 'lift'))) {
+    const [o, k] = objFor(B.sel), ok = !buildBlock(o, B.pend.tx, B.pend.ty) && (buildStock(B.sel).n || buildStock(B.sel).craft);
+    ctx.globalAlpha = 0.85;
+    for (const [x, y] of footprint(o, B.pend.tx, B.pend.ty)) outlineAt(x, y, ok ? '#7ee08a' : '#ff5a5e', false);
+    const img = spriteOf(o, k), [ax, ay] = anchorScreen(o, B.pend.tx, B.pend.ty);
+    ctx.globalAlpha = ok ? 0.8 : 0.45;
+    draw(img, ax - img.ox, ay - img.oy);
+    ctx.globalAlpha = 1;
+    B.pendBox = { x: ax - img.ox, y: ay - img.oy, w: img.w, h: img.h };
+    rotControls(o, k, B.pend.tx, B.pend.ty, !!ok);
+    return;
   }
   let t = null, o = 0, k = 0, id = null;
   if (P && (P.kind === 'drag' || P.kind === 'lift' || P.kind === 'paint')) {
@@ -3490,7 +3556,7 @@ function drawClaws(x, y) {
 }
 
 const BUILD_HINTS = {
-  touch: 'GLISSE UN OBJET SUR UNE TUILE - TOUCHE UNE CONSTRUCTION POUR LA TOURNER, MAINTIENS-LA POUR LA DEPLACER',
+  touch: 'CHOISIS UN OBJET PUIS TOUCHE UNE TUILE (OU GLISSE-LE) - LES FLECHES L\'ORIENTENT - MAINTIENS UNE CONSTRUCTION POUR LA DEPLACER',
   keys: 'ZQSD: BOUGER  CLIC: POSER  CLIC DROIT: DEPLACER  R: TOURNER  TAB: ONGLET  U: ANNULER',
   pad: 'STICK: VISER  A: POSER  X: DEPLACER  L1/R1: OBJET  HAUT: ONGLET  Y: TOURNER  B: SORTIR',
 };
@@ -3498,7 +3564,6 @@ const DIG_HINT = { touch: 'GLISSE SUR LES PAROIS - 2 DOIGTS POUR BOUGER', keys: 
 
 function drawBuildUI() {
   const B = build, P = B.ptr, y0 = safe.t;
-  B.btns.length = 0;
   // bandeau du haut
   ctx.fillStyle = BUI.ink; ctx.fillRect(0, 0, VW, y0 + 18);
   ctx.fillStyle = BUI.dark; ctx.fillRect(0, 0, VW, y0 + 15);
@@ -3575,7 +3640,7 @@ function drawBuildUI() {
   if (B.lift) { info = 'DEPLACER : ' + ITEMS[itemOfObj(B.lift.o)].name; col = BUI.goldHi; }
   else if (B.pick) {
     const o = world.objAt(B.pick.tx, B.pick.ty), id = itemOfObj(o);
-    info = (id ? ITEMS[id].name : '') + (canRot(o) ? ' - TOURNER, OU MAINTIENS POUR DEPLACER' : ' - MAINTIENS POUR DEPLACER'); col = BUI.goldHi;
+    info = (id ? ITEMS[id].name : '') + (canRot(o) ? ' - FLECHES : TOURNER, MAINTIENS : DEPLACER' : ' - MAINTIENS POUR DEPLACER'); col = BUI.goldHi;
   } else {
     const id = P && P.kind === 'drag' ? P.id : B.sel;
     if (id === 'dig') { info = 'CREUSER - ' + DIG_HINT[inputMode]; col = '#ffd0a8'; }
@@ -3643,6 +3708,9 @@ function realmOf(key, kind) {
   if (d) {
     w.mods = new Map(d.mods || []); w.terr = new Map(d.terr || []); w.wear = new Map(d.wear || []);
     w.chests = new Map(d.chests || []); w.rots = new Map(d.rots || []);
+    // une sortie cassée par une ancienne version : elle revient
+    const ex = w.exitKey;
+    if (ex) { w.mods.delete(ex); w.terr.delete(ex); }
   }
   realmWorlds.set(key, w);
   return w;
@@ -4080,6 +4148,8 @@ function slotUI(c, k, x, y) {
   if (hov || cur) { ctx.globalAlpha = 0.45; ctx.fillStyle = '#ffffff'; ctx.fillRect(x + 1, y + 1, 16, 16); ctx.globalAlpha = 1; }
   if (cur) { ctx.fillStyle = '#ffffff'; ctx.fillRect(x - 1, y - 1, 20, 1); ctx.fillRect(x - 1, y + 18, 20, 1); ctx.fillRect(x - 1, y, 1, 18); ctx.fillRect(x + 18, y, 1, 18); }
   if ((hov || cur) && s && !U.cursor) U.tip = { s, x: x + 18, y };
+  // l'objet choisi d'un toucher : cadre blanc (son nom est affiché)
+  if (U.pick && U.pick.c === c && U.pick.k === k && s) { ctx.fillStyle = '#ffffff'; ctx.fillRect(x - 1, y - 1, 20, 1); ctx.fillRect(x - 1, y + 18, 20, 1); ctx.fillRect(x - 1, y, 1, 18); ctx.fillRect(x + 18, y, 1, 18); }
 }
 const slotAtPoint = (x, y) => uiSlots.find((r) => x >= r.x && x < r.x + 18 && y >= r.y && y < r.y + 18);
 
@@ -4104,7 +4174,7 @@ function drawInv() {
     const w = textWidth(t) + 12, on = U.tab === i;
     mcPanel(tx, py - 13, w, on ? 17 : 14, on ? MC.bg : '#a0a0a0');
     ink(t, tx + 6, py - 8, on ? MC.ink : '#5a5a5a');
-    hit(tx, py - 13, w, 13, () => { U.tab = i; U.sel = 0; U.tipT = 0; sfx.ui(); });
+    hit(tx, py - 13, w, 13, () => { U.tab = i; U.sel = 0; U.tipT = 0; U.pick = null; sfx.ui(); });
     tx += w + 1;
   });
   if (player.pendingLv > 0 && Math.floor(rt() * 3) % 2) { ctx.fillStyle = '#ff6b7a'; ctx.fillRect(px + 2 + textWidth(tabs[0]) + 13 + textWidth('MUTATIONS') + 8, py - 12, 3, 3); }
@@ -4125,9 +4195,9 @@ function drawInv() {
   // après un toucher, l'infobulle de la case reste un instant (seulement si cette case est à l'écran)
   if ((U.tipT -= 1 / 60) > 0 && U.tipRef && !U.cursor && uiSlots.some((r) => r.c === U.tipRef.c && r.k === U.tipRef.k)) {
     const s = cget(U.tipRef.c, U.tipRef.k);
-    if (s) U.tip = { s, x: U.tipRef.x + 18, y: U.tipRef.y };
+    if (s) U.tip = { s, x: U.tipRef.x + 18, y: U.tipRef.y, pick: !!U.pick };
   }
-  if (U.tip) drawTip(U.tip.s, U.tip.x, U.tip.y);
+  if (U.tip) drawTip(U.tip.s, U.tip.x, U.tip.y, U.tip.pick);
   if (U.sel >= uiItems.length) U.sel = Math.max(0, uiItems.length - 1);
 }
 
@@ -4136,12 +4206,12 @@ function tipLines(s) {
   if (s.alter) return [ALTERS[s.alter].name + ' - NIVEAU ' + (player.alterLv[s.alter] || 1), ...wrap(ALTERS[s.alter].desc, 110)];
   const it = ITEMS[s.id];
   const info = it.kind === 'food' ? ['+' + it.food + ' FAIM' + (it.hp ? ', +' + it.hp + ' VIE' : ''), 'DANS LA BARRE : MANGER']
-    : it.kind === 'place' ? ['CONSTRUCTION', 'DANS LA BARRE : POSER DEVANT LUI']
+    : it.kind === 'place' ? ['CONSTRUCTION', 'MODE BATIR (MARTEAU) : LA POSER']
     : it.kind === 'trophy' ? ['TROPHEE DE CHASSE'] : ['MATERIAU', 'SERT A FABRIQUER'];
   return [it.name, ...info];
 }
-function drawTip(s, x, y) {
-  const lines = tipLines(s), w = Math.max(...lines.map((l) => textWidth(l))) + 8, h = lines.length * 8 + 4;
+function drawTip(s, x, y, pick) {
+  const lines = tipLines(s).concat(pick ? [{ touch: 'RETOUCHE : PRENDRE', keys: 'RECLIQUE : PRENDRE', pad: 'A : PRENDRE' }[inputMode]] : []), w = Math.max(...lines.map((l) => textWidth(l))) + 8, h = lines.length * 8 + 4;
   if (x + w > VW - 2) x = Math.max(2, x - w - 20);
   if (y + h > VH - 2) y = VH - 2 - h;
   ctx.fillStyle = 'rgba(16,0,16,0.94)'; ctx.fillRect(x + 1, y, w - 2, h); ctx.fillRect(x, y + 1, w, h - 2);
@@ -4350,12 +4420,14 @@ function overlayUp(x, y) {
     return;
   }
   if (P.moved) return;
-  // un simple toucher (appui long = la moitié ; double-toucher = de l'autre côté)
-  const L = U.lastTap, dbl = L && L.ref.c === P.ref.c && L.ref.k === P.ref.k && rt() - L.t < 0.35;
-  if (dbl && U.cursor && !cget(P.ref.c, P.ref.k)) { slotClick(P.ref); quickMove(P.ref); U.lastTap = null; return; }
-  slotClick(P.ref, rt() - P.t > 0.45);
-  U.lastTap = { ref: P.ref, t: rt() };
-  U.tipRef = P.ref; U.tipT = 2;
+  // un simple toucher : main vide, il choisit l'objet et affiche son nom ; le retoucher le prend,
+  // le retoucher vite l'envoie de l'autre côté ; appui long = la moitié ; main pleine = poser
+  const same = (a, b) => a && b && a.c === b.c && a.k === b.k, long = rt() - P.t > 0.45, s = cget(P.ref.c, P.ref.k);
+  if (!U.cursor && s && !long && !same(U.pick, P.ref)) { U.pick = P.ref; U.tipRef = P.ref; U.tipT = 1e9; U.lastTap = { ref: P.ref, t: rt() }; sfx.ui(); return; }
+  const L = U.lastTap, dbl = L && same(L.ref, P.ref) && rt() - L.t < 0.35;
+  U.pick = null; U.tipT = 0; U.lastTap = null;
+  if (!U.cursor && s && dbl) { quickMove(P.ref); return; }
+  slotClick(P.ref, long);
 }
 // Clavier / manette : direction (vise la case voisine la plus proche), valider, retour, onglet,
 // `alt` (clic droit), `move` (vers l'autre côté).
@@ -5398,7 +5470,7 @@ function render() {
       }
       ctx.globalAlpha = 1;
     }
-    if (d === pRow && mode === 'play') rowEnts.push({ player: true, mx: player.x, my: player.y, depth: player.x + player.y });
+    if (d === pRow && mode === 'play' && !build) rowEnts.push({ player: true, mx: player.x, my: player.y, depth: player.x + player.y });
     const rn = npcRows.get(d);
     const rf = fireRows.get(d);
     if (rf) for (const f of rf) rowEnts.push({ fire: f, depth: f.bld ? d - 0.45 : d + 1.05 }); // juste devant ce qui brûle
@@ -5444,7 +5516,7 @@ function render() {
   if (player.aiming && player.held) drawThrowAim(ox, oy);
   if (mode === 'play' && !overlayOpen() && !build) drawPlaceGhost(ox, oy);
   // Brainless visible en transparence derrière les arbres
-  if (mode === 'play') {
+  if (mode === 'play' && !build) {
     ctx.globalAlpha = 0.28;
     drawPlayer(ox, oy, 0);
     ctx.globalAlpha = 1;
@@ -6226,7 +6298,7 @@ function updateMenu(dt) {
     window.BRAINLESS = { get world() { return world; }, player, startWorld, createWorld, listWorlds, quitToMenu, get mode() { return mode; }, stats, O, T, decals, particles, npcs, damage, hurtPlayer,
       vstate, crime, killNpc, hitNpc, nearestPrey, get scent() { return scent; },
       get tod() { return tod; }, set tod(v) { tod = v; }, weather, spawnBeast, gainEvo, has, get pages() { return atlasMain.pages.concat(atlasNomu.pages); }, blockedFor, freeSpot, OBJ_INFO, overlapping, crackTile, craterTile, doSlam, doBigPunch, doRushHit, openMutChoice, chooseMutation, openInv, addItem, useItem, get mutChoice() { return mutChoice; }, get invUI() { return invUI; }, get baking() { return baking; }, drops, fires, ignite, oilSplash, thrown, startGrab, releaseHeld, grabTarget, holdPts,
-      get realm() { return realm; }, get surface() { return surface; }, enterRealm, exitRealm, enterBuilding, builtNear, openBuild, get build() { return build; }, buildPlace, buildDig, digTile, doPunchHit };
+      get realm() { return realm; }, get surface() { return surface; }, enterRealm, exitRealm, enterBuilding, builtNear, openBuild, get build() { return build; }, buildPlace, buildDig, digTile, doPunchHit, builtAtScreen };
   }
   await loadAssets();
   loading.style.display = 'none';

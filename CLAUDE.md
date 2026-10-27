@@ -193,9 +193,11 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
   liseré violet (`drawTip`), onglets attachés au-dessus. Onglets SAC (Brainless qui tourne dans son
   cadre, ses 3 alters équipés à gauche comme une armure, sa réserve d'alters ; ou COFFRE), MUTATIONS
   (cases reliées comme l'écran des progrès), FABRIQUER (livre de recettes, ingrédients -> résultat).
-  Objets comme Minecraft (`slotClick`) : toucher/clic = prendre la pile, poser ailleurs = fusionner ou
-  échanger, glisser-déposer, appui long ou clic droit = la moitié (ou poser un seul), double-toucher
-  ou Maj+clic = de l'autre côté (`quickMove`), lâché hors du panneau = tombe par terre (`dropCursor`).
+  Objets (`slotClick`) : main vide, un toucher/clic choisit l'objet et affiche son nom et ses infos
+  (`invUI.pick`, cadre blanc), le retoucher le prend, le retoucher vite l'envoie de l'autre côté
+  (`quickMove`, aussi Maj+clic) ; main pleine, un toucher pose (fusionner ou échanger) ; glisser-déposer,
+  appui long ou clic droit = la moitié (ou poser un seul), lâché hors du panneau = tombe par terre
+  (`dropCursor`).
   Le jeu est en pause tant qu'il est ouvert (`overlayOpen`) : l'interface a sa propre horloge `rt()`.
   Clavier/manette : la direction vise la case voisine (`overlayNav`), X = clic droit, Maj+Entrée / Y =
   de l'autre côté. Barre d'objets façon Minecraft (`drawHotbar`, gros cadre blanc, nom de l'objet).
@@ -210,9 +212,13 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
   une portée `buildR()` (9 tuiles dehors, 12 dans la tanière ; grille pointillée, bord doré). Tiroir en
   bas à onglets (`BUILD_TABS` : CREUSER (tanière seulement), MURS, FEU, ABRIS, MEUBLES) : on glisse une
   case sur une tuile (aperçu vert/rouge, visée 14 px au-dessus du doigt), ou on la choisit puis on
-  touche les tuiles. Ce qui manque au sac est fabriqué à la pose si les matériaux y sont (« + »).
-  Toucher une construction posée la choisit (contour doré) : TOURNER la tourne sur place. L'appui long
-  (clic droit, X) la soulève (`builtAtScreen` vise son dessin) : on la repose ailleurs, ou on la lâche
+  touche les tuiles. Au doigt, ce qui s'oriente passe d'abord par un aperçu en attente (`build.pend`)
+  avec des flèches ◀ ▶ de part et d'autre et POSER dessous (`rotControls`, boutons dans le monde) ;
+  retoucher l'aperçu le pose aussi. Brainless est caché pendant qu'on bâtit (sa tuile en pointillés
+  rouges). Ce qui manque au sac est fabriqué à la pose si les matériaux y sont (« + »).
+  Toucher une construction posée la choisit (contour doré, ses flèches la tournent sur place). L'appui
+  long (clic droit, X) la soulève (`builtAtScreen` teste les pixels du dessin : une étagère devant ne vole
+  pas le doigt) : on la repose ailleurs, ou on la lâche
   sur le tiroir pour la ranger (un coffre rend son contenu). Bandeau : ANNULER (`build.undo`, aussi pour
   creuser/remblayer), TOURNER, CENTRER, OK. Charte de l'écran `BUI` : peau indigo, rayures rouges,
   griffures, bec doré en V, cerveau pour « fabricable ».
@@ -235,7 +241,8 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
   de côté (`realm.stash`) et retrouvé à la sortie (`exitRealm`, `doorLock` : il ne rentre pas tant qu'il
   pousse encore). Dedans : pas de villages, de faune, de météo, de lucioles ni de flair ; teinte fixe
   (`drawSky`), `darkness()` constant (les lueurs restent allumées). `world.solid(x, y)` = paroi (bloque
-  toujours, arrête les projectiles). Sauvegarde : `realmData` (clé -> mods, terr, wear, coffres, rots),
+  toujours, arrête les projectiles). La porte et l'échelle (`exit`) sont incassables ; une sortie cassée
+  par une ancienne version revient au chargement (`exitKey`). Sauvegarde : `realmData` (clé -> mods, terr, wear, coffres, rots),
   Brainless est sauvé devant la porte. Dormir dans un nid dedans : il se réveille devant sa porte.
 - **Intérieurs** (`Room`, clé `room:x,y`, suit la maison quand on la déplace) : pièce w x h, murs du fond
   hauts (`T.WALL_IN` plâtre et poutres, `T.WALL_HIDE` peaux rayées pour son repaire), murets devant, vide
