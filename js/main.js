@@ -497,33 +497,69 @@ function blockedFor(e, nx, ny, feet, npc) {
   const cur = world.hAt(Math.floor(e.x), Math.floor(e.y));
   const h = world.hAt(tx, ty);
   if (h * 8 - feet > 8.5 || cur - h > (npc ? 1 : 2)) return true; // falaise
+  return obstacleAt(nx, ny, feet, e);
+}
+
+// Un obstacle (arbre, rocher, mur, maison…) occupe-t-il le point (nx, ny) pour des pieds à la
+// hauteur `feet` ? En l'air (saut, projeté), on passe par-dessus ce qui est plus bas que les
+// pieds (`tall`) ; au sol on ne le fait jamais (sa hauteur rattrape le relief avec un temps de retard).
+// `from` = position actuelle : s'il est déjà dedans (poussé, apparu là, retombé dessus), on le
+// laisse en sortir.
+function obstacleAt(nx, ny, feet, from) {
+  const tx = Math.floor(nx), ty = Math.floor(ny);
+  const air = from && from.air;
+  const clears = (feet, x, y, tall) => air && tall !== undefined && feet - world.hAt(x, y) * 8 >= tall;
   for (let dy = -1; dy <= 1; dy++) {
     for (let dx = -1; dx <= 1; dx++) {
       const info = OBJ_INFO[world.objAt(tx + dx, ty + dy)];
       if (!info) continue;
       if (info.solid) {
+        if (clears(feet, tx + dx, ty + dy, info.tall)) continue;
         const cx = tx + dx + 0.5, cy = ty + dy + 0.5, r = info.solid + 0.2;
         const dn = Math.hypot(nx - cx, ny - cy);
-        // déjà coincé dedans (poussé, apparu là) : on le laisse en sortir
-        if (dn < r && !(Math.hypot(e.x - cx, e.y - cy) < r && dn >= Math.hypot(e.x - cx, e.y - cy))) return true;
+        const d0 = from ? Math.hypot(from.x - cx, from.y - cy) : 1e9;
+        // déjà coincé dedans : on le laisse en sortir
+        if (dn < r && !(d0 < r && dn >= d0)) return true;
         continue;
       }
       if (info.tilebox) {
         // rempart : toute la tuile est pleine
+        if (clears(feet, tx + dx, ty + dy, info.tall)) continue;
         const bx = tx + dx + 0.5, by = ty + dy + 0.5;
-        if (boxHit(nx, ny, bx, by, 0.7) && !boxHit(e.x, e.y, bx, by, 0.7)) return true;
+        if (boxHit(nx, ny, bx, by, 0.7) && !(from && boxHit(from.x, from.y, bx, by, 0.7))) return true;
         continue;
       }
       if (!info.part && !info.building) continue;
       // bâtiment : une boîte centrée sur le coin commun de ses 4 tuiles
       const a = world.anchorOf(tx + dx, ty + dy);
       const ai = OBJ_INFO[world.objAt(a[0], a[1])];
-      if (!ai || !ai.box) continue;
+      if (!ai || !ai.box || clears(feet, a[0], a[1], ai.tall)) continue;
       const r = ai.box + 0.2;
-      if (boxHit(nx, ny, a[0], a[1], r) && !boxHit(e.x, e.y, a[0], a[1], r)) return true;
+      if (boxHit(nx, ny, a[0], a[1], r) && !(from && boxHit(from.x, from.y, a[0], a[1], r))) return true;
     }
   }
   return false;
+}
+
+// Retombé d'un saut au milieu d'un obstacle : on le pose de l'autre côté s'il allait par là
+// (il l'a presque franchi, on lui donne), sinon au point libre le plus proche.
+function escapeObstacle() {
+  const feet = player.water ? 0 : player.z;
+  if (!obstacleAt(player.x, player.y, feet)) return;
+  const [fx0, fy0] = player.mv || dirWorld(player.dir);
+  const a0 = Math.atan2(fy0, fx0);
+  const cur = world.hAt(Math.floor(player.x), Math.floor(player.y));
+  const tryAt = (a, r) => {
+    const x = player.x + Math.cos(a) * r, y = player.y + Math.sin(a) * r;
+    const tx = Math.floor(x), ty = Math.floor(y);
+    if (Math.abs(world.hAt(tx, ty) - cur) > 1 || obstacleAt(x, y, world.hAt(tx, ty) * 8)) return false;
+    player.x = x; player.y = y;
+    return true;
+  };
+  if (player.moving) for (let r = 0.2; r <= 1.4; r += 0.1) for (const da of [0, 0.3, -0.3]) if (tryAt(a0 + da, r)) return;
+  for (let r = 0.2; r <= 1.8; r += 0.2) {
+    for (let i = 0; i < 16; i++) if (tryAt(a0 + (i % 2 ? 1 : -1) * Math.ceil(i / 2) * Math.PI / 8, r)) return;
+  }
 }
 
 function blocked(nx, ny) {
@@ -938,6 +974,7 @@ function surfaceAt(x, y) {
 }
 
 function land() {
+  escapeObstacle();
   if (waterDepth(player.x, player.y)) { player.air = false; player.jz = 0; player.vz = 0; splash(1); return; }
   sfx.land(player.sprinting);
   player.air = false;
@@ -1103,6 +1140,7 @@ function update(dt) {
       const coasting = wasSprinting && player.mv && player.idleT < 0.12 && sprintHeld();
       const run = sprintHeld() && !player.tired && (mag > 0.15 || coasting);
       if (!player.air) player.sprinting = run;
+      player.moving = mag > 0.15;
       if (mag > 0.15) {
         const cx = ix / mag, ct = iy / mag;
         const vx = (cx + ct) / Math.SQRT2, vy = (ct - cx) / Math.SQRT2;

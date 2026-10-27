@@ -138,8 +138,13 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
   hauts, sombres sur les bords bas quand le voisin est plus bas.
 - Toute nouvelle matière de tuile doit fournir : dessus (4 tons), flanc (rampe dédiée),
   grain par `hash`.
-- Les objets ont des infos de gameplay dans `OBJ_INFO` (`solid`, `hp`, `tree`, `rock`,
+- Les objets ont des infos de gameplay dans `OBJ_INFO` (`solid`, `tall`, `hp`, `tree`, `rock`,
   `leafy`, `small`…). Chaque nouvel objet y a sa ligne, et sa génération dans `genCell`.
+- `tall` = hauteur de l'obstacle en pixels (un peu sous le haut du sprite ; bâtiments : dans
+  `BUILDINGS`). En l'air, on passe par-dessus quand les pieds sont plus hauts (`obstacleAt`) :
+  saut normal ≈ 23 (rochers, clôtures, tonneaux), super saut BOND ≈ 60 (arbres, remparts,
+  maisons ; pas la tour de guet). Retombé dans un obstacle, `escapeObstacle` le pose de l'autre
+  côté s'il avançait, sinon au plus près. Sans `tall`, l'obstacle bloque toujours.
 
 ## 6. Villages et bâtiments (`js/buildings.js`, `js/world.js`)
 
