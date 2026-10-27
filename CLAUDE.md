@@ -204,6 +204,16 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
   pose. Le bouton N devient OUVRIR (coffre, contenu dans `world.chests`, sauvé), DORMIR (nid : nuit
   passée, vie pleine, il s'y réveille après une défaite), CUIRE (feu de camp : viande crue -> cuite).
   Piège à piques : blesse qui marche dessus. Feu de camp et torche : flamme animée et lueur la nuit.
+- **Mode BÂTIR** (icône marteau à gauche du sac, B au clavier, R3 à la manette ; refusé en combat) :
+  le monde se fige (`updateBuild` : seules les animations tournent), la caméra se détache de Brainless
+  (`build.cx/cy`, glisser au doigt avec élan, ZQSD, stick) dans une portée de `BUILD_R` = 9 tuiles
+  (grille pointillée, bord doré). Tiroir en bas avec les 8 constructions (`BUILD_LIST`) : on en glisse
+  une sur une tuile (aperçu vert/rouge, visée 14 px au-dessus du doigt), ou on la choisit puis on
+  touche les tuiles. Ce qui manque au sac est fabriqué à la pose si les matériaux y sont (« + » sur la
+  case). Appui long (clic droit, X) sur une construction = la soulever (`builtAtScreen` vise son
+  dessin) : on la repose ailleurs, ou on la lâche sur le tiroir pour la ranger (un coffre rend son
+  contenu). Bandeau : ANNULER (`build.undo`), TOURNER (palissade), CENTRER, OK. Charte de l'écran
+  `BUI` : peau indigo, rayures rouges, griffures, bec doré en V, cerveau pour « fabricable ».
 
 ## 6. Villages et bâtiments (`js/buildings.js`, `js/world.js`)
 

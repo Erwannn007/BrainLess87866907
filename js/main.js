@@ -313,7 +313,7 @@ function resetState() {
   for (const k in stats) stats[k] = 0;
   npcs.length = particles.length = flyers.length = fx.length = decals.length = bloods.length = thrown.length = 0;
   hits.clear(); vstate.clear(); bumpT.clear(); fires.clear();
-  drops.length = 0; mutChoice = null; invUI = null; toast = null;
+  drops.length = 0; mutChoice = null; invUI = null; toast = null; build = null; placedFx.clear();
   scent = null; msg = null; shake = 0; windT = 0; tod = 0.3; curVillage = null;
   Object.assign(weather, { kind: 'clear', left: 40, rain: 0, cloud: 0, fog: 0, storm: 0, flash: 0, boltT: 6 });
   weather.drops.length = weather.flakes.length = thunders.length = 0;
@@ -335,6 +335,7 @@ function startWorld(meta) {
 }
 
 function quitToMenu() {
+  closeBuild();
   save();
   mode = 'menu';
   resetState();
@@ -372,7 +373,7 @@ function save() {
     inv: player.inv, chests: [...world.chests], stats, mods: [...world.mods], terr: [...world.terr], wear: [...world.wear], deaths: [...world.deaths],
   });
 }
-document.addEventListener('visibilitychange', () => { if (document.hidden) save(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden) { if (build && build.lift) buildDrop(null, false); save(); } });
 
 // ---------------------------------------------------------------- contrôles
 const input = { x: 0, y: 0, punch: false, jump: false, sniff: false, grab: false };
@@ -439,6 +440,12 @@ function onTouchStart(e) {
   e.preventDefault();
   unlockAudio();
   setMode('touch');
+  if (mode === 'play' && build) {
+    // mode BÂTIR : un seul doigt glisse, pose, déplace
+    const t = e.changedTouches[0];
+    if (uiTouch === null) { uiTouch = t.identifier; buildDown(...toGame(t)); }
+    return;
+  }
   if (mode === 'play' && overlayOpen()) {
     // un seul doigt pilote l'écran (prendre, glisser, poser)
     const t = e.changedTouches[0];
@@ -449,6 +456,7 @@ function onTouchStart(e) {
     const [x, y] = toGame(t);
     if (Math.hypot(x - muteBtn.x, y - muteBtn.y) < muteBtn.r + 6) { toggleMute(); sfx.ui(); continue; }
     if (mode === 'play' && Math.hypot(x - bagBtn.x, y - bagBtn.y) < bagBtn.r + 4) { openInv(); return; }
+    if (mode === 'play' && Math.hypot(x - buildBtn.x, y - buildBtn.y) < buildBtn.r + 4) { openBuild(); return; }
     if (mode === 'play' && hotbarTap(x, y)) continue;
     if (mode === 'play' && Math.hypot(x - musicBtn.x, y - musicBtn.y) < musicBtn.r + 4) { switchMusic(); continue; }
     if (mode === 'play' && Math.hypot(x - homeBtn.x, y - homeBtn.y) < homeBtn.r + 5) { sfx.ui(); quitToMenu(); return; }
@@ -464,6 +472,10 @@ function onTouchStart(e) {
 let uiTouch = null; // le doigt qui manipule le sac
 function onTouchMove(e) {
   e.preventDefault();
+  if (mode === 'play' && build) {
+    for (const t of e.changedTouches) if (t.identifier === uiTouch) buildMove(...toGame(t));
+    return;
+  }
   if (mode === 'play' && overlayOpen()) {
     for (const t of e.changedTouches) if (t.identifier === uiTouch) overlayMove(...toGame(t));
     return;
@@ -490,7 +502,7 @@ function onTouchMove(e) {
 }
 function onTouchEnd(e) {
   e.preventDefault();
-  for (const t of e.changedTouches) if (t.identifier === uiTouch) { uiTouch = null; if (overlayOpen()) overlayUp(...toGame(t)); }
+  for (const t of e.changedTouches) if (t.identifier === uiTouch) { uiTouch = null; if (build) buildUp(...toGame(t)); else if (overlayOpen()) overlayUp(...toGame(t)); }
   for (const t of e.changedTouches) {
     if (t.identifier === joy.id) { joy.id = null; input.x = input.y = 0; }
     btnTouches.delete(t.identifier);
@@ -508,8 +520,10 @@ window.addEventListener('keydown', (e) => {
   unlockAudio();
   setMode('keys');
   if (mode !== 'play') { keys.delete(e.code); return; } // le menu gère ses touches
+  if (build) { e.preventDefault(); buildKey(e); return; } // ZQSD restent dans `keys` : ils promènent la caméra
   if (overlayOpen()) { keys.delete(e.code); e.preventDefault(); overlayKey(e); return; } // sac ou choix de mutation
   if (e.code === 'KeyI' || e.code === 'Tab') { e.preventDefault(); openInv(); return; }
+  if (e.code === 'KeyB') { openBuild(); return; }
   if (/^Digit[1-9]$/.test(e.code)) player.sel = +e.code[5] - 1;
   if (e.code === 'KeyT') useItem();
   if (e.code === 'KeyM') toggleMute();
@@ -524,7 +538,7 @@ window.addEventListener('keydown', (e) => {
 });
 window.addEventListener('keyup', (e) => keys.delete(e.code));
 // molette : change de case dans la barre
-canvas.addEventListener('wheel', (e) => { if (mode === 'play' && !overlayOpen()) player.sel = (player.sel + (e.deltaY > 0 ? 1 : 8)) % 9; }, { passive: true });
+canvas.addEventListener('wheel', (e) => { if (mode === 'play' && build) buildCycle(e.deltaY > 0 ? 1 : -1); else if (mode === 'play' && !overlayOpen()) player.sel = (player.sel + (e.deltaY > 0 ? 1 : 8)) % 9; }, { passive: true });
 window.addEventListener('blur', () => { keys.clear(); mouse.punch = mouse.charge = mouse.grab = false; });
 
 // Souris (PC) : clic gauche = coup (maintenir = coup chargé), clic droit = frappe au sol.
@@ -532,9 +546,11 @@ canvas.addEventListener('mousedown', (e) => {
   unlockAudio();
   setMode('keys');
   const x = e.clientX / cssPerPx, y = e.clientY / cssPerPx;
+  if (mode === 'play' && build) { if (e.button !== 1) buildDown(x, y, e.button === 2); return; }
   if (mode === 'play' && overlayOpen()) { overlayDown(x, y, e.button === 2, e.shiftKey); return; }
   if (Math.hypot(x - muteBtn.x, y - muteBtn.y) < muteBtn.r + 6) { toggleMute(); sfx.ui(); return; }
   if (mode === 'play' && Math.hypot(x - bagBtn.x, y - bagBtn.y) < bagBtn.r + 4) { openInv(); return; }
+  if (mode === 'play' && Math.hypot(x - buildBtn.x, y - buildBtn.y) < buildBtn.r + 4) { openBuild(); return; }
   if (mode === 'play' && hotbarTap(x, y)) return;
   if (mode === 'play' && Math.hypot(x - musicBtn.x, y - musicBtn.y) < musicBtn.r + 4) { switchMusic(); return; }
   if (mode === 'play' && Math.hypot(x - homeBtn.x, y - homeBtn.y) < homeBtn.r + 5) { sfx.ui(); quitToMenu(); return; }
@@ -542,8 +558,9 @@ canvas.addEventListener('mousedown', (e) => {
   if (e.button === 1) { e.preventDefault(); mouse.grab = true; input.grab = true; }
   if (e.button === 2) mouse.charge = true;
 });
-canvas.addEventListener('mousemove', (e) => { if (mode === 'play' && invUI) overlayMove(e.clientX / cssPerPx, e.clientY / cssPerPx); });
+canvas.addEventListener('mousemove', (e) => { if (mode === 'play' && build) buildMove(e.clientX / cssPerPx, e.clientY / cssPerPx); else if (mode === 'play' && invUI) overlayMove(e.clientX / cssPerPx, e.clientY / cssPerPx); });
 window.addEventListener('mouseup', (e) => {
+  if (mode === 'play' && build && e.button !== 1) buildUp(e.clientX / cssPerPx, e.clientY / cssPerPx);
   if (mode === 'play' && invUI && e.button === 0) overlayUp(e.clientX / cssPerPx, e.clientY / cssPerPx);
   if (e.button === 0) mouse.punch = false;
   if (e.button === 1) mouse.grab = false;
@@ -585,6 +602,7 @@ function readPad() {
   if (P[15]) player.sel = (player.sel + 1) % 9;
   if (P[12]) useItem();
   if (P[13]) openInv();
+  if (P[11]) openBuild(); // R3
   return pad.sx || pad.sy ? [pad.sx, pad.sy] : null;
 }
 
@@ -2849,16 +2867,519 @@ function drawPlaceGhost(ox, oy) {
   ctx.globalAlpha = 0.55;
   draw(img, gx - img.ox, gy - img.oy);
   ctx.globalAlpha = 0.8 + Math.sin(time * 8) * 0.2;
-  ctx.fillStyle = t.ok ? '#7ee08a' : '#ff5a5e';
-  for (let r = 0; r < 8; r++) {
-    // le losange de la tuile en pointillés
-    if (r & 1) continue;
-    const w = 14 - 2 * r;
-    ctx.fillRect(sx - 16 + 2 * r, sy + r, 2, 1); ctx.fillRect(sx + 14 - 2 * r, sy + r, 2, 1);
-    ctx.fillRect(sx - 16 + 2 * r, sy + 15 - r, 2, 1); ctx.fillRect(sx + 14 - 2 * r, sy + 15 - r, 2, 1);
-    void w;
-  }
+  tileOutline(sx, sy, t.ok ? '#7ee08a' : '#ff5a5e', true); // le losange de la tuile en pointillés
   ctx.globalAlpha = 1;
+}
+
+// ---------------------------------------------------------------- mode BÂTIR
+// Le monde se fige et la caméra se détache de Brainless : on la promène au doigt (ZQSD, stick),
+// et on glisse les constructions du tiroir sur les tuiles autour de lui. Ce qui manque au sac mais
+// qu'il sait fabriquer est fabriqué à la pose. Maintenir une construction la soulève : on la
+// déplace, ou on la range en la lâchant sur le tiroir. Toucher une case du tiroir la choisit :
+// chaque tuile touchée en reçoit une.
+const BUILD_R = 9; // portée, en tuiles autour de lui
+const BUILD_LIST = RECIPES.map((r) => r.out);
+// la charte de l'écran : sa peau indigo, ses rayures rouges, son bec doré, son cerveau
+const BUI = { ink: '#090a20', dark: '#151848', base: '#22276b', hi: '#343b8e', dim: '#5a5f9a', red: '#9c1628', redHi: '#d22838', gold: '#e0b23a', goldHi: '#ffe07a', goldLo: '#6b4a10', brain: '#c97249' };
+const TOUCH_LIFT = 14; // au doigt, ce qu'on glisse vise la tuile un peu au-dessus du doigt, pour rester visible
+let build = null;
+const placedFx = new Map(); // "x,y" -> rt() de la pose : la construction tombe en place
+const itemOfObj = (o) => (o === O.FENCE_Y ? 'fence' : BUILD_LIST.find((id) => ITEMS[id].obj === o));
+const recipeOf = (id) => RECIPES.find((r) => r.out === id);
+const costText = (r) => Object.keys(r.need).map((k) => r.need[k] + ' ' + ITEMS[k].name).join(' + ');
+const objFor = (id) => (ITEMS[id].obj === O.FENCE_X && build.rot ? O.FENCE_Y : ITEMS[id].obj);
+
+function openBuild() {
+  if (build || overlayOpen()) return;
+  if (player.dead || player.sleep || player.air || player.action || player.held || player.slide || player.water >= 2) { showMsg('PAS MAINTENANT', 1); sfx.ui(); return; }
+  if (dangerLevel() > 0.2) { showMsg('PAS PENDANT UN COMBAT', 1.5); sfx.ui(); return; }
+  releaseInputs();
+  player.sprinting = false; player.spd = 0;
+  setAnim('idle');
+  const s = player.inv[player.sel];
+  build = { cx: player.x, cy: player.y, cz: player.z, vx: 0, vy: 0, sel: s && ITEMS[s.id].kind === 'place' ? BUILD_LIST.indexOf(s.id) : -1,
+    rot: 0, ptr: null, lift: null, hover: null, undo: [], t: 0, ox: 0, oy: 0, btns: [] };
+  uiTouch = null;
+  sfx.ui();
+}
+function closeBuild() {
+  if (!build) return;
+  if (build.lift) buildDrop(null, false); // ce qu'il tenait retourne à sa place
+  build = null;
+  uiTouch = null;
+  keys.clear();
+  sfx.ui();
+}
+
+// --- géométrie
+// La tuile visible sous un point de l'écran : la plus en avant dont la colonne (dessus ou flanc) le couvre.
+function tileAtScreen(px, py) {
+  const A = (px - build.ox) / 16;
+  let best = null;
+  for (let h = 0; h < 16; h++) {
+    const Bd = (py - build.oy + h * 8) / 8;
+    const tx = Math.floor((A + Bd) / 2), ty = Math.floor((Bd - A) / 2);
+    const th = world.walkable(tx, ty) ? world.hAt(tx, ty) : 0;
+    if (th >= h && (!best || tx + ty > best.tx + best.ty)) best = { tx, ty };
+  }
+  return best;
+}
+// La construction dont le dessin est sous le doigt (un mur dépasse au-dessus de sa tuile).
+function builtAtScreen(px, py) {
+  const t0 = tileAtScreen(px, py);
+  if (!t0) return null;
+  let best = null;
+  for (let dy = 0; dy <= 2; dy++) for (let dx = 0; dx <= 2; dx++) {
+    const tx = t0.tx + dx, ty = t0.ty + dy, o = world.objAt(tx, ty);
+    if (!OBJ_INFO[o] || !OBJ_INFO[o].built || (best && tx + ty <= best.tx + best.ty)) continue;
+    const img = objSprites[o][0], gx = build.ox + isoX(tx, ty) - img.ox, gy = build.oy + isoY(tx, ty) - world.hAt(tx, ty) * 8 + 8 - img.oy;
+    if (px >= gx && px < gx + img.w && py >= gy && py < gy + img.h) best = { tx, ty };
+  }
+  return best;
+}
+const buildAim = (x, y) => tileAtScreen(x, y - (inputMode === 'touch' ? TOUCH_LIFT : 0));
+const centerTile = () => tileAtScreen(VW / 2, VH / 2 + 14);
+// Glisser l'écran de (dx, dy) pixels : le monde suit le doigt. La caméra reste près de Brainless.
+function panBy(dx, dy) {
+  const B = build;
+  B.cx -= (dx / 16 + dy / 8) / 2;
+  B.cy -= (dy / 8 - dx / 16) / 2;
+  const ex = B.cx - player.x, ey = B.cy - player.y, d = Math.hypot(ex, ey), M = BUILD_R + 3;
+  if (d > M) { B.cx = player.x + ex * M / d; B.cy = player.y + ey * M / d; }
+}
+
+// Pourquoi on ne peut pas bâtir ici (null : c'est possible).
+function buildBlock(tx, ty) {
+  if (Math.hypot(tx + 0.5 - player.x, ty + 0.5 - player.y) > BUILD_R) return 'TROP LOIN DE LUI';
+  if (!world.walkable(tx, ty)) return "PAS SUR L'EAU";
+  const info = OBJ_INFO[world.objAt(tx, ty)];
+  if (info && !(info.small && !info.part)) return 'LA PLACE EST PRISE';
+  if (fires.has(tx + ',' + ty)) return 'CA BRULE';
+  if ((Math.floor(player.x) === tx && Math.floor(player.y) === ty) || Math.hypot(tx + 0.5 - player.x, ty + 0.5 - player.y) < 0.75) return 'IL EST DESSUS';
+  for (const n of npcs) if (!n.inside && !n.held && Math.hypot(n.x - tx - 0.5, n.y - ty - 0.5) < 0.6) return "QUELQU'UN EST DESSUS";
+  return null;
+}
+
+// En stock, ou fabricable avec ce qu'il a ?
+function buildStock(id) {
+  const n = countItem(id);
+  return { n, craft: !n && canCraft(recipeOf(id)) };
+}
+// Prend une construction dans le sac, ou la fabrique sur place.
+function takeForBuild(id) {
+  if (countItem(id)) { takeItem(id, 1); return true; }
+  const r = recipeOf(id);
+  if (!canCraft(r)) {
+    const miss = Object.keys(r.need).filter((k) => countItem(k) < r.need[k]).map((k) => r.need[k] - countItem(k) + ' ' + ITEMS[k].name).join(' + ');
+    showMsg('IL MANQUE ' + miss, 1.8, 'CASSE LE DECOR POUR EN TROUVER');
+    sfx.ui();
+    return false;
+  }
+  for (const k in r.need) takeItem(k, r.need[k]);
+  if (r.n > 1) giveOrDrop(id, r.n - 1);
+  sfx.craft();
+  return true;
+}
+
+function setBuilt(tx, ty, o, chest) {
+  const key = tx + ',' + ty;
+  world.setObj(tx, ty, o);
+  hits.delete(key);
+  if (o === O.CHEST) world.chests.set(key, chest || Array(CHEST_N).fill(null));
+  placedFx.set(key, rt());
+  sfx.place();
+  shake = Math.max(shake, 1.5);
+  burst(tx + 0.5, ty + 0.5, world.hAt(tx, ty) * 8, DUST_COLS, 10, { up: 25, speed: 1.4, g: 60, life: 0.5, spread: 2 });
+}
+function pushUndo(u) { build.undo.push(u); if (build.undo.length > 40) build.undo.shift(); }
+
+function buildPlace(id, tx, ty) {
+  const why = buildBlock(tx, ty);
+  if (why) { showMsg(why, 1); sfx.ui(); return false; }
+  if (!takeForBuild(id)) return false;
+  const o = objFor(id), prev = world.objAt(tx, ty);
+  setBuilt(tx, ty, o, null);
+  pushUndo({ kind: 'place', tx, ty, o, prev, id });
+  return true;
+}
+
+// Soulever une construction posée (elle quitte le monde le temps qu'on la promène).
+function buildLift(tx, ty) {
+  const o = world.objAt(tx, ty), info = OBJ_INFO[o], key = tx + ',' + ty;
+  if (!info || !info.built) return false;
+  if (fires.has(key)) { showMsg('CA BRULE', 1); sfx.ui(); return false; }
+  if (Math.hypot(tx + 0.5 - player.x, ty + 0.5 - player.y) > BUILD_R) { showMsg('TROP LOIN DE LUI', 1); sfx.ui(); return false; }
+  const chest = world.chests.get(key) || null;
+  world.chests.delete(key);
+  world.setObj(tx, ty, O.NONE);
+  hits.delete(key);
+  build.lift = { o, tx, ty, chest, spawn: !!(player.spawn && player.spawn[0] === tx && player.spawn[1] === ty) };
+  sfx.grabReach();
+  burst(tx + 0.5, ty + 0.5, world.hAt(tx, ty) * 8, DUST_COLS, 6, { up: 20, speed: 1, g: 60, life: 0.4, spread: 1.5 });
+  return true;
+}
+// Lâcher ce qu'on tient : sur une tuile (déplacée), sur le tiroir (rangée), sinon retour à sa place.
+function buildDrop(t, store) {
+  const L = build.lift;
+  if (!L) return;
+  build.lift = null;
+  const id = itemOfObj(L.o);
+  if (store) {
+    if (L.chest) for (const s of L.chest) if (s) giveOrDrop(s.id, s.n);
+    giveOrDrop(id, 1);
+    toastItem(id, 1);
+    sfx.pickup();
+    if (L.spawn) player.spawn = null;
+    pushUndo({ kind: 'store', tx: L.tx, ty: L.ty, o: L.o, id });
+    return;
+  }
+  const why = t && buildBlock(t.tx, t.ty);
+  if (t && !why && (t.tx !== L.tx || t.ty !== L.ty)) {
+    setBuilt(t.tx, t.ty, L.o, L.chest);
+    if (L.spawn) player.spawn = [t.tx, t.ty];
+    pushUndo({ kind: 'move', from: [L.tx, L.ty], to: [t.tx, t.ty], o: L.o });
+    return;
+  }
+  if (why) showMsg(why, 1);
+  setBuilt(L.tx, L.ty, L.o, L.chest);
+}
+
+function buildUndo() {
+  const u = build.undo.pop();
+  if (!u) { showMsg('RIEN A ANNULER', 1); sfx.ui(); return; }
+  if (u.kind === 'place' && world.objAt(u.tx, u.ty) === u.o) {
+    const key = u.tx + ',' + u.ty, c = world.chests.get(key);
+    if (c) { for (const s of c) if (s) giveOrDrop(s.id, s.n); world.chests.delete(key); }
+    world.setObj(u.tx, u.ty, u.prev);
+    giveOrDrop(u.id, 1);
+  } else if (u.kind === 'move' && world.objAt(u.to[0], u.to[1]) === u.o && !buildBlock(u.from[0], u.from[1])) {
+    const k0 = u.to[0] + ',' + u.to[1], c = world.chests.get(k0) || null;
+    world.chests.delete(k0);
+    world.setObj(u.to[0], u.to[1], O.NONE);
+    setBuilt(u.from[0], u.from[1], u.o, c);
+    if (player.spawn && player.spawn[0] === u.to[0] && player.spawn[1] === u.to[1]) player.spawn = [...u.from];
+  } else if (u.kind === 'store' && countItem(u.id) && !buildBlock(u.tx, u.ty)) {
+    takeItem(u.id, 1);
+    setBuilt(u.tx, u.ty, u.o, null);
+  } else { showMsg('IMPOSSIBLE A ANNULER', 1); sfx.ui(); return; }
+  sfx.ui();
+}
+
+function buildRotate() {
+  if (build.lift && (build.lift.o === O.FENCE_X || build.lift.o === O.FENCE_Y)) build.lift.o = build.lift.o === O.FENCE_X ? O.FENCE_Y : O.FENCE_X;
+  else build.rot ^= 1;
+  sfx.ui();
+}
+function buildCycle(k) {
+  const n = BUILD_LIST.length;
+  build.sel = build.sel < 0 ? (k > 0 ? 0 : n - 1) : (build.sel + k + n) % n;
+  sfx.ui();
+}
+function buildCenter() { build.cx = player.x; build.cy = player.y; build.vx = build.vy = 0; sfx.ui(); }
+
+// --- tiroir (bas de l'écran)
+function buildLayout() {
+  const n = BUILD_LIST.length, gap = 2;
+  const cw = Math.max(20, Math.min(30, Math.floor((VW - 18 - safe.l - safe.r - gap * (n - 1)) / n))), ch = cw + 4;
+  const w = n * cw + (n - 1) * gap, x = Math.round(VW / 2 - w / 2), y = VH - safe.b - ch - 5;
+  return { n, cw, ch, gap, x, y, tray: { x: x - 5, y: y - 15, w: w + 10, h: ch + 20 } };
+}
+const inRect = (r, x, y) => x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
+function cardAt(L, x, y) {
+  if (y < L.y || y >= L.y + L.ch) return -1;
+  const i = Math.floor((x - L.x) / (L.cw + L.gap));
+  return i >= 0 && i < L.n && x - L.x - i * (L.cw + L.gap) < L.cw ? i : -1;
+}
+
+// --- doigt et souris
+function buildDown(x, y, right = false) {
+  const B = build;
+  if (B.ptr) return;
+  for (const h of B.btns) if (inRect(h, x, y)) { h.fn(); return; }
+  const L = buildLayout();
+  const ci = cardAt(L, x, y);
+  if (ci >= 0) { B.ptr = { kind: 'card', i: ci, x0: x, y0: y, x, y, moved: false }; return; }
+  if (inRect(L.tray, x, y)) return;
+  const t = tileAtScreen(x, y);
+  B.vx = B.vy = 0;
+  if (!t) return;
+  const bt = builtAtScreen(x, y);
+  if (right) { if (bt && buildLift(bt.tx, bt.ty)) B.ptr = { kind: 'lift', x, y }; return; }
+  B.ptr = { kind: 'map', x0: x, y0: y, x, y, t0: rt(), tm: rt(), tile: t, built: bt, moved: false };
+}
+function buildMove(x, y) {
+  const B = build, P = B.ptr;
+  B.hover = { x, y };
+  if (!P) return;
+  const dx = x - P.x, dy = y - P.y;
+  P.x = x; P.y = y;
+  if (!P.moved && P.kind !== 'lift' && Math.hypot(x - P.x0, y - P.y0) > 5) {
+    P.moved = true;
+    if (P.kind === 'card') { P.kind = 'drag'; B.sel = P.i; sfx.grabReach(); } // on tire une construction du tiroir
+  }
+  if (P.kind === 'map' && P.moved) {
+    panBy(dx, dy);
+    const now = rt(), k = Math.max(0.008, now - P.tm);
+    B.vx = B.vx * 0.4 + dx / k * 0.6; B.vy = B.vy * 0.4 + dy / k * 0.6;
+    P.tm = now;
+  }
+}
+function buildUp(x, y) {
+  const B = build, P = B.ptr;
+  if (!P) return;
+  B.ptr = null;
+  const L = buildLayout(), overTray = inRect(L.tray, x, y);
+  if (P.kind === 'card') { B.sel = B.sel === P.i ? -1 : P.i; sfx.ui(); return; } // un toucher : choisir / reposer
+  if (P.kind === 'drag') { const t = !overTray && buildAim(x, y); if (t) buildPlace(BUILD_LIST[P.i], t.tx, t.ty); return; }
+  if (P.kind === 'lift') { buildDrop(overTray ? null : buildAim(x, y), overTray); return; }
+  if (P.moved) { if (rt() - P.tm > 0.08) B.vx = B.vy = 0; return; } // fin d'un glissé : l'élan continue
+  const t = tileAtScreen(x, y);
+  if (!t) return;
+  const bt = builtAtScreen(x, y), o = bt && world.objAt(bt.tx, bt.ty);
+  if (B.sel < 0 && bt) { showMsg(ITEMS[itemOfObj(o)].name, 1.6, { touch: 'MAINTIENS-LA POUR LA DEPLACER', keys: 'CLIC DROIT : LA DEPLACER', pad: 'X : LA DEPLACER' }[inputMode]); sfx.ui(); return; }
+  if (B.sel >= 0) buildPlace(BUILD_LIST[B.sel], t.tx, t.ty);
+}
+
+function buildKey(e) {
+  const c = e.code;
+  if (c === 'Escape' || c === 'KeyB' || c === 'Enter') { closeBuild(); return; }
+  if (/^Digit[1-8]$/.test(c)) { const i = +c[5] - 1; build.sel = build.sel === i ? -1 : i; sfx.ui(); return; }
+  if (c === 'KeyR') buildRotate();
+  if (c === 'KeyU' || c === 'Backspace' || (c === 'KeyZ' && (e.ctrlKey || e.metaKey))) { keys.delete(c); buildUndo(); }
+  if (c === 'Space' || c === 'KeyC') buildCenter();
+  if (c === 'KeyM') toggleMute();
+  if (c === 'KeyF') toggleFullscreen();
+}
+
+function updateBuild(dt) {
+  const B = build;
+  time += dt; B.t += dt;
+  if (msg && (msg.t -= dt) <= 0) msg = null;
+  if (toast && (toast.t -= dt) <= 0) toast = null;
+  shake = Math.max(0, shake - dt * 20);
+  if (player.anim === 'idle') player.t += dt * ANIMS.idle.fps; // il respire en attendant
+  updateParticles(dt);
+  updateFlyers(dt);
+  updateMusic(dt, { night: darkness(), danger: 0, rain: weather.rain });
+  const P = B.ptr;
+  // appui long sur une construction : il la soulève
+  if (P && P.kind === 'map' && !P.moved && !P.noLift && rt() - P.t0 > 0.35 && P.built) {
+    if (buildLift(P.built.tx, P.built.ty)) P.kind = 'lift'; else P.noLift = true;
+  }
+  // ce qu'on promène au bord de l'écran fait défiler le monde
+  if (P && (P.kind === 'drag' || P.kind === 'lift')) {
+    const m = 22, L = buildLayout();
+    const ex = P.x < m ? 1 : P.x > VW - m ? -1 : 0, ey = P.y < 18 + safe.t + m ? 1 : P.y > L.tray.y - 4 && P.y < L.tray.y + 6 ? -1 : 0;
+    if (ex || ey) panBy(ex * 110 * dt, ey * 110 * dt);
+  }
+  // élan après un glissé
+  if (!P && Math.hypot(B.vx, B.vy) > 4) { panBy(B.vx * dt, B.vy * dt); const k = Math.exp(-6 * dt); B.vx *= k; B.vy *= k; }
+  const kb = keyboardVector();
+  if (kb) panBy(-kb[0] * 170 * dt, -kb[1] * 170 * dt);
+  // manette : le stick promène le viseur (le centre de l'écran)
+  pollPad();
+  if (!pad.connected) return;
+  if (pad.any) { setMode('pad'); unlockAudio(); }
+  if (pad.sx || pad.sy) panBy(-pad.sx * 170 * dt, -pad.sy * 170 * dt);
+  const Pp = pad.pressed || [];
+  if (Pp[1] || Pp[9] || Pp[11]) { closeBuild(); return; }
+  if (Pp[4] || Pp[14]) buildCycle(-1);
+  if (Pp[5] || Pp[15]) buildCycle(1);
+  if (Pp[3]) buildRotate();
+  if (Pp[8]) toggleMute();
+  const t = centerTile();
+  if (Pp[13]) { if (B.lift) buildDrop(null, true); else buildUndo(); }
+  if (Pp[0]) { if (B.lift) buildDrop(t, false); else if (B.sel >= 0 && t) buildPlace(BUILD_LIST[B.sel], t.tx, t.ty); }
+  if (Pp[2]) { if (B.lift) buildDrop(t, false); else if (!t || !buildLift(t.tx, t.ty)) sfx.ui(); }
+}
+
+// --- dessin
+// Le losange d'une tuile (ligne r : de 14-2r à 17+2r), plein ou en pointillés.
+function tileOutline(sx, top, col, dashed) {
+  ctx.fillStyle = col;
+  for (let r = 0; r < 8; r++) {
+    if (dashed && (r & 1)) continue;
+    ctx.fillRect(sx - 2 - 2 * r, top + r, 2, 1); ctx.fillRect(sx + 2 * r, top + r, 2, 1);
+    ctx.fillRect(sx - 2 - 2 * r, top + 15 - r, 2, 1); ctx.fillRect(sx + 2 * r, top + 15 - r, 2, 1);
+  }
+}
+// La grille des tuiles libres à sa portée ; le bord de la portée en pointillés dorés.
+function buildCell(x, y, sx, top) {
+  const d = Math.hypot(x + 0.5 - player.x, y + 0.5 - player.y);
+  if (d > BUILD_R) return;
+  const info = OBJ_INFO[world.objAt(x, y)];
+  if (info && !(info.small && !info.part)) return;
+  const edge = d > BUILD_R - 1;
+  ctx.globalAlpha = edge ? 0.55 : 0.22;
+  tileOutline(sx, top, edge ? BUI.goldHi : '#ffffff', true);
+  ctx.globalAlpha = 1;
+}
+
+// Ce qui va être posé (ou ce qu'on déplace) sur la tuile visée : vert si c'est possible, rouge sinon.
+function drawBuildGhost(ox, oy) {
+  const B = build, P = B.ptr;
+  let t = null, o = 0, id = null;
+  const L = buildLayout();
+  if (P && (P.kind === 'drag' || P.kind === 'lift')) {
+    if (inRect(L.tray, P.x, P.y)) return; // au-dessus du tiroir : on range / on annule
+    t = buildAim(P.x, P.y);
+    if (P.kind === 'drag') { id = BUILD_LIST[P.i]; o = objFor(id); } else o = B.lift.o;
+  } else if (inputMode === 'pad') {
+    t = centerTile();
+    if (B.lift) o = B.lift.o; else if (B.sel >= 0) { id = BUILD_LIST[B.sel]; o = objFor(id); }
+  } else if (inputMode === 'keys' && B.hover && B.sel >= 0 && !inRect(L.tray, B.hover.x, B.hover.y) && B.hover.y > 18 + safe.t) {
+    t = tileAtScreen(B.hover.x, B.hover.y);
+    id = BUILD_LIST[B.sel]; o = objFor(id);
+  }
+  if (!t) return;
+  const sx = ox + isoX(t.tx, t.ty), top = oy + isoY(t.tx, t.ty) - world.hAt(t.tx, t.ty) * 8;
+  if (!o) { ctx.globalAlpha = 0.8; tileOutline(sx, top, BUI.goldHi, false); ctx.globalAlpha = 1; return; } // le viseur de la manette
+  const ok = !buildBlock(t.tx, t.ty) && (!id || buildStock(id).n || buildStock(id).craft);
+  ctx.globalAlpha = 0.85;
+  tileOutline(sx, top, ok ? '#7ee08a' : '#ff5a5e', false);
+  const img = objSprites[o][0], bob = Math.round(Math.sin(rt() * 6) * 1.5) - 3;
+  ctx.globalAlpha = ok ? 0.75 : 0.45;
+  draw(img, sx - img.ox, top + 8 + bob - img.oy);
+  ctx.globalAlpha = 1;
+}
+
+// Petit bouton du bandeau : indigo en relief, ou doré (le bec) pour sortir.
+function buiButton(x, y, label, on, gold, fn) {
+  const w = textWidth(label) + 9, h = 11;
+  ctx.fillStyle = BUI.ink; ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = gold ? BUI.gold : on ? BUI.base : BUI.dark; ctx.fillRect(x + 1, y + 1, w - 2, h - 2);
+  ctx.fillStyle = gold ? BUI.goldHi : on ? BUI.hi : BUI.base; ctx.fillRect(x + 1, y + 1, w - 2, 1);
+  ctx.fillStyle = gold ? BUI.goldLo : BUI.ink; ctx.fillRect(x + 1, y + h - 2, w - 2, 1);
+  drawText(ctx, label, x + 5, y + 3, gold ? BUI.ink : on ? '#ffffff' : BUI.dim, null);
+  build.btns.push({ x: x - 1, y: y - 3, w: w + 2, h: h + 6, fn: on ? fn : () => sfx.ui() });
+  return w;
+}
+// Trois griffures rouges, comme ses rayures.
+function drawClaws(x, y) {
+  for (let k = 0; k < 3; k++) for (let i = 0; i < 9; i++) {
+    const px = x + k * 4 + Math.floor((8 - i) / 2);
+    ctx.fillStyle = i < 2 || i > 6 ? BUI.red : BUI.redHi;
+    ctx.fillRect(px, y + i, 2, 1);
+  }
+}
+
+const BUILD_HINTS = {
+  touch: 'GLISSE UN OBJET SUR UNE TUILE - MAINTIENS UNE CONSTRUCTION POUR LA DEPLACER',
+  keys: 'ZQSD: BOUGER  CLIC: POSER  CLIC DROIT: DEPLACER  R: TOURNER  U: ANNULER',
+  pad: 'STICK: VISER  A: POSER  X: DEPLACER  L1/R1: OBJET  Y: TOURNER  B: SORTIR',
+};
+
+function drawBuildUI() {
+  const B = build, P = B.ptr, y0 = safe.t;
+  B.btns.length = 0;
+  // bandeau du haut
+  ctx.fillStyle = BUI.ink; ctx.fillRect(0, 0, VW, y0 + 18);
+  ctx.fillStyle = BUI.dark; ctx.fillRect(0, 0, VW, y0 + 15);
+  ctx.fillStyle = BUI.red; ctx.fillRect(0, y0 + 15, VW, 2);
+  ctx.fillStyle = BUI.redHi; ctx.fillRect(0, y0 + 15, VW, 1);
+  const x0 = 6 + safe.l;
+  drawClaws(x0, y0 + 3);
+  drawText(ctx, 'BATIR', x0 + 18, y0 + 5, BUI.goldHi, BUI.goldLo);
+  let bx = VW - 4 - safe.r;
+  const right = (label, on, gold, fn) => { const w = textWidth(label) + 9; bx -= w; buiButton(bx, y0 + 2, label, on, gold, fn); bx -= 3; };
+  right('OK', true, true, closeBuild);
+  right('CENTRER', true, false, buildCenter);
+  const fence = B.lift ? B.lift.o === O.FENCE_X || B.lift.o === O.FENCE_Y : B.sel >= 0 && BUILD_LIST[B.sel] === 'fence';
+  right('TOURNER', fence, false, buildRotate);
+  right('ANNULER', B.undo.length > 0, false, buildUndo);
+  // l'aide, quelques secondes
+  if (B.t < 7) {
+    ctx.globalAlpha = Math.min(1, (7 - B.t) / 1.5);
+    wrap(BUILD_HINTS[inputMode], VW - 12).forEach((l, i) => textC(l, VW / 2, y0 + 22 + i * 8, '#ffffff', '#000000'));
+    ctx.globalAlpha = 1;
+  }
+
+  // tiroir des constructions
+  const L = buildLayout(), T = L.tray;
+  const hot = P && P.kind === 'lift' && inRect(T, P.x, P.y);
+  ctx.fillStyle = BUI.ink; ctx.fillRect(T.x - 1, T.y, T.w + 2, T.h + 6);
+  ctx.fillStyle = hot ? BUI.base : BUI.dark; ctx.fillRect(T.x, T.y + 1, T.w, T.h + 6);
+  ctx.fillStyle = BUI.hi; ctx.fillRect(T.x, T.y + 1, T.w, 1);
+  ctx.fillStyle = BUI.red; ctx.fillRect(T.x, T.y + 2, T.w, 2);
+  ctx.fillStyle = BUI.redHi; ctx.fillRect(T.x, T.y + 2, T.w, 1);
+  // le bec doré en V au milieu
+  const cx = Math.round(VW / 2);
+  for (let i = 0; i < 5; i++) {
+    ctx.fillStyle = BUI.goldLo; ctx.fillRect(cx - 6 + i, T.y + 1 + i, 12 - 2 * i, 1);
+    ctx.fillStyle = i < 2 ? BUI.goldHi : BUI.gold; ctx.fillRect(cx - 5 + i, T.y + 1 + i, 10 - 2 * i, 1);
+  }
+  // ses matériaux à gauche, « RANGER » à droite quand il tient une construction
+  let mx = T.x + 4;
+  for (const id of ['wood', 'stone', 'straw', 'iron']) {
+    const n = countItem(id), s = String(n);
+    ctx.globalAlpha = n ? 1 : 0.4;
+    ctx.drawImage(icons[id], mx, T.y + 4);
+    drawText(ctx, s, mx + 14, T.y + 8, '#ffffff', BUI.ink);
+    ctx.globalAlpha = 1;
+    mx += 14 + textWidth(s) + 5;
+    if (mx > cx - 30) break;
+  }
+  if (B.lift) {
+    const l = 'RANGER ICI', blink = hot || Math.floor(rt() * 3) % 2;
+    drawText(ctx, l, T.x + T.w - 4 - textWidth(l), T.y + 7, blink ? BUI.goldHi : BUI.gold, BUI.ink);
+  }
+  for (let i = 0; i < L.n; i++) {
+    const id = BUILD_LIST[i], st = buildStock(id), x = L.x + i * (L.cw + L.gap);
+    const on = B.sel === i || (P && P.kind === 'drag' && P.i === i), y = L.y - (on ? 2 : 0);
+    const have = st.n > 0 || st.craft;
+    ctx.fillStyle = on ? BUI.goldLo : BUI.ink; ctx.fillRect(x, y, L.cw, L.ch);
+    ctx.fillStyle = on ? BUI.gold : have ? BUI.hi : BUI.dark; ctx.fillRect(x + 1, y + 1, L.cw - 2, L.ch - 2);
+    ctx.fillStyle = on ? BUI.base : have ? BUI.base : BUI.ink; ctx.fillRect(x + 2, y + 2, L.cw - 4, L.ch - 4);
+    if (on) { ctx.fillStyle = BUI.goldHi; ctx.fillRect(x + 1, y + 1, L.cw - 2, 1); }
+    const k = L.cw >= 26 ? 2 : 1, s = 12 * k;
+    ctx.globalAlpha = have ? 1 : 0.35;
+    ctx.drawImage(icons[id], x + Math.round((L.cw - s) / 2), y + 2 + Math.round((L.ch - 8 - s) / 2), s, s);
+    ctx.globalAlpha = 1;
+    if (st.n) { const c = String(st.n); drawText(ctx, c, x + L.cw - 2 - textWidth(c), y + L.ch - 7, '#ffffff', BUI.ink); }
+    else if (st.craft) { ctx.fillStyle = BUI.brain; ctx.fillRect(x + L.cw - 6, y + L.ch - 5, 3, 1); ctx.fillRect(x + L.cw - 5, y + L.ch - 6, 1, 3); } // « + » : fabriqué à la pose
+    if (inputMode === 'keys') drawText(ctx, String(i + 1), x + 3, y + 3, BUI.dim, null);
+  }
+  // la ligne d'info au-dessus du tiroir
+  let info = null, col = '#ffffff';
+  if (B.lift) { info = 'DEPLACER : ' + ITEMS[itemOfObj(B.lift.o)].name; col = BUI.goldHi; }
+  else {
+    const i = P && P.kind === 'drag' ? P.i : B.sel;
+    if (i >= 0) {
+      const id = BUILD_LIST[i], st = buildStock(id), r = recipeOf(id);
+      info = ITEMS[id].name + ' - ' + (st.n ? st.n + ' EN STOCK' : st.craft ? 'FABRIQUE A LA POSE : ' + costText(r) : 'IL FAUT ' + costText(r));
+      col = st.n ? '#ffffff' : st.craft ? '#ffd0a8' : '#ff8a8e';
+    }
+  }
+  if (toast) { info = '+' + toast.n + ' ' + ITEMS[toast.id].name; col = '#7ee08a'; ctx.globalAlpha = Math.min(1, toast.t); }
+  if (info) {
+    const w = textWidth(info) + 8, ix = Math.round(VW / 2 - w / 2), iy = T.y - 10;
+    ctx.fillStyle = 'rgba(9,10,32,0.8)'; ctx.fillRect(ix, iy, w, 9);
+    drawText(ctx, info, ix + 4, iy + 2, col, null);
+    ctx.globalAlpha = 1;
+  }
+  if (msg) {
+    ctx.globalAlpha = Math.min(1, msg.t / 0.6);
+    textC(msg.text, VW / 2, Math.round(VH * 0.3), '#ffe28a');
+    if (msg.sub) textC(msg.sub, VW / 2, Math.round(VH * 0.3) + 8, '#ffffff');
+    ctx.globalAlpha = 1;
+  }
+}
+
+// Icône marteau (en haut à droite) : passe en mode BÂTIR.
+const buildBtn = { x: 0, y: 0, r: 7 };
+function drawBuildButton() {
+  buildBtn.x = VW - 92 - safe.r;
+  buildBtn.y = 11 + safe.t;
+  const x = buildBtn.x - 5, y = buildBtn.y - 4;
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.fillRect(x - 3, y - 3, 17, 14);
+  // manche de bois en biais, tête de fer
+  ctx.fillStyle = '#a87a52';
+  for (let i = 0; i < 6; i++) ctx.fillRect(x + 2 + i, y + 7 - i, 2, 1);
+  ctx.fillStyle = '#5e3d22'; ctx.fillRect(x + 1, y + 8, 2, 1);
+  ctx.fillStyle = '#9aa2b2'; ctx.fillRect(x + 5, y, 6, 3);
+  ctx.fillStyle = '#dfe5ee'; ctx.fillRect(x + 5, y, 6, 1);
+  ctx.fillStyle = '#5a606e'; ctx.fillRect(x + 10, y + 1, 1, 2);
 }
 
 // ---------------------------------------------------------------- interactions (bouton N)
@@ -4371,8 +4892,9 @@ let playerBox = null, playerDrawn = false;
 
 function render() {
   const sk = shake > 0 ? [(Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake] : [0, 0];
-  const camX = isoX(player.x, player.y), camY = isoY(player.x, player.y) - player.z - 14;
+  const camX = build ? isoX(build.cx, build.cy) : isoX(player.x, player.y), camY = (build ? isoY(build.cx, build.cy) - build.cz : isoY(player.x, player.y) - player.z) - 14;
   const ox = Math.round(VW / 2 - camX + sk[0]), oy = Math.round(VH / 2 - camY + sk[1]);
+  if (build) { build.ox = ox; build.oy = oy; }
 
   ctx.fillStyle = '#163a6a';
   ctx.fillRect(0, 0, VW, VH);
@@ -4451,6 +4973,7 @@ function render() {
         if (lowerAt(x, y + 1, h)) ctx.drawImage(rimImgs[3], sx - 16, top);
         const w = world.wearAt(x, y);
         if (w) { const c = crackImgs[crackMat(t)][w - 1][(x * 7 + y * 13) & 3]; draw(c, sx - c.ox, top - c.oy); }
+        if (build) buildCell(x, y, sx, top);
       }
       const o = world.objAt(x, y);
       // un bâtiment passe avant tout ce qui est sur sa rangée (c'est devant lui)
@@ -4514,7 +5037,7 @@ function render() {
   if (player.charging) drawChargeAura(ox, oy);
   if (player.charging && player.chargeKind === 'punch') drawAim(ox, oy);
   if (player.aiming && player.held) drawThrowAim(ox, oy);
-  if (mode === 'play' && !overlayOpen()) drawPlaceGhost(ox, oy);
+  if (mode === 'play' && !overlayOpen() && !build) drawPlaceGhost(ox, oy);
   // Brainless visible en transparence derrière les arbres
   if (mode === 'play') {
     ctx.globalAlpha = 0.28;
@@ -4534,6 +5057,12 @@ function render() {
   drawFlyers(ox, oy, true);
   if (mode !== 'play') return;
   drawFade();
+  if (build) {
+    // le fantôme par-dessus tout, puis l'écran BÂTIR à la place du HUD
+    drawBuildGhost(ox, oy);
+    drawBuildUI();
+    return;
+  }
   drawHUD();
   drawOverlay();
 }
@@ -4644,6 +5173,10 @@ function drawObject(e) {
   // un bâtiment est centré sur le coin commun de ses 4 tuiles, les autres objets au centre de leur tuile
   let gx = e.sx, gy = e.sy + (info.building ? 0 : 8) - h * 8;
   const st = hits.get(e.x + ',' + e.y);
+  if (placedFx.size && info.built) {
+    const p0 = placedFx.get(e.x + ',' + e.y);
+    if (p0 !== undefined) { const u = (rt() - p0) / 0.25; if (u >= 1) placedFx.delete(e.x + ',' + e.y); else gy -= Math.round((1 - u) * (1 - u) * 14); }
+  }
   if (st && st.shake > 0) gx += Math.round(Math.sin(time * 70) * 2 * st.shake / 0.35);
   if (info.tree) ctx.drawImage(shadows.l, gx - shadows.l.ox, gy - shadows.l.oy);
   else if (info.solid) ctx.drawImage(shadows.m, gx - shadows.m.ox, gy - shadows.m.oy);
@@ -5171,9 +5704,9 @@ function drawMuteButton() {
 }
 
 const HINTS = {
-  touch: ['JOYSTICK A FOND: IL COURT', 'MAINTIENS B POUR CHARGER', 'SPRINT: MAINTIENS >> EN MARCHANT', 'N: FLAIRER LA VIANDE FRAICHE', 'P: PRENDRE, P: LANCER (MAINTENIR = VISER)', 'SAC EN HAUT A DROITE, BARRE: TOUCHE 2 FOIS = UTILISER'],
-  keys: ['ZQSD: COURIR  C: MARCHER  MAJ: SPRINT  ESPACE: SAUT', 'J/CLIC: COUP (MAINTENIR = CHARGE)', 'K/CLIC DROIT: FRAPPE AU SOL  R: FLAIRER', 'L/CLIC MOLETTE: PRENDRE, LANCER (MAINTENIR = VISER)', 'I/TAB: SAC  1-9: BARRE  T: UTILISER', 'F: PLEIN ECRAN  N: MUSIQUE'],
-  pad: ['STICK: MARCHER, A FOND: COURIR  B/R2: SPRINT  A: SAUT', 'X: COUP (MAINTENIR = CHARGE)', 'Y: FRAPPE AU SOL  L1: FLAIRER', 'R1: PRENDRE, LANCER (MAINTENIR = VISER)', 'CROIX: BARRE, HAUT = UTILISER, BAS = SAC', 'SELECT: SON'],
+  touch: ['JOYSTICK A FOND: IL COURT', 'MAINTIENS B POUR CHARGER', 'SPRINT: MAINTIENS >> EN MARCHANT', 'N: FLAIRER LA VIANDE FRAICHE', 'P: PRENDRE, P: LANCER (MAINTENIR = VISER)', 'SAC EN HAUT A DROITE, BARRE: TOUCHE 2 FOIS = UTILISER', 'MARTEAU EN HAUT: BATIR'],
+  keys: ['ZQSD: COURIR  C: MARCHER  MAJ: SPRINT  ESPACE: SAUT', 'J/CLIC: COUP (MAINTENIR = CHARGE)', 'K/CLIC DROIT: FRAPPE AU SOL  R: FLAIRER', 'L/CLIC MOLETTE: PRENDRE, LANCER (MAINTENIR = VISER)', 'I/TAB: SAC  1-9: BARRE  T: UTILISER  B: BATIR', 'F: PLEIN ECRAN  N: MUSIQUE'],
+  pad: ['STICK: MARCHER, A FOND: COURIR  B/R2: SPRINT  A: SAUT', 'X: COUP (MAINTENIR = CHARGE)', 'Y: FRAPPE AU SOL  L1: FLAIRER', 'R1: PRENDRE, LANCER (MAINTENIR = VISER)', 'CROIX: BARRE, HAUT = UTILISER, BAS = SAC', 'R3: BATIR  SELECT: SON'],
 };
 
 function drawHUD() {
@@ -5192,6 +5725,7 @@ function drawHUD() {
   if (player.equip.some(Boolean)) drawText(ctx, 'ALTERS: ' + player.equip.filter(Boolean).map((a) => ALTERS[a].name + (player.alterLv[a] > 1 ? ' ' + player.alterLv[a] : '')).join(' '), x0, y0 + 44, '#c9a0ff');
   drawHotbar();
   drawBagButton();
+  drawBuildButton();
   drawScent();
   drawMuteButton();
   drawMusicButton();
@@ -5238,7 +5772,8 @@ function frame(now) {
   requestAnimationFrame(frame);
   try {
     if (mode === 'play') {
-      if (overlayOpen()) overlayPad(dt); // sac ou choix de mutation ouvert : le jeu est en pause
+      if (build) updateBuild(dt); // mode BÂTIR : le monde est figé, la caméra libre
+      else if (overlayOpen()) overlayPad(dt); // sac ou choix de mutation ouvert : le jeu est en pause
       else if (hitstop > 0) hitstop -= dt;
       else update(dt);
     }
