@@ -2,6 +2,7 @@
 // En HTML par-dessus le jeu (il faut un vrai champ texte pour le clavier de l'iPhone),
 // habillé comme le reste : majuscules, ombre portée d'1 px, boutons aux couleurs du jeu.
 // Utilisable au doigt, au clavier (flèches, Entrée, Échap) et à la manette (croix, A, B).
+import { VERSION } from './version.js';
 import { listWorlds, createWorld, deleteWorld, seedFrom, PARAMS, DEFAULTS } from './saves.js';
 
 let root, onPlay, screen = 'title', selected = null, draft = null, focusIdx = 0;
@@ -41,7 +42,8 @@ function go(s) {
   let html = '';
   if (s === 'title') {
     html = `<div class="m-title"><h1>BRAINLESS</h1><p>LE NOMU EN LIBERTE</p>
-      <button class="btn red" data-nav data-act="play">JOUER</button></div>`;
+      <button class="btn red" data-nav data-act="play">JOUER</button>
+      <small class="m-version">VERSION ${VERSION}</small></div>`;
   } else if (s === 'worlds') {
     html = `<div class="m-panel"><h2>MES MONDES</h2><div class="m-list">` +
       worlds.map((w) => `<button class="world${w.id === selected ? ' sel' : ''}" data-nav data-act="pick" data-id="${w.id}">

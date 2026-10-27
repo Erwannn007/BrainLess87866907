@@ -43,4 +43,4 @@ Aucune image : tout est dessiné par code au lancement.
 - `tools/make-icons.mjs` : régénère les icônes depuis le sprite (`node tools/make-icons.mjs`).
 - `tools/preview.mjs` : aperçu PNG agrandi des sprites. La charte graphique est dans `CLAUDE.md`.
 
-Après une mise à jour, change `VERSION` dans `sw.js` pour que l'iPhone récupère la nouvelle version.
+Après une mise à jour, lance `node tools/bump.mjs` : il change `VERSION` dans `sw.js` (pour que l'iPhone récupère la nouvelle version) et le numéro affiché sur l'écran d'accueil.

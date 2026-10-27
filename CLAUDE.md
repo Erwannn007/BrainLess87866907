@@ -321,8 +321,9 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
 ## 13. Publication
 
 - Branche `main` servie par GitHub Pages (racine). Pas d'étape de build.
-- **À chaque mise à jour, incrémenter `VERSION` dans `sw.js`** sinon l'iPhone garde
-  l'ancienne version en cache. Tout nouveau fichier JS doit être ajouté à la liste `FILES`.
+- **À chaque mise à jour, lancer `node tools/bump.mjs`** : il incrémente `VERSION` dans `sw.js`
+  (sinon l'iPhone garde l'ancienne version en cache) et le numéro affiché sur l'écran d'accueil
+  (`js/version.js`). Tout nouveau fichier JS doit être ajouté à la liste `FILES`.
 - Test local : `python3 -m http.server 8765` puis `http://localhost:8765/` ; `#debug` à la
   fin de l'URL expose `window.BRAINLESS` (monde, joueur, `createWorld`, `startWorld`, habitants,
   `tod`, `weather`, `doSlam`, `doBigPunch`…) pour les tests automatisés.
