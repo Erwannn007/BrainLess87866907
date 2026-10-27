@@ -8,14 +8,15 @@
 //   node tools/preview.mjs beasts out.png                                  la faune (poses clés)
 //   node tools/preview.mjs beast-sheet out.png wolf                        une espèce (repos, marche, course, attaque) x 8 directions
 //   node tools/preview.mjs village out.png                                 bâtiments (3 états), objets de village, tuiles, fissures
+//   node tools/preview.mjs built out.png                                   ses abris et ses meubles x 4 rotations, tuiles de dessous et de dedans
 //
 // Variable K = facteur d'agrandissement (défaut 6). Ouvrir le PNG pour juger le rendu.
 import { writeFileSync } from 'node:fs';
 import { encodePNG, blit } from './png.mjs';
 import { renderNomu, ANIMS, SPRITE_W, SPRITE_H } from '../js/nomu.js';
 import * as SP from '../js/sprites.js';
-import { T } from '../js/world.js';
-import { buildVillageSprites } from '../js/buildings.js';
+import { T, O } from '../js/world.js';
+import { buildVillageSprites, buildRotSprites } from '../js/buildings.js';
 import { renderPerson, PEOPLE, PEOPLE_ANIMS, PEOPLE_W, PEOPLE_H } from '../js/people.js';
 import { renderBeast, BEASTS, BEAST_W, BEAST_H } from '../js/beasts.js';
 
@@ -127,6 +128,19 @@ if (mode === 'village') {
       if (bx > W - 34 * k) break;
     }
   }
+  writeFileSync(out, encodePNG(W, H, img));
+}
+if (mode === 'built') {
+  const k = Math.min(K, 3);
+  const R = buildRotSprites(), V = buildVillageSprites();
+  const rows = Object.keys(R).map((id) => R[id].map((s) => s.img)).concat([[V[O.DEN_EXIT][0].img, V[O.DOOR_OUT][0].img]]);
+  const W = 4 * 80 * k, rowH = rows.map((r) => Math.max(...r.map((s) => s.h)) * k + 6);
+  const tiles = [T.DEN, T.EARTH, T.EARTH_STONE, T.EARTH_IRON, T.BEDROCK, T.PLANK, T.WALL_IN, T.WALL_HIDE];
+  const H = rowH.reduce((a, b) => a + b, 0) + 60 * k;
+  const img = canvas(W, H);
+  let y = 0;
+  rows.forEach((r, i) => { r.forEach((s, j) => blit(img, W, s, j * 80 * k, y, k)); y += rowH[i]; });
+  tiles.forEach((t, i) => blit(img, W, SP.blockBuffer(t, t === T.WALL_IN || t === T.WALL_HIDE ? 4 : t >= T.EARTH && t <= T.BEDROCK ? 2 : 0, i & 3), (i % 8) * 36 * k / 1.2 | 0, y, Math.max(1, k - 1)));
   writeFileSync(out, encodePNG(W, H, img));
 }
 console.log('écrit :', out);

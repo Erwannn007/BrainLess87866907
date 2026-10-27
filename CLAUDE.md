@@ -206,14 +206,48 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
   Piège à piques : blesse qui marche dessus. Feu de camp et torche : flamme animée et lueur la nuit.
 - **Mode BÂTIR** (icône marteau à gauche du sac, B au clavier, R3 à la manette ; refusé en combat) :
   le monde se fige (`updateBuild` : seules les animations tournent), la caméra se détache de Brainless
-  (`build.cx/cy`, glisser au doigt avec élan, ZQSD, stick) dans une portée de `BUILD_R` = 9 tuiles
-  (grille pointillée, bord doré). Tiroir en bas avec les 8 constructions (`BUILD_LIST`) : on en glisse
-  une sur une tuile (aperçu vert/rouge, visée 14 px au-dessus du doigt), ou on la choisit puis on
-  touche les tuiles. Ce qui manque au sac est fabriqué à la pose si les matériaux y sont (« + » sur la
-  case). Appui long (clic droit, X) sur une construction = la soulever (`builtAtScreen` vise son
-  dessin) : on la repose ailleurs, ou on la lâche sur le tiroir pour la ranger (un coffre rend son
-  contenu). Bandeau : ANNULER (`build.undo`), TOURNER (palissade), CENTRER, OK. Charte de l'écran
-  `BUI` : peau indigo, rayures rouges, griffures, bec doré en V, cerveau pour « fabricable ».
+  (`build.cx/cy`, glisser au doigt avec élan, deux doigts quand un outil est choisi, ZQSD, stick) dans
+  une portée `buildR()` (9 tuiles dehors, 12 dans la tanière ; grille pointillée, bord doré). Tiroir en
+  bas à onglets (`BUILD_TABS` : CREUSER (tanière seulement), MURS, FEU, ABRIS, MEUBLES) : on glisse une
+  case sur une tuile (aperçu vert/rouge, visée 14 px au-dessus du doigt), ou on la choisit puis on
+  touche les tuiles. Ce qui manque au sac est fabriqué à la pose si les matériaux y sont (« + »).
+  Toucher une construction posée la choisit (contour doré) : TOURNER la tourne sur place. L'appui long
+  (clic droit, X) la soulève (`builtAtScreen` vise son dessin) : on la repose ailleurs, ou on la lâche
+  sur le tiroir pour la ranger (un coffre rend son contenu). Bandeau : ANNULER (`build.undo`, aussi pour
+  creuser/remblayer), TOURNER, CENTRER, OK. Charte de l'écran `BUI` : peau indigo, rayures rouges,
+  griffures, bec doré en V, cerveau pour « fabricable ».
+- **Rotation** : les objets `rot: true` (meubles, coffre, abris) se tournent sur 4 directions, rangées
+  dans `world.rots` (sauvé ; `setObj` l'efface). Sprites : `buildRotSprites()` (`buildings.js`) rend
+  chaque objet 4 fois avec `rotPrims(prims, k)` (les volumes tournent, les matières voient leurs
+  coordonnées d'origine) ; en jeu `objRot[id][k]`. La palissade, elle, passe de `FENCE_X` à `FENCE_Y`.
+  `turnPrims(prims, angle)` tourne d'un angle quelconque (l'entrée des abris ronds face à la caméra).
+- **Ses abris** (2x2, `BUILDINGS` avec `built: true`, ne se posent que dehors sur 4 tuiles plates) :
+  le REPAIRE (`O.HUT`, une hutte à sa tête : murs de peau rayés, coutures d'os, dôme de cerveau plissé,
+  yeux allumés la nuit, bec doré au-dessus de la porte, défenses ; matière `hide`) et la TANIÈRE
+  (`O.LAIR`, tertre d'herbe, gueule noire cerclée de pierres, crâne, griffures). 3 états comme les
+  autres bâtiments. Meubles : table, étagère, lit, tapis (on marche dessus), tas d'os, totem (yeux rouges).
+
+## 5 bis. Dedans : tanière et intérieurs (`Den`, `Room` dans `world.js`)
+
+- On entre en poussant contre la porte d'un bâtiment (`realmDoors`, côté `doorOf` : +y pour une maison
+  de village, face caméra et tournée pour ses abris) ou avec N (ENTRER / SORTIR). `enterRealm` remplace
+  `world` par un petit monde à part ; ce qui vit dehors (habitants, objets au sol, feux, débris…) est mis
+  de côté (`realm.stash`) et retrouvé à la sortie (`exitRealm`, `doorLock` : il ne rentre pas tant qu'il
+  pousse encore). Dedans : pas de villages, de faune, de météo, de lucioles ni de flair ; teinte fixe
+  (`drawSky`), `darkness()` constant (les lueurs restent allumées). `world.solid(x, y)` = paroi (bloque
+  toujours, arrête les projectiles). Sauvegarde : `realmData` (clé -> mods, terr, wear, coffres, rots),
+  Brainless est sauvé devant la porte. Dormir dans un nid dedans : il se réveille devant sa porte.
+- **Intérieurs** (`Room`, clé `room:x,y`, suit la maison quand on la déplace) : pièce w x h, murs du fond
+  hauts (`T.WALL_IN` plâtre et poutres, `T.WALL_HIDE` peaux rayées pour son repaire), murets devant, vide
+  noir autour (`T.VOID`), porte (`O.DOOR_OUT`) au milieu du mur de devant. Meublés selon `ROOMS`
+  (chaumière, maison, auberge, grange, tour ; son repaire est vide) ; un coffre de villageois est rempli
+  à la première ouverture (`Room.loot`).
+- **Tanière** (`Den`, une seule par monde, toutes les entrées y mènent) : 80x80 tuiles de terre bordées de
+  roche dure (`T.BEDROCK`), une petite grotte au départ avec l'échelle (`O.DEN_EXIT`). Parois hautes de 2
+  marches : terre (`T.EARTH`, 2 coups, rend de la TERRE), filons de pierre (`T.EARTH_STONE`, 5 coups) et
+  de fer (`T.EARTH_IRON`, 6 coups) (`DIG`). On creuse à coups de poing (`digTile`, fissures sur la paroi),
+  au gros coup et à la frappe au sol, ou au mode BÂTIR : CREUSER se peint au doigt sur les parois qui
+  touchent une salle (marquées en orange), REMBLAYER remet une paroi pour 1 TERRE.
 
 ## 6. Villages et bâtiments (`js/buildings.js`, `js/world.js`)
 
@@ -240,6 +274,8 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
   | Grange | bardeaux `#2e1a10 … #8c5a36`, murs `#4a1410 … #c45a44` | 5 / 5 |
   | Auberge | ardoise `#252b38 … #7083a0` | 8 / 8 |
   | Tour de guet | ardoise, pierre `#3f434b … #a7acb5` | 11 / 11 |
+  | Son repaire | dôme de cerveau `#5e2716 … #e9a173`, peau `#090a20 … #343b8e` | 7 / 7 |
+  | Sa tanière | tertre de terre et d'herbe, pierres, crâne | 10 / 10 |
 
   Les dégâts de zone baissent avec la distance (`base x (1 - 0.75 d/R)`) : un coup chargé à bout
   portant rase une chaumière, plus loin il l'abîme seulement ; la tour encaisse plusieurs coups.
@@ -416,6 +452,7 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
    - `node tools/preview.mjs nomu-sheet /tmp/x.png anim` (une anim × 8 directions)
    - `node tools/preview.mjs nature /tmp/x.png` (tout le décor)
    - `node tools/preview.mjs village /tmp/x.png` (bâtiments x 3 états, objets, tuiles, fissures)
+   - `node tools/preview.mjs built /tmp/x.png` (ses abris et ses meubles x 4 rotations, tuiles de dessous et de dedans)
    - `node tools/preview.mjs people /tmp/x.png` (habitants à côté de Brainless)
    - `node tools/preview.mjs people-sheet /tmp/x.png knight attack` (une anim x 8 directions)
    - `node tools/preview.mjs beasts /tmp/x.png` (la faune)

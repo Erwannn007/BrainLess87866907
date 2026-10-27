@@ -1,7 +1,10 @@
 // Monde ouvert infini, généré par morceaux (chunks) de 32x32 tuiles à la demande.
 import { fbm, hash2, mulberry32 } from './noise.js';
 
-export const T = { WATER: 0, SAND: 1, GRASS: 2, FOREST: 3, STONE: 4, SNOW: 5, MEADOW: 6, DEEP: 7, PATH: 8, DIRT: 9, COBBLE: 10 };
+export const T = { WATER: 0, SAND: 1, GRASS: 2, FOREST: 3, STONE: 4, SNOW: 5, MEADOW: 6, DEEP: 7, PATH: 8, DIRT: 9, COBBLE: 10,
+  // sous terre et dedans : sol de tanière, parois de terre (filons de pierre, de fer), roche dure,
+  // plancher, murs d'intérieur (plâtre, peaux), et le vide autour d'une pièce
+  DEN: 11, EARTH: 12, EARTH_STONE: 13, EARTH_IRON: 14, BEDROCK: 15, PLANK: 16, WALL_IN: 17, WALL_HIDE: 18, VOID: 19 };
 
 export const O = {
   NONE: 0, OAK_S: 1, OAK_M: 2, OAK_L: 3, PINE: 4, PINE_L: 5, SNOW_PINE: 6, CHERRY: 7,
@@ -25,6 +28,10 @@ export const O = {
   BURNT: 59,
   // constructions de Brainless (fabriquées dans l'inventaire, posées sur la grille)
   WALL_WOOD: 60, WALL_STONE: 61, SPIKES: 62, CAMPFIRE: 63, CHEST: 64, NEST: 65, TORCH: 66,
+  // ses abris (2x2) : le repaire (une maison à sa tête) et l'entrée de la tanière
+  HUT: 67, HUT_D: 68, HUT_R: 69, LAIR: 70, LAIR_D: 71, LAIR_R: 72,
+  // sorties (échelle de la tanière, porte d'un intérieur) et meubles
+  DEN_EXIT: 73, DOOR_OUT: 74, TABLE: 75, SHELF: 76, BED: 77, RUG: 78, BONES: 79, TOTEM: 80,
 };
 
 // Résistance des bâtiments : points de vie avant d'être abîmé, puis avant de s'effondrer.
@@ -34,7 +41,12 @@ export const BUILDINGS = {
   inn: { ids: [O.INN, O.INN_D, O.INN_R], hp: [8, 8], mat: 'slate', tall: 46 },
   barn: { ids: [O.BARN, O.BARN_D, O.BARN_R], hp: [5, 5], mat: 'barn', tall: 33 },
   tower: { ids: [O.TOWER, O.TOWER_D, O.TOWER_R], hp: [11, 11], mat: 'stone', tall: 74 },
+  // construits par Brainless (`built`) : on y entre (`room` : un intérieur, `den` : la tanière)
+  hut: { ids: [O.HUT, O.HUT_D, O.HUT_R], hp: [7, 7], mat: 'hide', tall: 34, built: true, room: true },
+  lair: { ids: [O.LAIR, O.LAIR_D, O.LAIR_R], hp: [10, 10], mat: 'stone', tall: 20, built: true, den: true },
 };
+// les bâtiments de village dans lesquels il peut entrer (un intérieur meublé)
+export const ENTERABLE = { cottage: 1, house: 1, inn: 1, barn: 1, tower: 1, hut: 1, lair: 1 };
 
 // Collision (rayon en tuiles) et résistance aux coups. `tall` = hauteur en pixels (une marche = 8) :
 // en sautant, Brainless passe par-dessus quand ses pieds sont plus hauts (saut normal ≈ 23,
@@ -73,8 +85,18 @@ export const OBJ_INFO = {
   [O.SPIKES]: { hp: 2, prop: 'wood', built: true, spikes: true, fuel: 4 },
   [O.CAMPFIRE]: { solid: 0.3, tall: 6, hp: 2, prop: 'stone', built: true, light: true },
   [O.TORCH]: { solid: 0.12, tall: 16, hp: 1, prop: 'wood', built: true, light: true, fuel: 3 },
-  [O.CHEST]: { solid: 0.3, tall: 9, hp: 3, prop: 'wood', built: true, fuel: 6 },
+  [O.CHEST]: { solid: 0.3, tall: 9, hp: 3, prop: 'wood', built: true, rot: true, fuel: 6 },
   [O.NEST]: { hp: 3, prop: 'hay', built: true, fuel: 6 },
+  // `rot` : se tourne sur 4 directions (`world.rots`)
+  [O.TABLE]: { solid: 0.34, tall: 10, hp: 2, prop: 'wood', built: true, rot: true, fuel: 6 },
+  [O.SHELF]: { solid: 0.3, tall: 20, hp: 2, prop: 'wood', built: true, rot: true, fuel: 7 },
+  [O.BED]: { solid: 0.36, tall: 8, hp: 2, prop: 'wood', built: true, rot: true, fuel: 7 },
+  [O.RUG]: { hp: 1, prop: 'hay', built: true, rot: true, flat: true, fuel: 3 },
+  [O.BONES]: { solid: 0.28, tall: 9, hp: 2, prop: 'stone', built: true, rot: true },
+  [O.TOTEM]: { solid: 0.16, tall: 24, hp: 2, prop: 'wood', built: true, rot: true, fuel: 4 },
+  // sorties : on marche dessus pour remonter / sortir
+  [O.DEN_EXIT]: { exit: true },
+  [O.DOOR_OUT]: { exit: true },
   // `tilebox` : bloque toute la tuile (un mur continu, pas un tronc rond)
   [O.WALL]: { tilebox: true, tall: 28, hp: 8, prop: 'stone', village: true, crime: 1, next: O.WALL_D },
   [O.WALL_D]: { tilebox: true, tall: 20, hp: 8, prop: 'stone', village: true, crime: 1, next: O.WALL_R },
@@ -86,7 +108,7 @@ for (const name in BUILDINGS) {
   const b = BUILDINGS[name];
   b.ids.forEach((id, state) => {
     OBJ_INFO[id] = {
-      building: name, state, mat: b.mat, village: true,
+      building: name, state, mat: b.mat, village: !b.built, built: !!b.built, rot: !!b.built, room: !!b.room, den: !!b.den,
       box: state < 2 ? 0.76 : 0, // demi-largeur de la boîte de collision (en tuiles) ; la ruine se traverse
       tall: b.tall,
       hp: state < 2 ? b.hp[state] : 0, next: state < 2 ? b.ids[state + 1] : 0,
@@ -110,6 +132,7 @@ export class World {
     this.villages = new Map();
     this.deaths = new Map(); // id du village -> { civ, knight } : les morts ne reviennent pas
     this.chests = new Map(); // "x,y" -> contenu d'un coffre posé par Brainless
+    this.rots = new Map(); // "x,y" -> 0..3 : quart de tour d'une construction
     this._lastKey = null;
     this._lastChunk = null;
   }
@@ -137,7 +160,10 @@ export class World {
   setObj(x, y, o) {
     this.chunk(x >> 5, y >> 5).obj[this.idx(x, y)] = o;
     this.mods.set(x + ',' + y, o);
+    this.rots.delete(x + ',' + y);
   }
+  rotAt(x, y) { return this.rots.get(x + ',' + y) || 0; }
+  setRot(x, y, k) { if (k) this.rots.set(x + ',' + y, k); else this.rots.delete(x + ',' + y); }
 
   setTile(x, y, t, h, stamp) {
     const c = this.chunk(x >> 5, y >> 5), i = this.idx(x, y);
@@ -581,5 +607,85 @@ export class World {
       }
     }
     return { x: 0.5, y: 0.5 };
+  }
+}
+
+// ---------------------------------------------------------------- sous terre et dedans
+// Les lieux où l'on entre sont des petits mondes à part, avec le même moteur : le jeu
+// remplace `world` le temps qu'il y reste. `solid(x, y)` = paroi (bloque toujours).
+
+// Ce que coûte une paroi de terre à creuser (coups), et ce qu'elle rend.
+export const DIG = {
+  [T.EARTH]: { hp: 2, drops: [['dirt', 1]] },
+  [T.EARTH_STONE]: { hp: 5, drops: [['stone', 2]] },
+  [T.EARTH_IRON]: { hp: 6, drops: [['iron', 1], ['stone', 1]] },
+};
+const WALL_H = 2; // hauteur des parois de la tanière (en marches)
+
+// La tanière : un immense bloc de terre (80x80 tuiles, bordé de roche dure) où il creuse ses salles.
+// Au départ, une petite grotte avec l'échelle qui remonte.
+export const DEN_R = 40;
+export class Den extends World {
+  constructor(seed) {
+    super(seed + 4242);
+    this.den = true;
+    this.realm = 'den';
+  }
+  villageIn() { return null; }
+  solid(x, y) { const t = this.typeAt(x, y); return t === T.EARTH || t === T.EARTH_STONE || t === T.EARTH_IRON || t === T.BEDROCK; }
+  genCell(x, y) {
+    if (Math.max(Math.abs(x + 0.5), Math.abs(y + 0.5)) > DEN_R) return { t: T.BEDROCK, h: WALL_H, o: O.NONE };
+    if (Math.hypot(x + 0.5, (y + 0.5) * 1.15) < 3.4) return { t: T.DEN, h: 0, o: x === 0 && y === -3 ? O.DEN_EXIT : O.NONE };
+    const s = this.seed;
+    if (fbm(x * 0.11, y * 0.11, s + 3, 3) > 0.67 && hash2(x, y, s + 4) < 0.8) return { t: T.EARTH_STONE, h: WALL_H, o: O.NONE };
+    if (fbm(x * 0.17 + 50, y * 0.17, s + 9, 2) > 0.7 && hash2(x, y, s + 5) < 0.6) return { t: T.EARTH_IRON, h: WALL_H, o: O.NONE };
+    return { t: T.EARTH, h: WALL_H, o: O.NONE };
+  }
+  findSpawn() { return { x: 0.5, y: 0.5 }; }
+}
+
+// Les intérieurs : une pièce de w x h tuiles (x de 0 à w-1, y de 0 à h-1), murs hauts au fond,
+// murets devant (on voit dedans), une porte au milieu du mur de devant. Meublée selon la maison.
+const ROOMS = {
+  cottage: { w: 6, h: 5, floor: T.PLANK, wall: T.WALL_IN, items: [[0, 0, O.BED, 0], [2, 0, O.SHELF, 0], [5, 0, O.BARREL, 0], [3, 2, O.TABLE, 0], [0, 3, O.CHEST, 3], [5, 3, O.CRATE, 0], [2, 3, O.RUG, 0]] },
+  house: { w: 7, h: 6, floor: T.PLANK, wall: T.WALL_IN, items: [[0, 0, O.BED, 0], [1, 0, O.BED, 0], [3, 0, O.SHELF, 0], [4, 0, O.SHELF, 0], [6, 0, O.CHEST, 0], [3, 3, O.TABLE, 1], [2, 3, O.RUG, 1], [0, 5, O.CRATE, 0], [6, 5, O.BARREL, 0], [6, 2, O.LANTERN, 0]] },
+  inn: { w: 9, h: 7, floor: T.PLANK, wall: T.WALL_IN, items: [[0, 0, O.CHEST, 0], [2, 0, O.SHELF, 0], [3, 0, O.SHELF, 0], [8, 0, O.BARREL, 0], [8, 1, O.BARREL, 0], [8, 2, O.BARREL, 0], [2, 3, O.TABLE, 0], [5, 3, O.TABLE, 1], [2, 5, O.TABLE, 1], [6, 5, O.RUG, 0], [0, 6, O.LANTERN, 0], [0, 3, O.BED, 3]] },
+  barn: { w: 8, h: 6, floor: T.DIRT, wall: T.WALL_IN, items: [[0, 0, O.HAY, 0], [1, 0, O.HAY, 0], [0, 1, O.HAY, 0], [6, 0, O.CRATE, 0], [7, 0, O.CRATE, 0], [7, 1, O.BARREL, 0], [4, 3, O.PLANKS, 0], [0, 5, O.CHEST, 3], [7, 5, O.HAY, 0]] },
+  tower: { w: 5, h: 5, floor: T.PLANK, wall: T.WALL_IN, items: [[0, 0, O.CRATE, 0], [1, 0, O.CRATE, 0], [4, 0, O.BARREL, 0], [4, 1, O.BARREL, 0], [2, 0, O.SHELF, 0], [0, 4, O.CHEST, 3], [4, 4, O.LANTERN, 0]] },
+  hut: { w: 7, h: 7, floor: T.DEN, wall: T.WALL_HIDE, items: [[3, 3, O.RUG, 0], [0, 0, O.TOTEM, 0]] },
+};
+export const ROOM_NAMES = { cottage: 'CHAUMIERE', house: 'MAISON', inn: 'AUBERGE', barn: 'GRANGE', tower: 'TOUR DE GUET', hut: 'SON REPAIRE' };
+
+export class Room extends World {
+  constructor(seed, kind) {
+    super(seed);
+    const R = ROOMS[kind];
+    this.realm = 'room';
+    this.kind = kind;
+    this.w = R.w; this.h = R.h;
+    this.floorT = R.floor; this.wallT = R.wall;
+    this.door = [Math.floor(R.w / 2), R.h];
+    this.items = new Map(R.items.map(([x, y, o, k]) => [x + ',' + y, [o, k]]));
+    for (const [k, [, r]] of this.items) if (r) this.rots.set(k, r);
+    this.village = kind !== 'hut';
+  }
+  villageIn() { return null; }
+  solid(x, y) { const t = this.typeAt(x, y); return t === this.wallT || t === T.VOID; }
+  genCell(x, y) {
+    const { w, h } = this;
+    if (x === this.door[0] && y === this.door[1]) return { t: this.floorT, h: 0, o: O.DOOR_OUT };
+    if (x >= 0 && x < w && y >= 0 && y < h) { const it = this.items.get(x + ',' + y); return { t: this.floorT, h: 0, o: it ? it[0] : O.NONE }; }
+    if (x >= -1 && x <= w && y >= -1 && y <= h) return { t: this.wallT, h: x === -1 || y === -1 ? 4 : 1, o: O.NONE }; // murs du fond hauts, murets devant
+    return { t: T.VOID, h: 0, o: O.NONE };
+  }
+  findSpawn() { return { x: this.door[0] + 0.5, y: this.h - 0.6 }; }
+  // le contenu d'un coffre de villageois, la première fois qu'on l'ouvre
+  loot(key) {
+    if (!this.village) return null;
+    const rng = mulberry32((this.seed ^ (key.length * 7919 + key.charCodeAt(0) * 31)) >>> 0);
+    const out = [];
+    const pool = [['berries', 6], ['steak', 3], ['wood', 8], ['straw', 6], ['iron', 2], ['stone', 5]];
+    for (const [id, n] of pool) if (rng() < 0.45) out.push({ id, n: 1 + Math.floor(rng() * n) });
+    return out;
   }
 }

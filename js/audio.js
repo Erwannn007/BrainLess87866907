@@ -500,6 +500,19 @@ export const sfx = {
     tone({ f: 110, f2: 55, gain: 0.5, dec: 0.18 });
     noise({ type: 'lowpass', f: 900, gain: 0.3, dec: 0.12 });
   },
+  // passer une porte, descendre dans la tanière : un grincement de bois et un souffle sourd
+  door(down) {
+    if (!ready() || !gate('door', 0.4)) return;
+    tone({ f: down ? 180 : 220, f2: down ? 90 : 160, type: 'sawtooth', gain: 0.06, a: 0.05, dec: 0.35, lp: 900 });
+    noise({ type: 'lowpass', f: down ? 500 : 900, f2: 200, gain: 0.25, a: 0.08, dec: 0.6, rev: 0.4 });
+  },
+  // une paroi de terre qui s'effondre (plus pierreux pour un filon)
+  dig(stone) {
+    if (!ready() || !gate('dig', 0.06)) return;
+    tone({ f: 90, f2: 45, gain: 0.45, dec: 0.2 });
+    noise({ type: 'lowpass', f: stone ? 1800 : 700, f2: 200, gain: 0.45, dec: 0.35 });
+    for (let i = 0; i < 4; i++) noise({ f: stone ? rnd(1500, 3000) : rnd(400, 900), q: 3, gain: 0.12, dec: 0.04, delay: 0.05 + i * rnd(0.03, 0.07) });
+  },
   craft() {
     if (!ready()) return;
     for (let i = 0; i < 3; i++) { tone({ f: rnd(1600, 2200), type: 'square', gain: 0.04, dec: 0.05, delay: i * 0.12 }); noise({ f: 1800, q: 2, gain: 0.12, dec: 0.05, delay: i * 0.12 }); }

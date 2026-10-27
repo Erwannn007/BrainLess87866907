@@ -270,12 +270,42 @@ const TOPS = {
   [T.PATH]: ramp('#7a5a3a', '#94704a', '#ab875a', '#c29e6e'),
   [T.DIRT]: ramp('#4f3220', '#664330', '#7d5638', '#946a44'),
   [T.COBBLE]: ramp('#5f5a52', '#7f786c', '#9d9586', '#bdb4a2'),
+  [T.DEN]: ramp('#2a1d14', '#3a2a1c', '#4a3624', '#5c4630'), // terre battue
+  [T.EARTH]: ramp('#4a2f1c', '#5e3d26', '#73502f', '#8a6440'),
+  [T.EARTH_STONE]: ramp('#4a2f1c', '#5e3d26', '#73502f', '#8a6440'),
+  [T.EARTH_IRON]: ramp('#4a2f1c', '#5e3d26', '#73502f', '#8a6440'),
+  [T.BEDROCK]: ramp('#141218', '#1f1c25', '#2b2733', '#3a3545'),
+  [T.PLANK]: ramp('#3d2614', '#5e3d22', '#86593a', '#a87a52'),
+  [T.WALL_IN]: ramp('#24160c', '#3b2414', '#5a3a20', '#7a5233'),
+  [T.WALL_HIDE]: ramp('#090a20', '#151848', '#22276b', '#343b8e'),
 };
+const PLASTERS = ramp('#8f7f62', '#c2b08a', '#e3d4ae', '#f6ecd0');
+const HIDES = ramp('#090a20', '#151848', '#22276b', '#343b8e');
+const STRIPE = ramp('#4e0c18', '#9c1628', '#d22838', '#ff5a5e');
+const BONE = ramp('#55575e', '#8d9097', '#c4c6cb', '#eceef0');
+const VEIN = { [T.EARTH_STONE]: ramp('#3f434b', '#5e636e', '#808590', '#a7acb5'), [T.EARTH_IRON]: ramp('#5a2a10', '#9a4a1c', '#c9732e', '#f0b070') };
 const DIRT = ramp('#4a2f1c', '#62402a', '#7a5233', '#8e6440');
 const SANDSIDE = ramp('#8f7444', '#a88b52', '#c2a364', '#d4b97c');
 const STONESIDE = ramp('#3f434b', '#575b64', '#6c717b', '#82878f');
 
 export const TILE_W = 32, TILE_H = 16;
+
+// Mur d'intérieur vu de dedans : plâtre et poutres (village) ou peaux indigo rayées de rouge,
+// cousues d'os (son repaire). `d` = profondeur sous le haut du mur.
+function innerWall(type, x, d, sideH, left, r) {
+  let s = left ? 2 : 1;
+  if (r < 0.1) s--; else if (r > 0.95) s++;
+  s = Math.max(0, Math.min(3, s));
+  if (type === T.WALL_IN) {
+    if (d <= 2 || d >= sideH - 1) return TOPS[T.WALL_IN][d <= 1 ? 2 : 1]; // poutre et plinthe
+    if (x % 16 === 3) return TOPS[T.WALL_IN][1]; // poteaux
+    return PLASTERS[s];
+  }
+  if (d <= 1) return BONE[2];
+  if (d >= 9 && d <= 11) return STRIPE[left ? 2 : 1];
+  if (x % 8 === 0 && d % 3 === 1) return BONE[1]; // coutures
+  return HIDES[s];
+}
 
 // Largeur de la ligne r du losange (0..15) : de 14-2r à 17+2r.
 export function rowSpan(r) {
@@ -289,7 +319,8 @@ export function blockBuffer(type, level, v) {
   const top = TOPS[type];
   const grassy = type === T.GRASS || type === T.FOREST || type === T.MEADOW;
   const earthy = type === T.PATH || type === T.DIRT;
-  const sideRamp = type === T.SAND ? SANDSIDE : grassy || earthy ? DIRT : STONESIDE;
+  const earthWall = type === T.EARTH || type === T.EARTH_STONE || type === T.EARTH_IRON;
+  const sideRamp = type === T.SAND ? SANDSIDE : grassy || earthy || earthWall || type === T.DEN ? DIRT : type === T.BEDROCK ? top : STONESIDE;
   const seed = type * 31 + v * 7;
 
   // faces latérales
@@ -300,6 +331,9 @@ export function blockBuffer(type, level, v) {
       const y = edge + d;
       const r = hash(x, y, seed + 3);
       let c;
+      if (type === T.WALL_IN || type === T.WALL_HIDE) { c = innerWall(type, x, d, sideH, left, r); b.set(x, y, c); continue; }
+      if (VEIN[type] && hash(x >> 1, y >> 1, seed + 9) < (type === T.EARTH_IRON ? 0.16 : 0.3)) { c = VEIN[type][left ? 2 : 1]; if (r > 0.9) c = VEIN[type][3]; b.set(x, y, c); continue; }
+      if (earthWall && hash(x, y >> 2, seed + 12) < 0.04) { b.set(x, y, DIRT[0]); continue; } // racines
       if (grassy && (d <= 2 || (d === 3 && hash(x, 0, seed) < 0.5))) c = top[left ? 1 : 0];
       else if (type === T.SNOW && (d <= 3 || (d === 4 && hash(x, 0, seed) < 0.5))) c = top[left ? 2 : 0];
       else {
@@ -328,6 +362,11 @@ export function blockBuffer(type, level, v) {
       }
       if (type === T.PATH && h > 0.975) { s = 3; b.set(x + 1, r, STONESIDE[2]); } // petits cailloux
       if (type === T.COBBLE) s = cobbleShade(x, r, seed);
+      if (type === T.PLANK) { const u = (x - 16) / 2 + r; s = ((u + 64) % 4) < 0.8 ? 0 : h < 0.15 ? 1 : 2; } // lames de plancher
+      if (type === T.DEN && h > 0.94) { s = 3; b.set(x, r + 1, top[0]); } // cailloux
+      if (VEIN[type] && hash(x >> 1, r >> 1, seed + 7) < (type === T.EARTH_IRON ? 0.2 : 0.32)) { b.set(x, r, VEIN[type][h > 0.6 ? 3 : 2]); continue; }
+      if (earthWall && h > 0.965) s = 3;
+      if (type === T.WALL_IN || type === T.WALL_HIDE) s = h < 0.2 ? 0 : 1;
       b.set(x, r, top[s]);
     }
   }

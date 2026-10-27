@@ -58,6 +58,7 @@ export function pollPad() {
   pad.grabPressed = pressed(5);
   pad.charge = now[3] || now[6];
   pad.punch = now[2];
+  pad.a = now[0]; // A maintenu (mode BÂTIR : creuser en promenant le viseur)
   pad.jumpPressed = pressed(0);
   pad.punchPressed = pressed(2);
   pad.mutePressed = pressed(8);

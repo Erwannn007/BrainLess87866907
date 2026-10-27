@@ -205,6 +205,62 @@ function classify(P, u, v, z) {
   return [0, 0, 1];
 }
 
+// Tourne des volumes de k quarts de tour autour de l'axe vertical (le centre de la tuile, ou le coin
+// commun d'un bâtiment). Les matières voient les coordonnées et les faces d'origine : seuls la forme
+// et l'éclairage tournent.
+const rotUV = (u, v, k) => (k === 0 ? [u, v] : k === 1 ? [-v, u] : k === 2 ? [-u, -v] : [v, -u]);
+export function rotPrims(prims, k) {
+  if (!k) return prims;
+  const ik = (4 - k) & 3;
+  return prims.map((P) => {
+    const b = P.b, c1 = rotUV(b[0], b[2], k), c2 = rotUV(b[1], b[3], k);
+    const R = { ...P, b: [Math.min(c1[0], c2[0]), Math.max(c1[0], c2[0]), Math.min(c1[1], c2[1]), Math.max(c1[1], c2[1]), b[4], b[5]] };
+    if (!P.box) {
+      R.inside = (u, v, z) => { const [a, w] = rotUV(u, v, ik); return P.inside(a, w, z); };
+      R.normal = (u, v, z) => {
+        const [a, w] = rotUV(u, v, ik), n = P.normal ? P.normal(a, w, z) : classify(P, a, w, z), [nu, nv] = rotUV(n[0], n[1], k);
+        return [nu, nv, n[2]];
+      };
+    }
+    if (P.mat) {
+      R.mat = (q) => {
+        const { u, v, n, face } = q, [a, w] = rotUV(u, v, ik), [nu, nv] = rotUV(n[0], n[1], ik);
+        q.u = a; q.v = w; q.n = [nu, nv, n[2]]; q.face = faceOf(q.n);
+        const res = P.mat(q);
+        q.u = u; q.v = v; q.n = n; q.face = face;
+        return res;
+      };
+    }
+    return R;
+  });
+}
+
+// Tourne des volumes d'un angle quelconque (les boîtes deviennent des volumes ordinaires).
+// Sert à mettre la porte d'un abri rond face à la caméra.
+function turnPrims(prims, ang) {
+  const c = Math.cos(ang), sn = Math.sin(ang);
+  const fw = (u, v) => [u * c - v * sn, u * sn + v * c], bw = (u, v) => [u * c + v * sn, -u * sn + v * c];
+  return prims.map((P) => {
+    const b = P.b, pts = [fw(b[0], b[2]), fw(b[1], b[2]), fw(b[0], b[3]), fw(b[1], b[3])];
+    const ins = P.box ? (u, v, z) => u >= b[0] && u <= b[1] && v >= b[2] && v <= b[3] && z >= b[4] && z <= b[5] : P.inside;
+    const Q = { ...P, box: false, inside: ins };
+    const R = { ...P, box: false, b: [Math.min(...pts.map((p) => p[0])), Math.max(...pts.map((p) => p[0])), Math.min(...pts.map((p) => p[1])), Math.max(...pts.map((p) => p[1])), b[4], b[5]] };
+    R.inside = (u, v, z) => { const [a, w] = bw(u, v); return ins(a, w, z); };
+    R.normal = (u, v, z) => { const [a, w] = bw(u, v), n = P.normal ? P.normal(a, w, z) : classify(Q, a, w, z), [nu, nv] = fw(n[0], n[1]); return [nu, nv, n[2]]; };
+    if (P.mat) {
+      R.mat = (q) => {
+        const { u, v, n, face } = q, [a, w] = bw(u, v), [nu, nv] = bw(n[0], n[1]);
+        q.u = a; q.v = w; q.n = [nu, nv, n[2]]; q.face = faceOf(q.n);
+        const res = P.mat(q);
+        q.u = u; q.v = v; q.n = n; q.face = face;
+        return res;
+      };
+    }
+    return R;
+  });
+}
+const FACE_CAM = -Math.PI / 4; // l'entrée (côté +v) tournée vers la caméra, en bas au milieu
+
 /** Rend une liste de volumes en sprite pixel. Renvoie { img, glow } recadrés autour du dessin. */
 function renderSolids(prims, W = 104, H = 150, OX = 52, OY = 116) {
   const n = W * H;
@@ -836,15 +892,15 @@ function torch() {
 }
 
 // Coffre : du bois cerclé de fer, une serrure dorée.
-function chest() {
-  return propSprite([{ ...box(-5, 5, -3.6, 3.6, 0, 7.5, WOOD, (q) => {
+function chest(k = 0) {
+  return propSprite(rotPrims([{ ...box(-5, 5, -3.6, 3.6, 0, 7.5, WOOD, (q) => {
     if (q.face === 't') return Math.abs(q.v) > 2.8 ? METAL[2] : 3;
     const a = q.face === 'l' ? q.u : q.v;
     if (Math.abs(Math.abs(a) - (q.face === 'l' ? 3.8 : 2.4)) < 0.5) return METAL[Math.min(3, q.shade + 1)]; // cerclages
     if (Math.abs(q.z - 5) < 0.4) return 0; // le couvercle
     if (q.face === 'l' && Math.abs(q.u) < 0.8 && q.z > 3.4 && q.z < 5.8) return GOLDR[Math.min(3, q.shade + 1)];
     return q.shade;
-  }), smooth: true }]);
+  }), smooth: true }], k));
 }
 
 // Nid : une couronne de paille et de branches tressées, creusée au milieu.
@@ -864,10 +920,191 @@ function nest() {
   return propSprite(prims);
 }
 
+// ---------------------------------------------------------------- ses abris et ses meubles
+// La charte de Brainless : peau indigo, rayures rouges épaisses, cerveau, bec doré, os.
+const SKIN = ramp('#090a20', '#151848', '#22276b', '#343b8e');
+const STRIPES = ramp('#4e0c18', '#9c1628', '#d22838', '#ff5a5e');
+const BRAIN = ramp('#5e2716', '#9a4a2c', '#c97249', '#e9a173');
+const BONE = ramp('#55575e', '#8d9097', '#c4c6cb', '#eceef0');
+const EYE = ramp('#7c6a1c', '#c9b44a', '#eee298', '#fffbe0');
+const EARTHR = ramp('#4a2f1c', '#62402a', '#7a5233', '#8e6440');
+const GRASSR = ramp('#4b8a35', '#5c9e3f', '#73b84d', '#8fd162');
+const FUR = ramp('#2a1a12', '#4a3020', '#6e4a30', '#94704e');
+const bigSprite = (prims) => renderSolids(prims, 76, 88, 38, 64);
+
+// Son repaire : une hutte à sa tête. Murs de peau indigo rayés de rouge, cousus d'os, un dôme de
+// cerveau plissé, deux petits yeux clairs (allumés la nuit) et le bec doré en V au-dessus de la porte.
+function hutSprite(state, k) {
+  const R = 10.5, H = 12, seed = 4100 + state * 13;
+  const door = (q) => q.v > 6 && Math.abs(q.u) < 3.2 && q.z < 9 - Math.max(0, Math.abs(q.u) - 2) * 2;
+  const skin = (q) => {
+    if (state < 2 && door(q)) return INTERIOR[q.z < 1.5 ? 0 : 1];
+    const a = Math.atan2(q.v, q.u) / (Math.PI * 2);
+    if ((((a * 5 + q.z * 0.045) % 1) + 1) % 1 < 0.15) return STRIPES[Math.min(3, q.shade + 1)]; // rayures en biais
+    if ((((a * 16) % 1) + 1) % 1 < 0.06 && Math.floor(q.z) % 3 === 1) return BONE[Math.min(3, q.shade + 1)]; // coutures d'os
+    return q.shade;
+  };
+  const hole = (u, v, z) => Math.hypot(u - 3.5, v + 3, z - 19) < 5;
+  const brain = (q) => {
+    if (state === 1 && Math.hypot(q.u - 3.5, q.v + 3, q.z - 19) < 6) return INTERIOR[1];
+    let sh = q.shade;
+    const f = Math.sin(q.u * 0.95 + Math.sin(q.v * 0.7) * 2.4) + Math.sin(q.v * 1.1 + q.z * 0.45) * 0.6;
+    if (f > 0.7 || Math.abs(q.u) < 0.5) sh--; // plis et sillon
+    else if (f < -1.1) sh++;
+    return Math.max(0, Math.min(3, sh));
+  };
+  const prims = [];
+  if (state < 2) {
+    prims.push(cylinder(0, 0, R, 0, H, SKIN, skin, { bulge: 0.6 }));
+    const dome = ellipsoid(0, 0, H - 1, R + 0.9, R + 0.9, 10.5, BRAIN, brain, H - 1);
+    if (state === 1) { const ins = dome.inside; dome.inside = (u, v, z) => ins(u, v, z) && !hole(u, v, z); }
+    prims.push(dome);
+    // yeux clairs sous le cerveau, pupille d'un pixel
+    for (const side of [-1, 1]) {
+      prims.push({ ...ellipsoid(side * 3.4, R - 0.2, H + 1.2, 1.4, 0.9, 1.1, EYE, (q) => {
+        q.glow = 1;
+        return Math.abs(q.u - side * 3.4) < 0.4 && Math.abs(q.z - H - 1.2) < 0.45 ? hex('#0a081a') : Math.min(3, q.shade + 1);
+      }), smooth: true });
+    }
+    // bec doré en V, pointe en bas sur la porte
+    for (const side of [-1, 1]) prims.push(capsule([side * 4.6, R + 0.4, 11.4], [0, R + 1.6, 8.2], 0.95, GOLDR));
+    // défenses d'os de part et d'autre de la porte
+    for (const side of [-1, 1]) {
+      prims.push(capsule([side * 4.6, R + 0.2, 0], [side * 5.8, R + 1.8, 5.5], 0.8, BONE));
+      prims.push(capsule([side * 5.8, R + 1.8, 5.5], [side * 5, R + 2.6, 8.5], 0.5, BONE));
+    }
+    if (state === 1) prims.push(...rubble(seed, 9, [BRAIN, SKIN, BONE], 3, 3, false));
+  } else {
+    prims.push(cylinder(0, 0, R, 0, 7, SKIN, skin, { inner: R - 1.6, top: (du, dv) => 3 + 3 * (0.5 + 0.5 * Math.sin(Math.atan2(dv, du) * 3 + 1)) }));
+    prims.push(box(-R + 1.5, R - 1.5, -R + 1.5, R - 1.5, 0, 0.6, FUR));
+    prims.push(...rubble(seed + 3, 8, [BRAIN, SKIN, BONE, BRAIN], 6, 7, true));
+    prims.push(capsule([-6, 4, 1], [5, -3, 5], 1, BONE));
+  }
+  return bigSprite(rotPrims(turnPrims(prims, FACE_CAM), k));
+}
+
+// L'entrée de la tanière : un tertre de terre et d'herbe, une gueule noire cerclée de pierres,
+// un crâne au-dessus, des griffures rouges sur le côté.
+function lairSprite(state, k) {
+  const hm = [13, 9, 4][state], A = 13, B = 12, cv = -1;
+  const surfV = (u, z) => cv + B * Math.sqrt(Math.max(0, 1 - (u / A) ** 2 - (z / hm) ** 2));
+  const mouth = (q) => q.v > 3 && Math.hypot(q.u * 0.85, q.z - 0.5) < (state === 0 ? 5.2 : 4);
+  const prims = [ellipsoid(0, cv, 0, A, B, hm, EARTHR, (q) => {
+    if (state < 2 && mouth(q)) return INTERIOR[Math.hypot(q.u * 0.85, q.z - 0.5) < 3.4 ? 0 : 1];
+    if (q.n[2] > 0.7 && state < 2) return GRASSR[q.shade];
+    if (q.v > 2 && q.u < -5.5 && q.u > -11 && q.z > 2.5 && q.z < 9) { // trois griffures
+      const t = ((q.u + 11) * 0.75 + q.z * 0.8) % 2.4;
+      if (t < 0.5) return STRIPES[Math.min(3, q.shade + 1)];
+    }
+    return q.shade;
+  }, 0)];
+  if (state < 2) {
+    for (let i = 0; i <= 6; i++) {
+      const a = Math.PI * i / 6, u = Math.cos(a) * 6.6, z = Math.sin(a) * 6.2 + 0.3;
+      prims.push(ellipsoid(u, surfV(u, z) + 0.4, z, 1.6, 1.3, 1.4, STONE, null, 0));
+    }
+    const sv = surfV(0, 9.5) + 0.6;
+    prims.push(ellipsoid(0, sv, 9.5, 2.3, 2, 2.1, BONE, (q) => {
+      if (q.v > sv + 0.8 && Math.abs(Math.abs(q.u) - 0.9) < 0.55 && Math.abs(q.z - 9.8) < 0.6) return hex('#14141a'); // orbites
+      return q.shade;
+    }));
+    for (const side of [-1, 1]) prims.push(capsule([side * 2, sv, 9], [side * 4.5, sv + 1.5, 12.5], 0.55, BONE));
+  } else prims.push(...rubble(5150, 6, [STONE, EARTHR, BONE], 5, 6, true));
+  return bigSprite(rotPrims(turnPrims(prims, FACE_CAM), k));
+}
+
+// L'échelle qui remonte de la tanière, vers un trou de jour.
+function denExit() {
+  const prims = [
+    { ...ellipsoid(0, -6, 25.5, 3, 2.2, 1.2, EYE, (q) => { q.glow = 1; return q.shade + 1; }), smooth: true },
+    capsule([-3, 3, 0], [-3, -5, 24], 0.7, WOOD), capsule([3, 3, 0], [3, -5, 24], 0.7, WOOD),
+  ];
+  for (let i = 1; i < 7; i++) { const t = i / 7; prims.push(capsule([-3, 3 - 8 * t, 24 * t], [3, 3 - 8 * t, 24 * t], 0.45, WOOD)); }
+  return renderSolids(prims, 48, 72, 24, 56);
+}
+// La porte d'un intérieur : un encadrement, la lumière du dehors au sol.
+function doorOut() {
+  return renderSolids([
+    box(-6, -4.6, -0.8, 0.8, 0, 15, WOOD), box(4.6, 6, -0.8, 0.8, 0, 15, WOOD), box(-6, 6, -0.8, 0.8, 14, 16, WOOD),
+    { ...box(-4.6, 4.6, -1.2, 4, 0, 0.3, CREAMC, (q) => { q.glow = 1; return 2; }), smooth: true },
+  ], 48, 64, 24, 46);
+}
+
+const plank = (q) => (q.face === 't' && ((q.u + 30) % 3) < 0.5 ? Math.max(0, q.shade - 1) : q.shade);
+function table(k) {
+  const prims = [box(-6.5, 6.5, -4.5, 4.5, 7, 8.6, WOOD, plank)];
+  for (const [u, v] of [[-5.5, -3.5], [5.5, -3.5], [-5.5, 3.5], [5.5, 3.5]]) prims.push(box(u - 0.6, u + 0.6, v - 0.6, v + 0.6, 0, 7, WOOD));
+  prims.push(cylinder(-2.5, 0, 2, 8.6, 10, CREAMC, (q) => (q.face === 't' && Math.hypot(q.u + 2.5, q.v) < 1.3 ? 0 : q.shade)));
+  prims.push(ellipsoid(3, 0.5, 9.8, 2, 1.3, 1.2, CLOTH, null, 8.6), capsule([4.6, 0.8, 9.6], [5.8, 1, 10], 0.4, BONE)); // un gigot
+  return propSprite(rotPrims(prims, k));
+}
+function shelf(k) {
+  const jar = ['#c8283a', '#e0b23a', '#4a923d', '#3f86c6'].map(hex);
+  const prims = [box(-7, 7, -3.2, -2.2, 0, 19, WOOD), box(-7, -6, -3.2, 2.2, 0, 19, WOOD), box(6, 7, -3.2, 2.2, 0, 19, WOOD)];
+  for (const z of [0, 6.2, 12.4, 18.2]) prims.push(box(-6, 6, -3.2, 2.2, z, z + 0.9, WOOD, plank));
+  for (let i = 0; i < 6; i++) {
+    const C = jar[i % 4], Rr = [C.map((x) => x * 0.4), C.map((x) => x * 0.7), C, C.map((x) => Math.min(255, x * 1.3))];
+    prims.push({ ...cylinder(-4 + (i % 3) * 4, -0.5, 1.1, 0.9 + Math.floor(i / 3) * 6.2, 3.4 + Math.floor(i / 3) * 6.2, Rr), smooth: true });
+  }
+  prims.push(ellipsoid(0, -0.5, 14.4, 1.8, 1.6, 1.6, BONE, null, 13.3)); // un crâne en trophée
+  return propSprite(rotPrims(prims, k));
+}
+function bed(k) {
+  return propSprite(rotPrims([
+    box(-5.5, 5.5, -7, 7, 0, 4, WOOD), box(-5.5, 5.5, -7.6, -6.4, 0, 10, WOOD, plank),
+    box(-5, 5, -6.4, 6.6, 4, 5.6, CREAMC),
+    box(-5.2, 5.2, -1.5, 6.8, 5, 6.6, CLOTH, (q) => (q.face === 't' && Math.abs(q.v - 3) < 0.5 ? 1 : q.shade)),
+    ellipsoid(0, -4.4, 6.6, 3.4, 1.6, 1.3, CREAMC, null, 5.4),
+  ], k));
+}
+function rug(k) {
+  return propSprite(rotPrims([{ ...box(-7, 7, -5.5, 5.5, 0, 0.7, CLOTH, (q) => {
+    if (q.face !== 't') return 0;
+    if (Math.abs(q.u) > 5.8 || Math.abs(q.v) > 4.3) return GOLDR[(Math.floor(q.u + q.v) & 1) + 1]; // bordure
+    if (Math.abs(Math.abs(q.u) * 0.7 - Math.abs(q.v)) < 0.5) return GOLDR[2]; // losange
+    return 1 + (Math.floor((q.u - q.v + 40) / 2) & 1);
+  }), smooth: true }], k));
+}
+function bones(k) {
+  const rng = mulberry32(77), prims = [];
+  for (let i = 0; i < 7; i++) {
+    const a = rng() * Math.PI, u = (rng() - 0.5) * 7, v = (rng() - 0.5) * 6, z = 1 + rng() * 2.5, l = 2.5 + rng() * 2;
+    prims.push(capsule([u - Math.cos(a) * l, v - Math.sin(a) * l, z], [u + Math.cos(a) * l, v + Math.sin(a) * l, z + rng() * 1.5], 0.7, BONE));
+  }
+  prims.push(ellipsoid(0.5, 1, 5, 2.6, 2.3, 2.4, BONE, (q) => {
+    if (q.v > 2.2 && Math.abs(Math.abs(q.u - 0.5) - 1) < 0.6 && Math.abs(q.z - 5.4) < 0.7) return hex('#14141a');
+    return q.shade;
+  }, 2.6));
+  return propSprite(rotPrims(prims, k));
+}
+function totem(k) {
+  return propSprite(rotPrims([
+    box(-0.9, 0.9, -0.9, 0.9, 0, 20, WOOD, (q) => (Math.floor(q.z / 3.5) % 2 ? STRIPES[Math.min(3, q.shade + 1)] : q.shade)),
+    ellipsoid(0, 0, 22, 2.4, 2.4, 2.4, BONE, (q) => {
+      if (q.v > 1.2 && Math.abs(Math.abs(q.u) - 0.95) < 0.55 && Math.abs(q.z - 22.4) < 0.6) { q.glow = 1; return hex('#ff3a2a'); } // yeux rouges
+      return q.shade;
+    }),
+    capsule([-2, 0, 23.5], [-4.2, 0.4, 27], 0.55, BONE), capsule([2, 0, 23.5], [4.2, 0.4, 27], 0.55, BONE),
+  ], k));
+}
+
+// Les objets qui se tournent : R[id][k] = { img, glow }, k = 0..3 quarts de tour.
+export function buildRotSprites() {
+  const R = {};
+  const four = (f) => [0, 1, 2, 3].map(f);
+  R[O.CHEST] = four((k) => chest(k));
+  R[O.TABLE] = four(table); R[O.SHELF] = four(shelf); R[O.BED] = four(bed);
+  R[O.RUG] = four(rug); R[O.BONES] = four(bones); R[O.TOTEM] = four(totem);
+  [O.HUT, O.HUT_D, O.HUT_R].forEach((id, st) => { R[id] = four((k) => hutSprite(st, k)); });
+  [O.LAIR, O.LAIR_D, O.LAIR_R].forEach((id, st) => { R[id] = four((k) => lairSprite(st, k)); });
+  return R;
+}
+
 // Tous les sprites de village : S[id] = [{img, glow}…] (une seule frame sauf les blés).
 export function buildVillageSprites() {
   const S = {};
   for (const type in BUILDINGS) {
+    if (BUILDINGS[type].built) continue; // ses abris : voir buildRotSprites
     BUILDINGS[type].ids.forEach((id, state) => { S[id] = [buildingSprite(type, state)]; });
   }
   S[O.WELL] = [well(false)];
@@ -894,5 +1131,7 @@ export function buildVillageSprites() {
   S[O.TORCH] = [torch()];
   S[O.CHEST] = [chest()];
   S[O.NEST] = [nest()];
+  S[O.DEN_EXIT] = [denExit()];
+  S[O.DOOR_OUT] = [doorOut()];
   return S;
 }

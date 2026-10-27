@@ -9,6 +9,7 @@ export const ITEMS = {
   stone: { name: 'PIERRE', kind: 'mat' },
   straw: { name: 'PAILLE', kind: 'mat' },
   iron: { name: 'FER', kind: 'mat' },
+  dirt: { name: 'TERRE', kind: 'mat' },
   meat: { name: 'VIANDE CRUE', kind: 'food', food: 18, hp: 0 },
   steak: { name: 'VIANDE CUITE', kind: 'food', food: 40, hp: 20 },
   berries: { name: 'BAIES', kind: 'food', food: 6, hp: 0 },
@@ -23,7 +24,17 @@ export const ITEMS = {
   torch: { name: 'TORCHE', kind: 'place', obj: O.TORCH },
   chest: { name: 'COFFRE', kind: 'place', obj: O.CHEST },
   nest: { name: 'NID', kind: 'place', obj: O.NEST },
+  hut: { name: 'REPAIRE', kind: 'place', obj: O.HUT },
+  lair: { name: 'TANIERE', kind: 'place', obj: O.LAIR },
+  table: { name: 'TABLE', kind: 'place', obj: O.TABLE },
+  shelf: { name: 'ETAGERE', kind: 'place', obj: O.SHELF },
+  bed: { name: 'LIT', kind: 'place', obj: O.BED },
+  rug: { name: 'TAPIS', kind: 'place', obj: O.RUG },
+  bones: { name: "TAS D'OS", kind: 'place', obj: O.BONES },
+  totem: { name: 'TOTEM', kind: 'place', obj: O.TOTEM },
 };
+// Outils du mode BÂTIR dans la tanière (pas des objets du sac)
+export const TOOLS = { dig: { name: 'CREUSER' }, fill: { name: 'REMBLAYER' } };
 export const STACK = 64;
 
 // Ce qu'on fabrique (onglet FABRIQUER) : `need` = matériaux consommés, `n` = combien on en obtient.
@@ -36,6 +47,14 @@ export const RECIPES = [
   { out: 'campfire', n: 1, need: { wood: 3, stone: 2 }, desc: 'N: CUIRE LA VIANDE' },
   { out: 'chest', n: 1, need: { wood: 6 }, desc: 'N: RANGER DES OBJETS' },
   { out: 'nest', n: 1, need: { straw: 8, wood: 4 }, desc: 'N: DORMIR, SE REVEILLER ICI' },
+  { out: 'hut', n: 1, need: { wood: 12, straw: 6, stone: 4 }, desc: 'SA MAISON : ON ENTRE DEDANS' },
+  { out: 'lair', n: 1, need: { stone: 10, wood: 6 }, desc: 'MENE A SA TANIERE SOUS TERRE' },
+  { out: 'table', n: 1, need: { wood: 4 }, desc: 'UN MEUBLE' },
+  { out: 'shelf', n: 1, need: { wood: 5 }, desc: 'UN MEUBLE, CONTRE UN MUR' },
+  { out: 'bed', n: 1, need: { wood: 4, straw: 4 }, desc: 'UN MEUBLE' },
+  { out: 'rug', n: 1, need: { straw: 4 }, desc: 'ON MARCHE DESSUS' },
+  { out: 'bones', n: 1, need: { meat: 3 }, desc: 'TROPHEE DE CHASSE' },
+  { out: 'totem', n: 1, need: { wood: 3, iron: 1 }, desc: 'SES YEUX BRILLENT DANS LE NOIR' },
 ];
 
 // Ce que rapporte ce qu'on casse : objet du décor -> [item, combien].
@@ -48,6 +67,8 @@ export const DROPS = {
   [O.WELL]: [['stone', 3]], [O.WALL]: [['stone', 3]], [O.WALL_TOWER]: [['stone', 4]],
   [O.WALL_WOOD]: [['wood', 2]], [O.WALL_STONE]: [['stone', 2]], [O.SPIKES]: [['wood', 1]], [O.CAMPFIRE]: [['stone', 1]],
   [O.TORCH]: [['wood', 1]], [O.CHEST]: [['wood', 3]], [O.NEST]: [['straw', 4]],
+  [O.TABLE]: [['wood', 2]], [O.SHELF]: [['wood', 2]], [O.BED]: [['wood', 2], ['straw', 2]], [O.RUG]: [['straw', 2]],
+  [O.BONES]: [['meat', 1]], [O.TOTEM]: [['wood', 1], ['iron', 1]],
 };
 
 // ---------------------------------------------------------------- icônes
@@ -133,6 +154,53 @@ const ICONS = {
     fillRect(p, 1, 3, 10, 8, WOODC[2]); fillRect(p, 1, 3, 10, 2, WOODC[3]); fillRect(p, 1, 6, 10, 1, WOODC[0]);
     fillRect(p, 5, 5, 2, 3, '#e0b23a'); fillRect(p, 1, 3, 1, 8, IRONC[1]); fillRect(p, 10, 3, 1, 8, IRONC[1]);
   },
+  dirt: (p) => {
+    for (let y = 3; y < 11; y++) for (let x = 1; x < 11; x++) {
+      const d = Math.hypot((x + 0.5 - 6) / 5, (y + 0.5 - 7.5) / 3.6);
+      if (d < 1) p(x, y, ['#62402a', '#7a5233', '#8e6440', '#4a2f1c'][(x * 7 + y * 3) % 4 === 0 ? 3 : y < 6 ? 2 : x > 7 ? 0 : 1]);
+    }
+    p(4, 5, '#a7acb5'); p(8, 7, '#a7acb5');
+  },
+  hut: (p) => {
+    for (let y = 6; y < 11; y++) for (let x = 2; x < 10; x++) p(x, y, (x + y) % 4 === 0 ? '#d22838' : x < 5 ? '#343b8e' : '#22276b');
+    disc(p, 6, 5.5, 4.4, ['#5e2716', '#9a4a2c', '#c97249', '#e9a173']);
+    fillRect(p, 2, 6, 8, 5, '#22276b'); p(3, 8, '#d22838'); p(4, 9, '#d22838'); p(8, 7, '#d22838');
+    fillRect(p, 5, 8, 2, 3, '#0a081a'); p(4, 6, '#ffe07a'); p(7, 6, '#ffe07a'); p(5, 7, '#e0b23a'); p(6, 7, '#e0b23a');
+  },
+  lair: (p) => {
+    for (let y = 2; y < 11; y++) for (let x = 0; x < 12; x++) {
+      const d = Math.hypot((x + 0.5 - 6) / 6, (y + 0.5 - 10.5) / 7.5);
+      if (d < 1) p(x, y, y < 5 ? '#73b84d' : d < 0.55 && y > 6 ? '#0a081a' : (x + y) % 3 ? '#7a5233' : '#62402a');
+    }
+    p(6, 2, '#eceef0'); p(5, 3, '#c4c6cb'); p(7, 3, '#c4c6cb');
+  },
+  table: (p) => { fillRect(p, 1, 4, 10, 2, WOODC[3]); fillRect(p, 1, 6, 10, 1, WOODC[1]); for (const x of [2, 9]) fillRect(p, x, 7, 1, 4, WOODC[1]); p(4, 3, '#c83444'); p(5, 3, '#c83444'); },
+  shelf: (p) => {
+    fillRect(p, 2, 1, 8, 10, WOODC[1]);
+    for (const y of [1, 4, 7, 10]) fillRect(p, 2, y, 8, 1, WOODC[3]);
+    for (const [x, y, c] of [[3, 3, '#c8283a'], [5, 3, '#e0b23a'], [7, 6, '#4a923d'], [4, 9, '#3f86c6'], [7, 9, '#eceef0']]) { p(x, y, c); p(x, y - 1, c); }
+  },
+  bed: (p) => { fillRect(p, 1, 3, 2, 8, WOODC[1]); fillRect(p, 3, 6, 8, 3, '#ece2c8'); fillRect(p, 5, 6, 6, 3, '#c83444'); fillRect(p, 3, 9, 8, 2, WOODC[2]); p(4, 7, '#ffffff'); },
+  rug: (p) => { for (let y = 3; y < 10; y++) for (let x = 1; x < 11; x++) p(x, y, y === 3 || y === 9 || x === 1 || x === 10 ? '#e0b23a' : (x + y) % 2 ? '#981c30' : '#c83444'); },
+  bones: (p) => {
+    for (let i = 0; i < 7; i++) { p(2 + i, 9 - (i >> 1), '#c4c6cb'); p(3 + i, 10 - (i >> 2), '#8d9097'); }
+    disc(p, 6, 5, 3, ['#55575e', '#8d9097', '#c4c6cb', '#eceef0']); p(5, 5, '#14141a'); p(7, 5, '#14141a');
+  },
+  totem: (p) => {
+    fillRect(p, 5, 5, 2, 7, WOODC[2]); p(5, 7, '#d22838'); p(6, 7, '#d22838'); p(5, 10, '#d22838'); p(6, 10, '#d22838');
+    disc(p, 6, 3, 2.6, ['#55575e', '#8d9097', '#c4c6cb', '#eceef0']); p(5, 3, '#ff3a2a'); p(7, 3, '#ff3a2a');
+    p(2, 1, '#c4c6cb'); p(3, 2, '#c4c6cb'); p(9, 1, '#c4c6cb'); p(8, 2, '#c4c6cb');
+  },
+  // outils de la tanière
+  dig: (p) => {
+    for (let i = 0; i < 8; i++) p(2 + i, 10 - i, WOODC[i < 2 ? 1 : 2]);
+    for (let i = 0; i < 9; i++) { const x = 1 + i, y = 2 + Math.round(Math.abs(i - 4) * 0.6); p(x, y, IRONC[i === 4 ? 3 : 2]); p(x, y + 1, IRONC[1]); }
+  },
+  fill: (p) => {
+    for (let i = 0; i < 6; i++) p(8 - i, 1 + i, WOODC[2]);
+    fillRect(p, 1, 7, 5, 4, IRONC[2]); fillRect(p, 1, 7, 5, 1, IRONC[3]); p(3, 6, IRONC[1]);
+    fillRect(p, 7, 9, 4, 2, '#7a5233'); p(8, 8, '#8e6440'); p(9, 8, '#62402a');
+  },
   nest: (p) => {
     for (let y = 5; y < 11; y++) for (let x = 1; x < 11; x++) {
       const d = Math.hypot((x + 0.5 - 6) / 5, (y + 0.5 - 8) / 2.8);
@@ -146,6 +214,7 @@ const ICONS = {
 export function buildIcons() {
   const out = {};
   for (const id in ITEMS) out[id] = icon(ICONS[id]);
+  for (const id in TOOLS) out[id] = icon(ICONS[id]);
   return out;
 }
 
