@@ -513,6 +513,11 @@ export const sfx = {
     noise({ type: 'lowpass', f: stone ? 1800 : 700, f2: 200, gain: 0.45, dec: 0.35 });
     for (let i = 0; i < 4; i++) noise({ f: stone ? rnd(1500, 3000) : rnd(400, 900), q: 3, gain: 0.12, dec: 0.04, delay: 0.05 + i * rnd(0.03, 0.07) });
   },
+  // une volée d'oiseaux qui s'envole : froissements d'ailes
+  flap() {
+    if (!ready() || !gate('flap', 0.5)) return;
+    for (let i = 0; i < 7; i++) noise({ type: 'highpass', f: rnd(1500, 2600), gain: 0.07, a: 0.01, dec: 0.05, delay: i * rnd(0.04, 0.09) });
+  },
   craft() {
     if (!ready()) return;
     for (let i = 0; i < 3; i++) { tone({ f: rnd(1600, 2200), type: 'square', gain: 0.04, dec: 0.05, delay: i * 0.12 }); noise({ f: 1800, q: 2, gain: 0.12, dec: 0.05, delay: i * 0.12 }); }

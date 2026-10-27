@@ -16,6 +16,7 @@ export const ITEMS = {
   helmet: { name: 'CASQUE', kind: 'trophy' },
   shield: { name: 'BOUCLIER', kind: 'trophy' },
   emblem: { name: 'EMBLEME DE HEROS', kind: 'trophy' },
+  crown: { name: 'COURONNE DE CHAMPION', kind: 'trophy' },
   wallWood: { name: 'MUR DE BOIS', kind: 'place', obj: O.WALL_WOOD },
   wallStone: { name: 'MUR DE PIERRE', kind: 'place', obj: O.WALL_STONE },
   fence: { name: 'PALISSADE', kind: 'place', obj: O.FENCE_X },
@@ -32,17 +33,15 @@ export const ITEMS = {
   rug: { name: 'TAPIS', kind: 'place', obj: O.RUG },
   bones: { name: "TAS D'OS", kind: 'place', obj: O.BONES },
   totem: { name: 'TOTEM', kind: 'place', obj: O.TOTEM },
+  cage: { name: 'CAGE', kind: 'place', obj: O.CAGE },
+  rack: { name: 'PRESENTOIR', kind: 'place', obj: O.RACK },
 };
 // Outils du mode BÂTIR dans la tanière (pas des objets du sac)
 export const TOOLS = { dig: { name: 'CREUSER' }, fill: { name: 'REMBLAYER' } };
 export const STACK = 64;
 
-// Ce qu'on fabrique (onglet FABRIQUER) : `need` = matériaux consommés, `n` = combien on en obtient.
+// Ce qu'on fabrique (onglet ATELIER ; les murs, palissades et pièges ne se fabriquent plus) : `need` = matériaux consommés, `n` = combien on en obtient.
 export const RECIPES = [
-  { out: 'wallWood', n: 1, need: { wood: 4 }, desc: 'BLOQUE LE PASSAGE' },
-  { out: 'wallStone', n: 1, need: { stone: 4 }, desc: 'PLUS SOLIDE' },
-  { out: 'fence', n: 2, need: { wood: 2 }, desc: 'CLOTURE BASSE' },
-  { out: 'spikes', n: 1, need: { wood: 2, iron: 1 }, desc: 'BLESSE CEUX QUI MARCHENT DESSUS' },
   { out: 'torch', n: 2, need: { wood: 1, straw: 1 }, desc: 'ECLAIRE LA NUIT' },
   { out: 'campfire', n: 1, need: { wood: 3, stone: 2 }, desc: 'N: CUIRE LA VIANDE' },
   { out: 'chest', n: 1, need: { wood: 6 }, desc: 'N: RANGER DES OBJETS' },
@@ -55,6 +54,8 @@ export const RECIPES = [
   { out: 'rug', n: 1, need: { straw: 4 }, desc: 'ON MARCHE DESSUS' },
   { out: 'bones', n: 1, need: { meat: 3 }, desc: 'TROPHEE DE CHASSE' },
   { out: 'totem', n: 1, need: { wood: 3, iron: 1 }, desc: 'SES YEUX BRILLENT DANS LE NOIR' },
+  { out: 'cage', n: 1, need: { wood: 4, iron: 2 }, desc: 'LACHE UN PRISONNIER DEDANS' },
+  { out: 'rack', n: 1, need: { wood: 5 }, desc: 'N: EXPOSER UN TROPHEE (+FORCE)' },
 ];
 
 // Ce que rapporte ce qu'on casse : objet du décor -> [item, combien].
@@ -69,6 +70,7 @@ export const DROPS = {
   [O.TORCH]: [['wood', 1]], [O.CHEST]: [['wood', 3]], [O.NEST]: [['straw', 4]],
   [O.TABLE]: [['wood', 2]], [O.SHELF]: [['wood', 2]], [O.BED]: [['wood', 2], ['straw', 2]], [O.RUG]: [['straw', 2]],
   [O.BONES]: [['meat', 1]], [O.TOTEM]: [['wood', 1], ['iron', 1]],
+  [O.CAGE]: [['wood', 2], ['iron', 1]], [O.RACK]: [['wood', 2]], [O.FOSSIL]: [['stone', 2]],
 };
 
 // ---------------------------------------------------------------- icônes
@@ -190,6 +192,20 @@ const ICONS = {
     fillRect(p, 5, 5, 2, 7, WOODC[2]); p(5, 7, '#d22838'); p(6, 7, '#d22838'); p(5, 10, '#d22838'); p(6, 10, '#d22838');
     disc(p, 6, 3, 2.6, ['#55575e', '#8d9097', '#c4c6cb', '#eceef0']); p(5, 3, '#ff3a2a'); p(7, 3, '#ff3a2a');
     p(2, 1, '#c4c6cb'); p(3, 2, '#c4c6cb'); p(9, 1, '#c4c6cb'); p(8, 2, '#c4c6cb');
+  },
+  crown: (p) => {
+    fillRect(p, 2, 6, 8, 4, '#e0b23a'); fillRect(p, 2, 9, 8, 1, '#b0851e');
+    for (const x of [2, 5, 9]) { p(x, 4, '#ffe07a'); p(x, 5, '#e0b23a'); }
+    p(6, 4, '#ffe07a'); p(6, 5, '#e0b23a'); p(4, 7, '#d22838'); p(7, 7, '#3f86c6');
+  },
+  cage: (p) => {
+    fillRect(p, 1, 2, 10, 1, WOODC[3]); fillRect(p, 1, 10, 10, 1, WOODC[1]);
+    for (const x of [1, 3, 5, 7, 9, 10]) fillRect(p, x, 3, 1, 7, IRONC[2]);
+    fillRect(p, 1, 3, 1, 7, WOODC[2]); fillRect(p, 10, 3, 1, 7, WOODC[2]);
+  },
+  rack: (p) => {
+    fillRect(p, 1, 1, 1, 10, WOODC[2]); fillRect(p, 10, 1, 1, 10, WOODC[2]); fillRect(p, 1, 1, 10, 1, WOODC[3]); fillRect(p, 2, 6, 8, 1, WOODC[1]);
+    fillRect(p, 3, 2, 3, 3, IRONC[2]); p(4, 3, '#14141a'); fillRect(p, 7, 7, 2, 3, '#5078b4'); p(7, 8, '#e0b23a');
   },
   // outils de la tanière
   dig: (p) => {

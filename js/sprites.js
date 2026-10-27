@@ -27,19 +27,45 @@ const leafTex = (seed, swayPx) => (p) => {
   return p.shade;
 };
 
-function treeParts(kind, f, seed) {
+// Saisons : 0 printemps, 1 été, 2 automne, 3 hiver.
+const AUTUMN = [ramp('#5a1e0e', '#9a3a12', '#d0682a', '#f0a840'), ramp('#5a3a0e', '#8f6a14', '#c99a2a', '#ecc85a')];
+const CHERRY_AUTUMN = ramp('#5e140e', '#9a2416', '#d04a26', '#f08a4a');
+const BLOSSOM = [hex('#fff4f8'), hex('#ffd6e6')];
+
+function treeParts(kind, f, seed, season = 1) {
   const sway = Math.sin(f / SWAY_FRAMES * Math.PI * 2);
   const parts = [];
   const sw = (z) => sway * 0.06 * Math.max(0, z - 10); // le haut bouge plus que le bas
-  if (kind === 'oak' || kind === 'cherry') {
-    const leaves = kind === 'cherry' ? CHERRY : (seed & 1 ? LEAF : LEAF_FOREST);
+  if ((kind === 'oak' || kind === 'cherry') && season === 3) {
+    // l'hiver : branches nues, la neige posée dessus
+    const snowBark = (p) => (p.ny < -0.3 && hash(p.x, p.y, seed) < 0.85 ? SNOWY[Math.min(3, p.shade + 1)] : p.shade);
+    parts.push({ a: [0, 0, 0], b: [sw(20), 0, 20], r1: 3.4, r2: 1.8, ramp: BARK, group: 1, tex: snowBark });
+    parts.push({ a: [-2.5, 1, 0.5], r1: 2, ramp: BARK, group: 1 });
+    parts.push({ a: [2.5, -1, 0.5], r1: 2, ramp: BARK, group: 1 });
+    // des branches qui s'écartent jusqu'à la silhouette du houppier d'été, chacune avec ses rameaux
+    const ends = [[-11, 2, 26], [11, 1, 27], [-5, -8, 32], [6, 7, 32], [-2, 1, 38], [8, -4, 35], [-8, 5, 33]];
+    ends.forEach(([x, y, z], i) => {
+      const z0 = 11 + (i % 4) * 3, mx = x * 0.55, my = y * 0.55, mz = (z0 + z) / 2 + 1;
+      parts.push({ a: [sw(z0), 0, z0], b: [mx + sw(mz), my, mz], r1: 1.7, r2: 1.1, ramp: BARK, group: 2 + i, tex: snowBark });
+      parts.push({ a: [mx + sw(mz), my, mz], b: [x + sw(z), y, z], r1: 1.1, r2: 0.5, ramp: BARK, group: 2 + i, tex: snowBark });
+      for (const k of [-1, 1]) {
+        parts.push({ a: [mx * 1.3 + sw(mz + 2), my * 1.3, mz + 2], b: [mx * 1.3 + k * 3.5 + sw(mz + 7), my * 1.3 - k, mz + 7], r1: 0.7, r2: 0.4, ramp: BARK, group: 2 + i, tex: snowBark });
+      }
+    });
+  } else if (kind === 'oak' || kind === 'cherry') {
+    const leaves = kind === 'cherry' ? (season === 1 ? LEAF : season === 2 ? CHERRY_AUTUMN : CHERRY)
+      : season === 2 ? AUTUMN[seed & 1] : (seed & 1 ? LEAF : LEAF_FOREST);
+    const bloom = season === 0 && kind === 'oak';
     parts.push({ a: [0, 0, 0], b: [sw(16), 0, 17], r1: 3.4, r2: 2.4, ramp: BARK, group: 1,
       tex: (p) => ((p.x + 1) % 3 === 0 && p.shade > 0 ? p.shade - 1 : p.shade) });
     parts.push({ a: [-2.5, 1, 0.5], r1: 2, ramp: BARK, group: 1 });
     parts.push({ a: [2.5, -1, 0.5], r1: 2, ramp: BARK, group: 1 });
     const blobs = [[0, 0, 25, 10], [-7, 2, 21, 7], [7, 1, 21, 7.5], [-2, -6, 27, 8], [4, 5, 28, 7], [-4, 2, 32, 6.5], [3, -2, 33, 6]];
     blobs.forEach(([x, y, z, r], i) => {
-      parts.push({ a: [x + sw(z), y, z], r1: r, ramp: leaves, group: 2 + (i > 3 ? 1 : 0), tex: leafTex(seed + i, sway * 0.06 * (z - 10)) });
+      const base = leafTex(seed + i, sway * 0.06 * (z - 10));
+      // au printemps, le chêne se couvre de petites fleurs blanches et roses
+      const tex = bloom ? (p) => (p.shade >= 2 && hash(Math.round(p.x - sway * 0.06 * (z - 10)), p.y, seed + i + 50) < 0.07 ? BLOSSOM[(p.x + p.y) & 1] : base(p)) : base;
+      parts.push({ a: [x + sw(z), y, z], r1: r, ramp: leaves, group: 2 + (i > 3 ? 1 : 0), tex });
     });
   } else if (kind === 'pine' || kind === 'snowpine') {
     // Sapin : un tronc à racines, puis des étages de branches. Chaque étage = un cœur conique
@@ -168,6 +194,28 @@ export function buildObjectSprites() {
   S[O.LILY] = [lily()];
   S[O.REEDS] = reedFrames();
   return S;
+}
+
+// Les arbres selon la saison : SS[saison][objet] = images (l'été et le cerisier en fleurs sont les sprites
+// de base ; le cerisier, lui, a aussi son été vert).
+export function buildSeasonSprites() {
+  const SS = {};
+  const tree = (kind, scale, seed, season) => {
+    const frames = [];
+    for (let f = 0; f < SWAY_FRAMES; f++) frames.push(bake(treeParts(kind, f, seed, season), TREE_W, TREE_H, TREE_OX, TREE_OY, scale));
+    return frames;
+  };
+  for (const season of [0, 1, 2, 3]) {
+    const S = SS[season] = {};
+    if (season !== 1) {
+      S[O.OAK_S] = tree('oak', 0.75, 3, season);
+      S[O.OAK_M] = tree('oak', 0.95, 4, season);
+      S[O.OAK_L] = tree('oak', 1.15, 7, season);
+    }
+    if (season !== 1) S[O.CHERRY] = tree('cherry', 1.05, 9, season);
+    if (season === 3) { S[O.PINE] = tree('snowpine', 1.0, 1); S[O.PINE_L] = tree('snowpine', 1.25, 2); }
+  }
+  return SS;
 }
 
 function berryTex(berry, s) {
@@ -332,11 +380,20 @@ export function rowSpan(r) {
   return [14 - 2 * rr, 17 + 2 * rr];
 }
 
-export function blockBuffer(type, level, v) {
+// l'herbe jaunit à l'automne ; l'hiver, la neige la recouvre (quelques brins percent)
+const AUTUMN_TOPS = {
+  [T.GRASS]: ramp('#6a7a2e', '#7f913a', '#98aa48', '#b4c45e'),
+  [T.FOREST]: ramp('#4f5a26', '#62702f', '#7c8a3c', '#98a64e'),
+  [T.MEADOW]: ramp('#7f913a', '#94a744', '#acbd52', '#c8d46a'),
+};
+const WINTER_TOP = ramp('#b4c4d6', '#d6e0ea', '#eef3f8', '#ffffff');
+
+export function blockBuffer(type, level, v, season = 1) {
   const sideH = level * 8 + 7;
   const b = makeBuffer(TILE_W, TILE_H + sideH);
-  const top = TOPS[type];
   const grassy = type === T.GRASS || type === T.FOREST || type === T.MEADOW;
+  const winter = grassy && season === 3;
+  const top = winter ? WINTER_TOP : grassy && season === 2 ? AUTUMN_TOPS[type] : TOPS[type];
   const earthy = type === T.PATH || type === T.DIRT;
   const earthWall = type === T.EARTH || type === T.EARTH_STONE || type === T.EARTH_IRON;
   const sideRamp = type === T.SAND ? SANDSIDE : grassy || earthy || earthWall || type === T.DEN ? DIRT : type === T.BEDROCK ? top : STONESIDE;
@@ -372,6 +429,7 @@ export function blockBuffer(type, level, v) {
       const h = hash(x, r, seed);
       let s = 1;
       if (h < 0.13) s = 0; else if (h > 0.88) s = 2;
+      if (winter && h < 0.05) { b.set(x, r, TOPS[type][h < 0.025 ? 1 : 2]); continue; } // un brin d'herbe
       if (grassy && h > 0.972) { s = 3; b.set(x, r + 1, top[0]); }
       if (type === T.STONE && h > 0.95) s = 0;
       if (type === T.SNOW && h > 0.97) s = 3;
@@ -390,7 +448,7 @@ export function blockBuffer(type, level, v) {
     }
   }
   // fleurettes et cailloux sur certaines variantes
-  if (type === T.MEADOW && v % 2 === 0) {
+  if (type === T.MEADOW && v % 2 === 0 && !winter) {
     const cols = ['#fff3a0', '#ffffff', '#ff9ec0'].map(hex);
     for (let i = 0; i < 4; i++) {
       const r = 3 + ((hash(i, v, 5) * 10) | 0), [x0, x1] = rowSpan(r);

@@ -196,7 +196,8 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
   relief (`mcPanel`), cases creusées 18x18 (`mcSlot`), boutons (`mcButton`), infobulles sombres à
   liseré violet (`drawTip`), onglets attachés au-dessus. Onglets SAC (Brainless qui tourne dans son
   cadre, ses 3 alters équipés à gauche comme une armure, sa réserve d'alters ; ou COFFRE), MUTATIONS
-  (cases reliées comme l'écran des progrès), FABRIQUER (livre de recettes, ingrédients -> résultat).
+  (cases reliées comme l'écran des progrès), ATELIER (livre de recettes, 5 par ligne, ingrédients ->
+  résultat), CARTE (`drawMapTab`) et SUCCES (`drawAchTab`) ; un coffre n'a que les 3 premiers.
   Objets (`slotClick`) : main vide, un toucher/clic choisit l'objet et affiche son nom et ses infos
   (`invUI.pick`, cadre blanc), le retoucher le prend, le retoucher vite l'envoie de l'autre côté
   (`quickMove`, aussi Maj+clic) ; main pleine, un toucher pose (fusionner ou échanger) ; glisser-déposer,
@@ -210,7 +211,10 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
   pose. Le bouton N devient OUVRIR (coffre, contenu dans `world.chests`, sauvé), DORMIR (nid : nuit
   passée, vie pleine, il s'y réveille après une défaite), CUIRE (feu de camp : viande crue -> cuite).
   Piège à piques : blesse qui marche dessus. Feu de camp et torche : flamme animée et lueur la nuit.
-- **Mode BÂTIR** (icône marteau à gauche du sac, B au clavier, R3 à la manette ; refusé en combat) :
+- **Mode BÂTIR** (**seulement dans la tanière** : icône marteau à gauche du sac, B au clavier, R3 à la
+  manette ; dehors il répond « SEULEMENT DANS TA TANIÈRE » ; refusé en combat). Dehors, on pose depuis la
+  barre d'objets (`tryPlace`, `placeTarget` : devant lui, face à lui ; un abri 2x2 deux tuiles devant).
+  Les murs, palissades et pièges ne se fabriquent plus (ceux déjà posés restent) :
   le monde se fige (`updateBuild` : seules les animations tournent), la caméra se détache de Brainless
   (`build.cx/cy`, glisser au doigt avec élan, deux doigts quand un outil est choisi, ZQSD, stick) dans
   une portée `buildR()` (9 tuiles dehors, 12 dans la tanière ; grille pointillée, bord doré). Tiroir en
@@ -259,6 +263,47 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
   de fer (`T.EARTH_IRON`, 6 coups) (`DIG`). On creuse à coups de poing (`digTile`, fissures sur la paroi),
   au gros coup et à la frappe au sol, ou au mode BÂTIR : CREUSER se peint au doigt sur les parois qui
   touchent une salle (marquées en orange), REMBLAYER remet une paroi pour 1 TERRE.
+
+## 5 ter. Un monde qui réagit
+
+- **Saisons** (`season`, `seasonOf`, 3 jours de jeu chacune : `SEASON_LEN`) : printemps (chênes en
+  fleurs, cerisiers roses et pétales), été (cerisier vert), automne (chênes roux/dorés `AUTUMN`, feuilles
+  qui tombent, herbe jaunie `AUTUMN_TOPS`), hiver (arbres nus et enneigés, sapins enneigés, sol
+  `WINTER_TOP` où percent des brins, pas de fleurs, neige au lieu de pluie). Sprites : `buildSeasonSprites()`
+  -> `seasonImgs[saison][objet]`, lus par `objFrames(o)` ; tuiles : `blockBuffer(type, h, v, saison)`,
+  cache vidé au changement. Annonce à chaque nouvelle saison.
+- **Oiseaux** (`birds`) : volées de 3 à 6 (moineaux, corbeaux l'hiver, mésanges) posées dans l'herbe, qui
+  picorent et sautillent ; toute la volée s'envole (`sfx.flap`) quand il court près d'elle ou frappe fort.
+  Au sol, triés par rangée comme les habitants ; en vol, par-dessus.
+- **Carte** (onglet CARTE, icône parchemin, V au clavier) : vue en losanges comme le jeu, seulement les
+  morceaux 32x32 déjà parcourus (`explored`, sauvé). Villages (noms sans chevauchement), ses abris,
+  l'expédition, lui. Glisser au doigt, `-`/`+` (1 à 8 tuiles par pixel), ICI.
+- **Succès** (`ACHIEVEMENTS`, 16) : vérifiés toutes les 2 s, annoncés un par un, sauvés
+  (`player.achieved`). Compteurs dans `stats` (mangés, héros, creusés, posés, encagés, expéditions,
+  champions, fossiles).
+- **Tanière vivante** : un habitant porté en entrant dans un abri devient **prisonnier** (`captive`,
+  `kidnap` : perdu pour son village). Lâché près d'une **cage** (`O.CAGE`, dessinée en deux moitiés autour
+  de lui, `cageFront`), il y est enfermé et secoue les barreaux ; libre, il file vers la sortie et
+  s'échappe. On le reprend, on le tue, on le dévore. Prisonniers sauvés par lieu (`captives`).
+  **Présentoir** (`O.RACK`, N : EXPOSER) : casque/bouclier 1, emblème 2, couronne 3 -> +3 % de force par
+  point (`trophyBonus`, 45 % au plus). **Trouvailles** en creusant (`Den.secretAt`, une fois par tuile,
+  `found`) : coffre enfoui (`Den.loot`), ossements (viande), **ancien Nomu** fossilisé (`O.FOSSIL`,
+  N : EXAMINER, +15 évolution), source d'eau.
+- **Expéditions** (`expedition`) : l'**infamie** (`player.infamy`, barre MENACE) monte avec les méfaits
+  (villageois 1, chevalier 2, héros 4, enlèvement 2, maison rasée 3) et retombe doucement. À `EXP_AT`, le
+  royaume envoie 3 à 8 chevaliers (+ 1-2 héros) qui le traquent (`n.exp`, `v: 'exp'`, flèche au bord de
+  l'écran). S'il a un abri, ils l'**assiègent** (`updateExpMember`) ; absent ou caché dedans, ils cognent
+  l'entrée et finissent par **libérer ses prisonniers** (`freeCaptives`) ; s'il ressort, ils l'attendent
+  devant la porte. Tous tués : expédition repoussée, infamie divisée par 2. Un abri abîmé se range au mode
+  BÂTIR et se repose neuf.
+- **Champions** : chaque ville fortifiée a son champion (`v.champion`, un héros ×4 PV, coups plus forts,
+  nom doré couronné). Mort une fois pour toutes (`deaths.champion`) ; il lâche sa COURONNE ; le dévorer
+  donne beaucoup d'évolution et une mutation de plus.
+- **Reconstruction** : une maison de village rasée (`world.ruins`, sauvé) est rebâtie au bout de 10 min de
+  jeu s'il est à plus de 28 tuiles ; en revenant : « LE VILLAGE A ÉTÉ RECONSTRUIT ».
+- **Villageois chez eux** : en entrant dans une maison, ceux qui y sont rentrés (nuit, pluie) sont là
+  (`bringResidents`) : endormis dans les lits la nuit (`outsideDark`), réveillés en sursaut s'il approche,
+  ils fuient dans les coins en criant. Tués ou blessés chez eux : le village est en alerte à sa sortie.
 
 ## 6. Villages et bâtiments (`js/buildings.js`, `js/world.js`)
 
@@ -382,7 +427,7 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
   (meute de 3, chasse la nuit, fuit blessé). Ils apparaissent hors écran selon le biome et
   repartent quand Brainless s'éloigne ; quantité réglée par le paramètre FAUNE.
 - **Météo** (`updateWeather`) : clair, couvert, pluie, orage, tirés au sort selon le
-  paramètre METEO (pas de brouillard : retiré, il voilait l'écran). Pluie = gouttes de 6 px en espace
+  paramètre METEO (pas de brouillard : retiré, il voilait l'écran ; l'hiver, il neige partout). Pluie = gouttes de 6 px en espace
   écran + éclaboussures ; neige à la place sur la neige et en altitude ; ciel couvert =
   teinte plus sombre. L'orage agite la végétation et la foudre frappe (souvent un arbre) : éclair
   en zigzag `#8fd8ff`/blanc, flash, tonnerre retardé selon la distance. Les villageois rentrent

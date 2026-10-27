@@ -1088,6 +1088,52 @@ function totem(k) {
   ], k));
 }
 
+// Cage à prisonniers : un plancher, des poteaux et des barreaux de fer, un toit de planches.
+// En deux moitiés : le fond (dessiné avant le prisonnier) et l'avant (dessiné après), pour qu'il soit dedans.
+function cage(front) {
+  const W = 7, prims = [];
+  const bar = (u, v) => capsule([u, v, 1.2], [u, v, 15], 0.32, METAL);
+  if (!front) {
+    prims.push(box(-W, W, -W, W, 0, 1.2, WOOD, plank));
+    for (let a = -W; a <= W; a += 2.8) { prims.push(bar(a, -W), bar(-W, a)); }
+    prims.push(box(-W - 0.6, -W + 0.6, -W - 0.6, -W + 0.6, 0, 16, WOOD));
+    prims.push(box(-W - 0.6, W + 0.6, -W - 0.6, -W + 0.6, 15, 16.4, WOOD), box(-W - 0.6, -W + 0.6, -W - 0.6, W + 0.6, 15, 16.4, WOOD)); // poutres du haut, au fond
+  } else {
+    for (let a = -W + 2.8; a <= W; a += 2.8) { prims.push(bar(a, W), bar(W, a)); }
+    for (const [u, v] of [[W, -W], [-W, W], [W, W]]) prims.push(box(u - 0.6, u + 0.6, v - 0.6, v + 0.6, 0, 16, WOOD));
+    // pas de toit plein : un cadre de poutres, on voit le prisonnier à travers
+    prims.push(box(-W - 0.6, W + 0.6, W - 0.6, W + 0.6, 15, 16.4, WOOD), box(W - 0.6, W + 0.6, -W - 0.6, W + 0.6, 15, 16.4, WOOD));
+  }
+  return renderSolids(prims, 48, 64, 24, 46);
+}
+// Présentoir à trophées : un râtelier de bois, des crochets ; les trophées y sont dessinés en jeu.
+function rack(k) {
+  return propSprite(rotPrims([
+    box(-7, -5.6, -1, 1, 0, 17, WOOD), box(5.6, 7, -1, 1, 0, 17, WOOD),
+    box(-7.5, 7.5, -1.4, 1.4, 16, 18, WOOD, plank), box(-6, 6, -0.6, 0.6, 9, 10.4, WOOD),
+    box(-6, 6, -2.5, 2.5, 0, 1, WOOD, plank),
+    ...[-4, 0, 4].map((u) => capsule([u, 0.6, 14.5], [u, 2, 13.5], 0.35, METAL)),
+    ...[-4, 0, 4].map((u) => capsule([u, 0.6, 8], [u, 2, 7], 0.35, METAL)),
+  ], k));
+}
+// Un ancien Nomu fossilisé, à moitié pris dans la terre : crâne au cerveau creux, bec terni, échine et côtes.
+function fossil() {
+  const OLD = ramp('#4a4038', '#7a6e60', '#a89c88', '#d4c8b0'), DULL = ramp('#3a2a10', '#6a5020', '#9a7a34', '#c4a254');
+  const prims = [ellipsoid(0, 0, 0, 9, 7, 2.2, EARTHR, null, 0)];
+  prims.push(ellipsoid(2, 3, 4.5, 4.2, 3.6, 3.6, OLD, (q) => {
+    if (q.z > 6.5 && Math.hypot(q.u - 2, q.v - 2.5) < 2.4) return hex('#1a1410'); // le cerveau a disparu
+    if (q.v > 5 && Math.abs(Math.abs(q.u - 2) - 1.3) < 0.7 && Math.abs(q.z - 4.5) < 0.8) return hex('#14141a'); // orbites
+    return q.shade;
+  }));
+  prims.push(capsule([0.6, 6.4, 3.4], [2, 8.4, 1.4], 0.7, DULL), capsule([3.4, 6.4, 3.4], [2, 8.4, 1.4], 0.7, DULL));
+  for (let i = 0; i < 5; i++) {
+    const u = -1 - i * 2.2, v = 1 - i * 0.6;
+    prims.push(capsule([u, v, 2.2], [u - 2.2, v - 0.6, 2], 0.6, OLD));
+    prims.push(capsule([u, v, 2.2], [u + 0.5, v + 3.4, 0.8], 0.38, OLD), capsule([u, v, 2.2], [u - 0.6, v - 3, 0.8], 0.38, OLD));
+  }
+  return propSprite(prims);
+}
+
 // Les objets qui se tournent : R[id][k] = { img, glow }, k = 0..3 quarts de tour.
 export function buildRotSprites() {
   const R = {};
@@ -1095,6 +1141,7 @@ export function buildRotSprites() {
   R[O.CHEST] = four((k) => chest(k));
   R[O.TABLE] = four(table); R[O.SHELF] = four(shelf); R[O.BED] = four(bed);
   R[O.RUG] = four(rug); R[O.BONES] = four(bones); R[O.TOTEM] = four(totem);
+  R[O.RACK] = four(rack);
   [O.HUT, O.HUT_D, O.HUT_R].forEach((id, st) => { R[id] = four((k) => hutSprite(st, k)); });
   [O.LAIR, O.LAIR_D, O.LAIR_R].forEach((id, st) => { R[id] = four((k) => lairSprite(st, k)); });
   return R;
@@ -1133,5 +1180,8 @@ export function buildVillageSprites() {
   S[O.NEST] = [nest()];
   S[O.DEN_EXIT] = [denExit()];
   S[O.DOOR_OUT] = [doorOut()];
+  S[O.CAGE] = [cage(false)];
+  S.cageFront = [cage(true)];
+  S[O.FOSSIL] = [fossil()];
   return S;
 }

@@ -32,6 +32,8 @@ export const O = {
   HUT: 67, HUT_D: 68, HUT_R: 69, LAIR: 70, LAIR_D: 71, LAIR_R: 72,
   // sorties (échelle de la tanière, porte d'un intérieur) et meubles
   DEN_EXIT: 73, DOOR_OUT: 74, TABLE: 75, SHELF: 76, BED: 77, RUG: 78, BONES: 79, TOTEM: 80,
+  // sa tanière vivante : une cage à prisonniers, un présentoir à trophées, un ancien Nomu fossilisé
+  CAGE: 81, RACK: 82, FOSSIL: 83,
 };
 
 // Résistance des bâtiments : points de vie avant d'être abîmé, puis avant de s'effondrer.
@@ -94,6 +96,9 @@ export const OBJ_INFO = {
   [O.RUG]: { hp: 1, prop: 'hay', built: true, rot: true, flat: true, fuel: 3 },
   [O.BONES]: { solid: 0.28, tall: 9, hp: 2, prop: 'stone', built: true, rot: true },
   [O.TOTEM]: { solid: 0.16, tall: 24, hp: 2, prop: 'wood', built: true, rot: true, fuel: 4 },
+  [O.CAGE]: { hp: 6, prop: 'wood', built: true, cage: true, fuel: 6 }, // on y enferme un prisonnier (on marche dedans)
+  [O.RACK]: { solid: 0.3, tall: 18, hp: 3, prop: 'wood', built: true, rot: true, fuel: 6 },
+  [O.FOSSIL]: { solid: 0.34, tall: 8, hp: 6, prop: 'stone', fossil: true },
   // sorties : on marche dessus pour remonter / sortir
   [O.DEN_EXIT]: { exit: true },
   [O.DOOR_OUT]: { exit: true },
@@ -133,6 +138,9 @@ export class World {
     this.deaths = new Map(); // id du village -> { civ, knight } : les morts ne reviennent pas
     this.chests = new Map(); // "x,y" -> contenu d'un coffre posé par Brainless
     this.rots = new Map(); // "x,y" -> 0..3 : quart de tour d'une construction
+    this.racks = new Map(); // "x,y" -> trophées exposés sur un présentoir
+    this.captives = []; // prisonniers laissés là (tanière, repaire) quand il ressort
+    this.ruins = new Map(); // "x,y" -> instant où une maison de village est tombée en ruine (elle sera rebâtie)
     this._lastKey = null;
     this._lastChunk = null;
   }
@@ -585,6 +593,7 @@ export class World {
     }
     v.folk = 20;
     v.heroes = this.pickHeroes(rng, [1, 2, 3][this.p.heroes]);
+    v.champion = Math.floor(rng() * 5); // le champion de la ville : un héros légendaire, bien plus coriace
     return v;
   }
 
@@ -631,6 +640,7 @@ export class Den extends World {
     this.den = true;
     this.realm = 'den';
     this.exitKey = '0,-3'; // l'échelle
+    this.found = new Set(); // tuiles creusées où une trouvaille est déjà sortie
   }
   villageIn() { return null; }
   solid(x, y) { const t = this.typeAt(x, y); return t === T.EARTH || t === T.EARTH_STONE || t === T.EARTH_IRON || t === T.BEDROCK; }
@@ -643,6 +653,17 @@ export class Den extends World {
     return { t: T.EARTH, h: WALL_H, o: O.NONE };
   }
   findSpawn() { return { x: 0.5, y: 0.5 }; }
+  // Ce qu'on trouve parfois en creusant une paroi (une seule fois par tuile, voir `found`)
+  secretAt(x, y) {
+    if (Math.hypot(x, y) < 7 || hash2(x, y, this.seed + 77) > 0.014) return null;
+    const r = hash2(x, y, this.seed + 78);
+    return r < 0.4 ? 'chest' : r < 0.62 ? 'bones' : r < 0.84 ? 'fossil' : 'spring';
+  }
+  loot(key) {
+    const rng = mulberry32((this.seed ^ (key.length * 7919 + key.charCodeAt(1) * 31 + key.charCodeAt(key.length - 1))) >>> 0), out = [];
+    for (const [id, n, p] of [['iron', 4, 0.8], ['stone', 6, 0.6], ['steak', 3, 0.5], ['emblem', 1, 0.25], ['helmet', 1, 0.3], ['berries', 5, 0.4]]) if (rng() < p) out.push({ id, n: 1 + Math.floor(rng() * n) });
+    return out;
+  }
 }
 
 // Les intérieurs : une pièce de w x h tuiles (x de 0 à w-1, y de 0 à h-1), murs hauts au fond,

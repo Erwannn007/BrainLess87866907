@@ -1,4 +1,4 @@
-import { World, Den, Room, T, O, OBJ_INFO, VG, ENTERABLE, ROOM_NAMES, DIG } from './world.js';
+import { World, Den, Room, T, O, OBJ_INFO, VG, ENTERABLE, ROOM_NAMES, DIG, BUILDINGS } from './world.js';
 import { buildVillageSprites, buildRotSprites } from './buildings.js';
 import { renderPerson, PEOPLE, PEOPLE_ANIMS, CIVILIANS, HEROES } from './people.js';
 import { renderNomu, ANIMS, holdPoint, sizeOf } from './nomu.js';
@@ -123,13 +123,14 @@ const HOLD_ANIMS = ['grab', 'carry', 'carryWalk', 'carryJump', 'throwAim', 'thro
 // à une main (la droite) ; dérapage et freinage en sprint : la prise traîne sous sa main
 const HOLD1_ANIMS = ['grab1', 'carry1', 'carryWalk1', 'carryJump1', 'run1', 'drop1', 'rise1', 'throwAim1', 'throw1', 'skid', 'brake'];
 const holdPts = {};
-let objSprites, objGlow, objRot, icons, crackImgs, peopleImgs, bloodImgs, ashImgs, flameImgs, waterImgs, foamImgs, rimImgs, shadows, ui;
+let objSprites, objGlow, objRot, seasonImgs, icons, crackImgs, peopleImgs, bloodImgs, ashImgs, flameImgs, waterImgs, foamImgs, rimImgs, shadows, ui;
 const blockCache = new Map();
 
 function block(type, h, v) {
-  const key = type * 1000 + h * 10 + v;
+  const sn = type === T.GRASS || type === T.FOREST || type === T.MEADOW ? season : 1; // l'herbe change avec les saisons
+  const key = type * 1000 + h * 10 + v + sn * 100000;
   let c = blockCache.get(key);
-  if (!c) { c = toCanvas(SP.blockBuffer(type, h, v)); blockCache.set(key, c); }
+  if (!c) { c = toCanvas(SP.blockBuffer(type, h, v, sn)); blockCache.set(key, c); }
   return c;
 }
 
@@ -216,6 +217,10 @@ async function loadAssets() {
   const raw = SP.buildObjectSprites();
   objSprites = {};
   for (const id in raw) objSprites[id] = raw[id].map((b) => toSprite(b));
+  // les arbres de chaque saison
+  const ss = SP.buildSeasonSprites();
+  seasonImgs = {};
+  for (const sn in ss) { seasonImgs[sn] = {}; for (const id in ss[sn]) seasonImgs[sn][id] = ss[sn][id].map((b) => toSprite(b)); }
   done++; progress(); await tick();
   // bâtiments et objets de village, avec leur couche de fenêtres allumées pour la nuit
   const vs = buildVillageSprites();
@@ -278,7 +283,8 @@ function circleBuf(r, fill, col, alpha) {
 let world = new World(SEED);
 let current = null; // le monde joué (entrée de la liste des mondes)
 let mode = 'menu'; // 'menu' : écran d'accueil, le monde défile en fond ; 'play' : on joue
-const stats = { trees: 0, rocks: 0, smash: 0, houses: 0, knights: 0, victims: 0, play: 0 };
+const stats = { trees: 0, rocks: 0, smash: 0, houses: 0, knights: 0, victims: 0, play: 0,
+  eaten: 0, heroes: 0, dug: 0, built: 0, caged: 0, expWon: 0, champions: 0, fossils: 0 };
 let tod = 0.3;
 let time = 0;
 const player = { x: 0, y: 0, z: 0, dir: 2, anim: 'idle', t: 0, spd: 0, phase: 0, quad: false, trans: null, lastV: null, action: null, actionT: 0, hitDone: false, dustT: 0, stamina: 1, tired: false, sprinting: false,
@@ -295,13 +301,32 @@ const player = { x: 0, y: 0, z: 0, dir: 2, anim: 'idle', t: 0, spd: 0, phase: 0,
   // mutations choisies, alters (niveau, équipés : 3 emplacements), choix de mutation en attente,
   // inventaire (36 cases, les 9 premières = la barre), case choisie, nid où il se réveille
   muts: [], mutOff: [], lookOff: [], alterLv: {}, equip: [], pendingLv: 0, inv: Array(36).fill(null), sel: 0, spawn: null, meatAcc: 0, sleep: null, spikeT: 0,
-  held: null, grabTarget: null, grabArm: false, grabHoldT: 0, aiming: false, throwPow: 0, throwPower: 0 };
+  held: null, grabTarget: null, grabArm: false, grabHoldT: 0, aiming: false, throwPow: 0, throwPower: 0,
+  achieved: [], trophies: 0, infamy: 0 }; // succès débloqués, trophées exposés, infamie (le royaume le traque)
 const npcs = []; // villageois et chevaliers autour de Brainless
 const vstate = new Map(); // id du village -> { populated, anger, alarm }
 const bloods = []; // flaques de sang au sol
 let scent = null; // après avoir flairé : { v, t } le village le plus proche
 let msg = null; // bandeau au milieu de l'écran : { text, t }
 function showMsg(text, dur = 2.5, sub = '') { msg = { text, sub, t: dur }; }
+// ---------------------------------------------------------------- saisons
+// 3 jours de jeu chacune : printemps (chênes en fleurs, cerisiers roses), été, automne (feuilles
+// rousses qui tombent, herbe jaunie), hiver (arbres nus, sapins et sol enneigés, il neige au lieu de pleuvoir).
+const SEASON_LEN = DAY_LENGTH * 3;
+const SEASONS = ['PRINTEMPS', 'ETE', 'AUTOMNE', 'HIVER'];
+const SEASON_MSG = [['LE PRINTEMPS', 'LES ARBRES FLEURISSENT'], ["L'ETE", ''], ["L'AUTOMNE", 'LES FEUILLES TOMBENT'], ["L'HIVER", 'LA NEIGE RECOUVRE TOUT']];
+let season = 0;
+const seasonOf = () => Math.floor(stats.play / SEASON_LEN) % 4;
+function updateSeason() {
+  const sn = seasonOf();
+  if (sn === season) return;
+  season = sn;
+  blockCache.clear();
+  if (mode === 'play') { showMsg(SEASON_MSG[sn][0], 3.5, SEASON_MSG[sn][1]); sfx.regen(); }
+}
+// les images d'un objet pour la saison en cours
+const objFrames = (o) => (seasonImgs && seasonImgs[season] && seasonImgs[season][o]) || objSprites[o];
+const AUTUMN_COLS = ['#d0682a', '#f0a840', '#9a3a12', '#c99a2a'];
 let windT = 0; // rafale après une frappe au sol : la végétation s'agite
 // Horloge du balancement de la végétation : le vent la fait avancer plus vite, sans jamais la
 // faire sauter (multiplier `time` par la rafale faisait clignoter les arbres après quelques minutes).
@@ -325,7 +350,7 @@ function resetState() {
   drops.length = 0; mutChoice = null; invUI = null; toast = null; build = null; placedFx.clear();
   if (realm) world = surface;
   realm = null; realmWorlds.clear(); realmData = new Map(); realmFade = 0;
-  scent = null; msg = null; shake = 0; windT = 0; tod = 0.3; curVillage = null;
+  scent = null; msg = null; shake = 0; windT = 0; birds.length = 0; explored.clear(); expedition = null; expCd = 90; tod = 0.3; curVillage = null;
   Object.assign(weather, { kind: 'clear', left: 40, rain: 0, cloud: 0, storm: 0, flash: 0, boltT: 6 });
   weather.drops.length = weather.flakes.length = thunders.length = 0;
   input.punch = input.jump = input.sniff = input.grab = false;
@@ -342,6 +367,7 @@ function startWorld(meta) {
   mode = 'play';
   hintT = 9;
   showMsg(meta.name, 2.5);
+  season = seasonOf(); blockCache.clear();
   rebakeNomu(); // ses mutations visibles (rien à faire s'il n'en a pas)
 }
 
@@ -358,6 +384,8 @@ function load(s) {
     if (s && typeof s.x === 'number') {
       realmData = new Map(s.realms || []);
       world.rots = new Map(s.rots || []);
+      world.racks = new Map(s.racks || []);
+      world.ruins = new Map(s.ruins || []);
       world.mods = new Map(s.mods || []);
       world.terr = new Map(s.terr || []);
       world.wear = new Map(s.wear || []);
@@ -368,6 +396,9 @@ function load(s) {
       player.hunger = s.hunger ?? 100; player.xp = s.xp ?? 0; player.level = s.level ?? 1; player.alters = s.alters || [];
       player.muts = s.muts || []; player.mutOff = s.mutOff || []; player.lookOff = s.lookOff || []; player.alterLv = s.alterLv || {}; player.equip = s.equip || player.alters.slice(0, 3);
       player.pendingLv = s.pendingLv || 0; player.spawn = s.spawn || null; player.meatAcc = s.meatAcc || 0;
+      player.achieved = s.achieved || []; player.trophies = s.trophies || 0; player.infamy = s.infamy || 0;
+      explored.clear(); for (const k of s.explored || []) explored.add(k);
+      for (const c of s.captives || []) npcs.push(makeCaptive(c.type, c.x, c.y, c.cage));
       if (Array.isArray(s.inv)) player.inv = Array.from({ length: INV }, (_, i) => (s.inv[i] && ITEMS[s.inv[i].id] ? s.inv[i] : null));
       world.chests = new Map(s.chests || []);
       player.hp = s.hp ?? maxHp();
@@ -382,7 +413,8 @@ function save() {
   if (mode !== 'play' || !current) return;
   const W = surface, [px, py] = realm ? realm.out : [player.x, player.y]; // dedans : on le sauve devant la porte
   saveWorldData(current.id, {
-    x: px, y: py, realms: realmSave(), rots: [...W.rots], hp: player.hp, hunger: player.hunger, xp: player.xp, level: player.level, alters: player.alters, tod,
+    captives: (realm ? realm.stash.npcs : npcs).filter((n) => n.captive && alive(n) && !n.held).map((n) => ({ type: n.type, x: n.x, y: n.y, cage: n.caged ? n.cage : null })),
+    x: px, y: py, realms: realmSave(), rots: [...W.rots], racks: [...W.racks], ruins: [...W.ruins], explored: [...explored], achieved: player.achieved, trophies: player.trophies, infamy: player.infamy, hp: player.hp, hunger: player.hunger, xp: player.xp, level: player.level, alters: player.alters, tod,
     muts: player.muts, mutOff: player.mutOff, lookOff: player.lookOff, alterLv: player.alterLv, equip: player.equip, pendingLv: player.pendingLv, spawn: player.spawn, meatAcc: player.meatAcc,
     inv: player.inv, chests: [...W.chests], stats, mods: [...W.mods], terr: [...W.terr], wear: [...W.wear], deaths: [...W.deaths],
   });
@@ -473,6 +505,7 @@ function onTouchStart(e) {
     if (Math.hypot(x - muteBtn.x, y - muteBtn.y) < muteBtn.r + 6) { toggleMute(); sfx.ui(); continue; }
     if (mode === 'play' && Math.hypot(x - bagBtn.x, y - bagBtn.y) < bagBtn.r + 4) { openInv(); return; }
     if (mode === 'play' && Math.hypot(x - buildBtn.x, y - buildBtn.y) < buildBtn.r + 4) { openBuild(); return; }
+    if (mode === 'play' && Math.hypot(x - mapBtn.x, y - mapBtn.y) < mapBtn.r + 4) { openInv(3); return; }
     if (mode === 'play' && hotbarTap(x, y)) continue;
     if (mode === 'play' && Math.hypot(x - musicBtn.x, y - musicBtn.y) < musicBtn.r + 4) { switchMusic(); continue; }
     if (mode === 'play' && Math.hypot(x - homeBtn.x, y - homeBtn.y) < homeBtn.r + 5) { sfx.ui(); quitToMenu(); return; }
@@ -546,6 +579,7 @@ window.addEventListener('keydown', (e) => {
   if (overlayOpen()) { keys.delete(e.code); e.preventDefault(); overlayKey(e); return; } // sac ou choix de mutation
   if (e.code === 'KeyI' || e.code === 'Tab') { e.preventDefault(); openInv(); return; }
   if (e.code === 'KeyB') { openBuild(); return; }
+  if (e.code === 'KeyV') { openInv(3); return; } // V : la carte
   if (/^Digit[1-9]$/.test(e.code)) player.sel = +e.code[5] - 1;
   if (e.code === 'KeyT') useItem();
   if (e.code === 'KeyM') toggleMute();
@@ -573,6 +607,7 @@ canvas.addEventListener('mousedown', (e) => {
   if (Math.hypot(x - muteBtn.x, y - muteBtn.y) < muteBtn.r + 6) { toggleMute(); sfx.ui(); return; }
   if (mode === 'play' && Math.hypot(x - bagBtn.x, y - bagBtn.y) < bagBtn.r + 4) { openInv(); return; }
   if (mode === 'play' && Math.hypot(x - buildBtn.x, y - buildBtn.y) < buildBtn.r + 4) { openBuild(); return; }
+  if (mode === 'play' && Math.hypot(x - mapBtn.x, y - mapBtn.y) < mapBtn.r + 4) { openInv(3); return; }
   if (mode === 'play' && hotbarTap(x, y)) return;
   if (mode === 'play' && Math.hypot(x - musicBtn.x, y - musicBtn.y) < musicBtn.r + 4) { switchMusic(); return; }
   if (mode === 'play' && Math.hypot(x - homeBtn.x, y - homeBtn.y) < homeBtn.r + 5) { sfx.ui(); quitToMenu(); return; }
@@ -766,7 +801,9 @@ const WOOD_COLS = ['#7a5233', '#9a6d45', '#c9a06a'];
 const DUST_COLS = ['#c9b58f', '#a8946e', '#e2d3b0'];
 
 function leafColsFor(o) {
-  if (o === O.CHERRY) return CHERRY_COLS;
+  if (season === 3 && (o === O.OAK_S || o === O.OAK_M || o === O.OAK_L || o === O.CHERRY)) return WOOD_COLS; // nus en hiver
+  if (season === 2 && o !== O.PINE && o !== O.PINE_L && o !== O.SNOW_PINE) return AUTUMN_COLS;
+  if (o === O.CHERRY) return season === 0 ? CHERRY_COLS : LEAF_COLS;
   if (o === O.PINE || o === O.PINE_L || o === O.SNOW_PINE) return PINE_COLS;
   return LEAF_COLS;
 }
@@ -794,7 +831,7 @@ function damage(tx, ty, dmg) {
   if (info.tree) {
     next = O.STUMP;
     stats.trees++;
-    const spr = objSprites[o][0];
+    const spr = objFrames(o)[0];
     const side = isoX(cx, cy) >= isoX(player.x, player.y) ? 1 : -1; // tombe à l'opposé de Brainless
     fx.push({ kind: 'fall', img: spr, x: cx, y: cy, gz, t: 0, side, leaves: leafColsFor(o) });
     sfx.treeCreak();
@@ -827,6 +864,7 @@ function damage(tx, ty, dmg) {
   world.setObj(tx, ty, next);
   if (DROPS[o]) spawnDrops(cx, cy, DROPS[o]); // ses matériaux
   if (o === O.CHEST && world.chests.has(key)) { spawnDrops(cx, cy, world.chests.get(key).filter(Boolean).map((s) => [s.id, s.n])); world.chests.delete(key); }
+  if (o === O.RACK && world.racks.has(key)) { const T0 = world.racks.get(key); spawnDrops(cx, cy, T0.map((id) => [id, 1])); player.trophies = Math.max(0, player.trophies - T0.reduce((a, id) => a + trophyWorth(id), 0)); world.racks.delete(key); }
   if (info.prop === 'lantern') oilSplash(tx, ty); // l'huile de la lanterne s'enflamme
   if (info.village) crime(info.crime || 0.2, cx, cy);
   return true;
@@ -870,6 +908,8 @@ function damageBuilding(ax, ay, dmg, quiet) { // quiet : le feu (pas un méfait 
   if (info.state === 2) {
     hits.delete(key);
     stats.houses++;
+    if (!info.built) world.ruins.set(key, stats.play); // les villageois la rebâtiront quand il sera loin
+    if (!quiet && !info.built) player.infamy += 3;
     sfx.collapse();
     shake = Math.max(shake, 7);
     fx.push({ kind: 'collapse', img: objSprites[before][0], x: ax, y: ay, gz, t: 0 });
@@ -1283,6 +1323,7 @@ const TRANS_DUR = ANIMS.drop.frames / ANIMS.drop.fps;
 function update(dt) {
   time += dt;
   stats.play += dt;
+  updateSeason();
   if (msg && (msg.t -= dt) <= 0) msg = null;
   for (let i = bloods.length - 1; i >= 0; i--) if ((bloods[i].age += dt) > 180) bloods.splice(i, 1);
   tod = (tod + dt / DAY_LENGTH) % 1;
@@ -1569,6 +1610,11 @@ function update(dt) {
   updateAmbience(dt, { night: darkness() > 0.5, water: waterNearby(), height: world.hAt(Math.floor(player.x), Math.floor(player.y)),
     rain: realm || weather.snow ? 0 : weather.rain, storm: realm ? 0 : weather.storm, fire: fireNear });
   if (!realm) updateFlyers(dt);
+  updateBirds(dt);
+  updateExplore(dt);
+  updateAchievements(dt);
+  updateExpedition(dt);
+  updateRebuild(dt);
   for (let i = fx.length - 1; i >= 0; i--) {
     const f = fx[i];
     f.t += dt;
@@ -1793,11 +1839,14 @@ const alterLv = (a) => (has(a) ? player.alterLv[a] || 1 : 0);
 const mut = (id) => player.muts.includes(id) && !player.mutOff.includes(id);
 const shownMuts = () => looks(player.muts.filter((id) => mut(id) && !player.lookOff.includes(id)));
 const maxHp = () => 100 + 15 * (player.level - 1) + (mut('mass') ? 40 : 0);
-const strength = () => (1 + 0.12 * (player.level - 1)) * (has('iron') ? 1.3 + 0.2 * alterLv('iron') : 1) * (mut('arms') ? 1.25 : 1) * (mut('claws') ? 1.15 : 1);
+// trophées exposés : +3 % de force chacun (une couronne en vaut 3, un emblème 2), 45 % au plus
+const trophyBonus = () => 1 + 0.03 * Math.min(15, player.trophies);
+const strength = () => trophyBonus() * (1 + 0.12 * (player.level - 1)) * (has('iron') ? 1.3 + 0.2 * alterLv('iron') : 1) * (mut('arms') ? 1.25 : 1) * (mut('claws') ? 1.15 : 1);
 const fighter = (n) => n.kind === 'knight' || n.kind === 'hero';
 
 // Ce que rapporte une proie : de quoi manger, et des points d'évolution.
 function mealOf(n) {
+  if (n.boss) return { food: 100, evo: 30 };
   if (n.kind === 'hero') return { food: 60, evo: 8 };
   if (n.kind === 'knight') return { food: 40, evo: 2 };
   if (n.kind === 'beast') return BEAST_MEAL[n.type];
@@ -1844,6 +1893,9 @@ function finishEat() {
   if (i < 0) return;
   npcs.splice(i, 1);
   bloods.push({ x: n.x, y: n.y, h: world.hAt(Math.floor(n.x), Math.floor(n.y)), img: bloodImgs[0], age: 0 });
+  stats.eaten++;
+  if (n.kind === 'hero') stats.heroes++;
+  if (n.boss) { player.pendingLv++; showMsg('LA FORCE DU CHAMPION', 4, 'UNE MUTATION DE PLUS'); }
   gainEvo(mealOf(n).evo);
   const alter = PEOPLE[n.type] && PEOPLE[n.type].alter;
   if (alter && player.alters.includes(alter) && (player.alterLv[alter] || 1) < 3) {
@@ -1913,7 +1965,7 @@ function vstateOf(v) {
   if (!st) vstate.set(v.id, st = { populated: false, anger: 0, alarm: -99 });
   return st;
 }
-const alarmed = (id) => { const st = vstate.get(id); return !!st && time - st.alarm < 25; };
+const alarmed = (id) => { if (id === 'exp') return true; const st = vstate.get(id); return !!st && time - st.alarm < 25; }; // une expédition est toujours sur le pied de guerre
 
 function villageAt(x, y, margin = 6) {
   for (const v of world.villagesNear(x, y)) if (Math.hypot(x - v.cx, y - v.cy) < v.R + margin) return v;
@@ -1988,6 +2040,16 @@ function populate(v) {
       if (freeSpot(jx, jy)) { const g = spawnNpc('knight', jx, jy, v, null); g.state = 'guard'; g.wait = Math.random() * 3; break; }
     }
   }
+  // le champion d'une ville fortifiée, au milieu de la grand-place
+  if (v.champion !== undefined && !dead.champion) {
+    for (let k = 0; k < 20; k++) {
+      const x = v.cx + 0.5 + (Math.random() - 0.5) * 6, y = v.cy + 2.5 + (Math.random() - 0.5) * 6;
+      if (!freeSpot(x, y)) continue;
+      const n = spawnNpc(HEROES[v.champion], x, y, v, null);
+      n.boss = true; n.state = 'guard'; n.hp = n.maxHp = PEOPLE[n.type].hp * 4;
+      break;
+    }
+  }
   // les héros du village (ceux qui n'ont pas encore été dévorés)
   (v.heroes || []).slice(dead.hero || 0).forEach((h) => {
     for (let k = 0; k < 20; k++) {
@@ -2017,7 +2079,7 @@ function updateVillages(dt) {
     for (let i = npcs.length - 1; i >= 0; i--) if (npcs[i].v === id && !npcs[i].held) npcs.splice(i, 1);
   }
   const inside = near.find((v) => Math.hypot(player.x - v.cx, player.y - v.cy) < v.R + 3);
-  if (inside && inside !== curVillage && !player.dead) showMsg(inside.name, 2.5);
+  if (inside && inside !== curVillage && !player.dead) { const st = vstateOf(inside); showMsg(inside.name, 2.5, st.rebuilt ? 'LE VILLAGE A ETE RECONSTRUIT' : ''); st.rebuilt = false; }
   if (inside) curVillage = inside;
   else if (curVillage && Math.hypot(player.x - curVillage.cx, player.y - curVillage.cy) > curVillage.R + 10) curVillage = null;
 }
@@ -2107,7 +2169,10 @@ function killNpc(n, crushed) {
   if (!alive(n)) return;
   n.state = 'dead'; n.anim = crushed ? 'crushed' : 'dead'; n.t = 0;
   n.deadT = 0; n.air = false; n.jz = 0; n.vx = n.vy = 0; n.alertT = 0;
-  if (n.v) deathsOf(n.v)[n.kind]++;
+  if (n.v) { if (n.boss) deathsOf(n.v).champion = 1; else deathsOf(n.v)[n.kind]++; }
+  if (n.boss) { stats.champions++; showMsg('LE CHAMPION EST TOMBE', 4, 'SA COURONNE EST A TOI'); }
+  if (n.inRoom && realm) realm.harm = true; // tué chez lui : le village le saura
+  if (n.v && n.v !== 'exp') player.infamy += n.kind === 'hero' ? 4 : n.kind === 'knight' ? 2 : n.kind === 'civ' ? 1 : 0;
   spawnDrops(n.x, n.y, lootOf(n)); // fer, casque, bouclier, emblème
   if (n.kind === 'knight' || n.kind === 'hero') stats.knights++; else if (n.kind === 'beast') stats.prey = (stats.prey || 0) + 1; else stats.victims++;
   const h = world.hAt(Math.floor(n.x), Math.floor(n.y));
@@ -2369,7 +2434,13 @@ function updateNpcs(dt) {
     n.z += (groundZ(n.x, n.y) - n.z) * Math.min(1, dt * 12);
     const d = Math.hypot(player.x - n.x, player.y - n.y);
     let anim = 'idle';
-    if (n.kind === 'beast') anim = updateBeast(n, dt, d);
+    const expA = n.exp && n.state === 'chase' ? updateExpMember(n, dt, d) : null;
+    if ((n.captive || n.escapee) && n.state !== 'ko' && n.state !== 'hurt') {
+      anim = n.captive ? updateCaptive(n, dt, d) : updateEscapee(n, dt, d);
+      if (anim === 'escaped') { npcs.splice(i, 1); continue; }
+    } else if (n.inRoom && n.state !== 'ko' && n.state !== 'hurt') anim = updateResident(n, dt, d);
+    else if (expA) anim = expA;
+    else if (n.kind === 'beast') anim = updateBeast(n, dt, d);
     else switch (n.state) {
       case 'ko':
         anim = 'ko';
@@ -2477,7 +2548,7 @@ function updateNpcs(dt) {
         n.atkT += dt / 0.5;
         if (!n.hitDone && n.atkT >= 0.55) {
           n.hitDone = true;
-          if (Math.hypot(player.x - n.x, player.y - n.y) < 1.35) hurtPlayer(n.kind === 'hero' ? 10 : 7, n.x, n.y);
+          if (Math.hypot(player.x - n.x, player.y - n.y) < 1.35) hurtPlayer(n.boss ? 16 : n.kind === 'hero' ? 10 : 7, n.x, n.y);
         }
         if (n.atkT >= 1) { n.state = 'chase'; n.cd = (n.kind === 'hero' ? 0.6 : 0.8) + Math.random() * 0.6; }
         break;
@@ -2644,7 +2715,7 @@ function updateWeather(dt) {
   W.storm = ease(W.storm, k === 'storm' ? 1 : 0, 0.2);
   // en montagne et sur la neige, il neige au lieu de pleuvoir
   const tt = world.typeAt(Math.floor(player.x), Math.floor(player.y));
-  W.snow = tt === T.SNOW || world.hAt(Math.floor(player.x), Math.floor(player.y)) >= 5;
+  W.snow = season === 3 || tt === T.SNOW || world.hAt(Math.floor(player.x), Math.floor(player.y)) >= 5;
   W.flash = Math.max(0, W.flash - dt * 3);
   if (W.storm > 0.5) {
     windT = Math.max(windT, W.storm * 0.6);
@@ -2818,6 +2889,7 @@ const RUIN_DROPS = { thatch: [['straw', 4], ['wood', 3]], tile: [['wood', 4], ['
 // Une proie qui meurt peut laisser du fer et des trophées.
 function lootOf(n) {
   if (n.kind === 'knight') return [['iron', 1 + (Math.random() < 0.5 ? 1 : 0)]].concat(Math.random() < 0.3 ? [['helmet', 1]] : [], Math.random() < 0.2 ? [['shield', 1]] : []);
+  if (n.boss) return [['crown', 1], ['emblem', 1], ['iron', 4]];
   if (n.kind === 'hero') return [['emblem', 1], ['iron', 2]];
   return [];
 }
@@ -2841,43 +2913,55 @@ function useItem() {
 }
 
 // La tuile devant lui où poser une construction, et si c'est possible.
-function placeTarget() {
+function placeTarget(o) {
   const [dx, dy] = dirWorld(player.dir);
+  // ce qui s'oriente est posé face à lui (la porte d'un abri, le devant d'un meuble)
+  let k = 0;
+  if (OBJ_INFO[o] && OBJ_INFO[o].rot) {
+    const base = big(o) ? [Math.SQRT1_2, Math.SQRT1_2] : [0, 1];
+    let best = -9;
+    for (let i = 0; i < 4; i++) { const [u, v] = rotUV(base[0], base[1], i), d = -u * dx - v * dy; if (d > best) { best = d; k = i; } }
+  }
+  if (big(o)) {
+    // un abri (2x2) : son centre deux tuiles devant lui
+    const tx = Math.round(player.x + dx * 2.2), ty = Math.round(player.y + dy * 2.2);
+    const why = player.air ? 'PAS EN SAUTANT' : buildBlock(o, tx, ty);
+    return { tx, ty, ok: !why, why, k };
+  }
   let tx = Math.floor(player.x + dx * 1.05), ty = Math.floor(player.y + dy * 1.05);
   if (tx === Math.floor(player.x) && ty === Math.floor(player.y)) { tx = Math.floor(player.x + dx * 1.6); ty = Math.floor(player.y + dy * 1.6); }
   const info = OBJ_INFO[world.objAt(tx, ty)];
-  let ok = world.walkable(tx, ty) && (!info || (info.small && !info.part)) && Math.abs(world.hAt(tx, ty) * 8 - player.z) < 9 && !player.air;
+  let ok = world.walkable(tx, ty) && !(world.solid && world.solid(tx, ty)) && (!info || (info.small && !info.part)) && Math.abs(world.hAt(tx, ty) * 8 - player.z) < 9 && !player.air;
   if (ok && Math.hypot(tx + 0.5 - player.x, ty + 0.5 - player.y) < 0.6) ok = false;
   if (ok) for (const n of npcs) if (!n.inside && !n.held && Math.hypot(n.x - tx - 0.5, n.y - ty - 0.5) < 0.6) { ok = false; break; }
-  return { tx, ty, ok };
+  return { tx, ty, ok, k };
 }
-
+// l'objet posé pour un objet du sac (la palissade se met en travers de son regard)
+function placeObj(id) {
+  const obj = ITEMS[id].obj;
+  if (obj !== O.FENCE_X) return obj;
+  const [dx, dy] = dirWorld(player.dir);
+  return Math.abs(dx) > Math.abs(dy) ? O.FENCE_Y : O.FENCE_X;
+}
 function tryPlace(s) {
-  const t = placeTarget();
-  if (!t.ok) { showMsg('PAS ICI', 0.8); sfx.ui(); return; }
-  let obj = ITEMS[s.id].obj;
-  if (obj === O.FENCE_X) { const [dx, dy] = dirWorld(player.dir); obj = Math.abs(dx) > Math.abs(dy) ? O.FENCE_Y : O.FENCE_X; } // en travers de son regard
-  world.setObj(t.tx, t.ty, obj);
-  if (obj === O.CHEST) world.chests.set(t.tx + ',' + t.ty, Array(CHEST_N).fill(null));
+  const obj = placeObj(s.id), t = placeTarget(obj);
+  if (!t.ok) { showMsg(t.why || 'PAS ICI', 1.2); sfx.ui(); return; }
+  setBuilt(t.tx, t.ty, obj, t.k, null);
+  stats.built++;
   s.n--; if (!s.n) player.inv[player.sel] = null;
-  sfx.place();
-  shake = Math.max(shake, 1.5);
-  burst(t.tx + 0.5, t.ty + 0.5, world.hAt(t.tx, t.ty) * 8, DUST_COLS, 10, { up: 25, speed: 1.4, g: 60, life: 0.5, spread: 2 });
 }
 
 // Aperçu de la construction choisie, posée devant lui : verte si c'est possible, rouge sinon.
 function drawPlaceGhost(ox, oy) {
   const s = player.inv[player.sel];
   if (!s || ITEMS[s.id].kind !== 'place' || player.held || player.dead) return;
-  const t = placeTarget(), h = world.hAt(t.tx, t.ty);
-  const sx = ox + isoX(t.tx, t.ty), sy = oy + isoY(t.tx, t.ty) - h * 8;
-  let obj = ITEMS[s.id].obj;
-  if (obj === O.FENCE_X) { const [dx, dy] = dirWorld(player.dir); obj = Math.abs(dx) > Math.abs(dy) ? O.FENCE_Y : O.FENCE_X; }
-  const img = objSprites[obj][0], gx = sx, gy = sy + 8;
+  const obj = placeObj(s.id), t = placeTarget(obj);
+  const img = spriteOf(obj, t.k);
+  ctx.globalAlpha = 0.8 + Math.sin(time * 8) * 0.2;
+  for (const [x, y] of footprint(obj, t.tx, t.ty)) tileOutline(ox + isoX(x, y), oy + isoY(x, y) - world.hAt(x, y) * 8, t.ok ? '#7ee08a' : '#ff5a5e', true);
+  const gx = ox + isoX(t.tx, t.ty), gy = oy + isoY(t.tx, t.ty) - world.hAt(t.tx, t.ty) * 8 + (big(obj) ? 0 : 8);
   ctx.globalAlpha = 0.55;
   draw(img, gx - img.ox, gy - img.oy);
-  ctx.globalAlpha = 0.8 + Math.sin(time * 8) * 0.2;
-  tileOutline(sx, sy, t.ok ? '#7ee08a' : '#ff5a5e', true); // le losange de la tuile en pointillés
   ctx.globalAlpha = 1;
 }
 
@@ -2890,13 +2974,12 @@ function drawPlaceGhost(ox, oy) {
 // déplace, ou on la range en la lâchant sur le tiroir. Ses abris (2x2) ne se posent que dehors.
 const BUILD_TABS = [
   { name: 'CREUSER', ids: ['dig', 'fill'], den: true },
-  { name: 'MURS', ids: ['wallWood', 'wallStone', 'fence', 'spikes'] },
   { name: 'FEU', ids: ['torch', 'campfire', 'totem'] },
-  { name: 'ABRIS', ids: ['hut', 'lair', 'nest', 'chest'] },
-  { name: 'MEUBLES', ids: ['table', 'shelf', 'bed', 'rug', 'bones'] },
+  { name: 'ABRIS', ids: ['nest', 'chest', 'cage'] },
+  { name: 'MEUBLES', ids: ['table', 'shelf', 'bed', 'rug', 'bones', 'rack'] },
 ];
 const BUILD_LIST = RECIPES.map((r) => r.out);
-const TRAY_N = 5; // cases du tiroir (l'onglet le plus garni)
+const TRAY_N = 6; // cases du tiroir (l'onglet le plus garni)
 // la charte de l'écran : sa peau indigo, ses rayures rouges, son bec doré, son cerveau
 const BUI = { ink: '#090a20', dark: '#151848', base: '#22276b', hi: '#343b8e', dim: '#5a5f9a', red: '#9c1628', redHi: '#d22838', gold: '#e0b23a', goldHi: '#ffe07a', goldLo: '#6b4a10', brain: '#c97249' };
 const TOUCH_LIFT = 14; // au doigt, ce qu'on glisse vise la tuile un peu au-dessus du doigt, pour rester visible
@@ -2906,7 +2989,7 @@ const buildTabs = () => BUILD_TABS.filter((t) => !t.den || world.den);
 const buildR = () => (world.den ? 12 : realm ? 10 : 9); // portée, en tuiles autour de lui
 const isTool = (id) => !!TOOLS[id];
 const nameOf = (id) => (TOOLS[id] || ITEMS[id]).name;
-const itemOfObj = (o) => (o === O.FENCE_Y ? 'fence' : BUILD_LIST.find((id) => ITEMS[id].obj === o));
+const itemOfObj = (o) => (o === O.FENCE_Y ? 'fence' : Object.keys(ITEMS).find((id) => ITEMS[id].kind === 'place' && ITEMS[id].obj === o));
 const recipeOf = (id) => RECIPES.find((r) => r.out === id);
 const costText = (r) => Object.keys(r.need).map((k) => r.need[k] + ' ' + ITEMS[k].name).join(' + ');
 const big = (o) => !!(OBJ_INFO[o] && OBJ_INFO[o].building);
@@ -2924,12 +3007,13 @@ function objFor(id) {
 
 function openBuild() {
   if (build || overlayOpen()) return;
+  if (!world.den) { showMsg('SEULEMENT DANS TA TANIERE', 2, 'DEHORS, POSE TES ABRIS DEPUIS LA BARRE'); sfx.ui(); return; }
   if (player.dead || player.sleep || player.air || player.action || player.held || player.slide || player.water >= 2) { showMsg('PAS MAINTENANT', 1); sfx.ui(); return; }
   if (dangerLevel() > 0.2) { showMsg('PAS PENDANT UN COMBAT', 1.5); sfx.ui(); return; }
   releaseInputs();
   player.sprinting = false; player.spd = 0;
   setAnim('idle');
-  const s = player.inv[player.sel], sel = s && ITEMS[s.id].kind === 'place' ? s.id : null;
+  const s = player.inv[player.sel], sel = s && buildTabs().some((t) => t.ids.includes(s.id)) ? s.id : null;
   const tab = sel ? Math.max(0, buildTabs().findIndex((t) => t.ids.includes(sel))) : 0;
   build = { cx: player.x, cy: player.y, cz: player.z, vx: 0, vy: 0, tab, sel, rot: 0, ptr: null, lift: null, pick: null, hover: null,
     undo: [], t: 0, ox: 0, oy: 0, btns: [], touches: new Map(), pan2: null, pend: null, pendBox: null };
@@ -3055,6 +3139,8 @@ function setBuilt(tx, ty, o, k, chest) {
 function clearBuilt(tx, ty) {
   const o = world.objAt(tx, ty), key = tx + ',' + ty, k = world.rotAt(tx, ty), chest = world.chests.get(key) || null;
   world.chests.delete(key);
+  const T0 = world.racks.get(key);
+  if (T0) { for (const id of T0) giveOrDrop(id, 1); player.trophies = Math.max(0, player.trophies - T0.reduce((a, id) => a + trophyWorth(id), 0)); world.racks.delete(key); } // ses trophées lui reviennent
   for (const [x, y] of footprint(o, tx, ty)) world.setObj(x, y, O.NONE);
   hits.delete(key);
   return { o, k, chest };
@@ -3069,6 +3155,7 @@ function buildPlace(id, tx, ty) {
   if (!takeForBuild(id)) return false;
   const prev = big(o) ? O.NONE : world.objAt(tx, ty);
   setBuilt(tx, ty, o, k, null);
+  stats.built++;
   pushUndo({ kind: 'place', tx, ty, o, prev, id });
   build.pick = null;
   return true;
@@ -3078,7 +3165,14 @@ function buildPlace(id, tx, ty) {
 function buildLift(tx, ty) {
   const o = world.objAt(tx, ty), info = OBJ_INFO[o];
   if (!info || !info.built) return false;
-  if (info.building && info.state > 0) { showMsg('IL EST ABIME', 1.2, 'IL NE BOUGE PLUS'); sfx.ui(); return false; }
+  if (info.building && info.state > 0) {
+    // un abri abîmé ou en ruine : on le range (et on le reposera tout neuf)
+    clearBuilt(tx, ty);
+    giveOrDrop(itemOfObj(BUILDINGS[info.building].ids[0]), 1);
+    showMsg('ABRI RECUPERE', 2, 'REPOSE-LE : IL SERA COMME NEUF');
+    sfx.pickup();
+    return false;
+  }
   if (footprint(o, tx, ty).some(([x, y]) => fires.has(x + ',' + y))) { showMsg('CA BRULE', 1); sfx.ui(); return false; }
   if (Math.hypot(tx + 0.5 - player.x, ty + 0.5 - player.y) > buildR() + (big(o) ? 1 : 0)) { showMsg('TROP LOIN DE LUI', 1); sfx.ui(); return false; }
   const c = clearBuilt(tx, ty);
@@ -3124,6 +3218,7 @@ function buildDig(tx, ty) {
   if (Math.hypot(tx + 0.5 - player.x, ty + 0.5 - player.y) > buildR()) { showMsg('TROP LOIN DE LUI', 0.8); return false; }
   if (!NEIGH4.some(([dx, dy]) => !world.solid(tx + dx, ty + dy))) { showMsg("CREUSE A PARTIR D'UNE SALLE", 1); return false; }
   openTile(tx, ty);
+  stats.dug++;
   for (const [id, n] of D.drops) { giveOrDrop(id, n); toastItem(id, n); }
   pushUndo({ kind: 'dig', tx, ty, t, drops: D.drops });
   burst(tx + 0.5, ty + 0.5, 6, (t === T.EARTH_STONE ? ROCK_COLS : t === T.EARTH_IRON ? IRON_COLS : EARTH_COLS).concat(DUST_COLS), 14, { up: 40, speed: 1.8, life: 0.7, spread: 2 });
@@ -3648,9 +3743,25 @@ function drawBuildUI() {
   }
 }
 
+// Icône carte (en haut à droite) : le sac ouvert sur la carte.
+const mapBtn = { x: 0, y: 0, r: 7 };
+function drawMapButton() {
+  mapBtn.x = VW - (world.den ? 112 : 92) - safe.r; // prend la place du marteau hors de la tanière
+  mapBtn.y = 11 + safe.t;
+  const x = mapBtn.x - 5, y = mapBtn.y - 4;
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.fillRect(x - 3, y - 3, 17, 14);
+  // un parchemin plié, une croix rouge
+  ctx.fillStyle = '#e8d8b0'; ctx.fillRect(x, y, 11, 8);
+  ctx.fillStyle = '#c4ac78'; ctx.fillRect(x + 3, y, 1, 8); ctx.fillRect(x + 7, y, 1, 8);
+  ctx.fillStyle = '#4a923d'; ctx.fillRect(x + 1, y + 1, 2, 2); ctx.fillRect(x + 8, y + 5, 2, 2);
+  ctx.fillStyle = '#d22838'; ctx.fillRect(x + 5, y + 3, 1, 1); ctx.fillRect(x + 4, y + 2, 1, 1); ctx.fillRect(x + 6, y + 4, 1, 1); ctx.fillRect(x + 6, y + 2, 1, 1); ctx.fillRect(x + 4, y + 4, 1, 1);
+}
+
 // Icône marteau (en haut à droite) : passe en mode BÂTIR.
 const buildBtn = { x: 0, y: 0, r: 7 };
 function drawBuildButton() {
+  if (!world.den) { buildBtn.x = -99; return; } // le marteau n'existe que dans sa tanière
   buildBtn.x = VW - 92 - safe.r;
   buildBtn.y = 11 + safe.t;
   const x = buildBtn.x - 5, y = buildBtn.y - 4;
@@ -3686,7 +3797,9 @@ function realmOf(key, kind) {
   const d = realmData.get(key);
   if (d) {
     w.mods = new Map(d.mods || []); w.terr = new Map(d.terr || []); w.wear = new Map(d.wear || []);
-    w.chests = new Map(d.chests || []); w.rots = new Map(d.rots || []);
+    w.chests = new Map(d.chests || []); w.rots = new Map(d.rots || []); w.racks = new Map(d.racks || []);
+    if (w.found) w.found = new Set(d.found || []);
+    w.captives = (d.captives || []).map((c) => makeCaptive(c.type, c.x, c.y, c.cage));
     // une sortie cassée par une ancienne version : elle revient
     const ex = w.exitKey;
     if (ex) { w.mods.delete(ex); w.terr.delete(ex); }
@@ -3695,7 +3808,11 @@ function realmOf(key, kind) {
   return w;
 }
 function realmSave() {
-  for (const [k, w] of realmWorlds) realmData.set(k, { kind: w.kind || 'den', mods: [...w.mods], terr: [...w.terr], wear: [...w.wear], chests: [...w.chests], rots: [...w.rots] });
+  for (const [k, w] of realmWorlds) {
+    const caps = (w === world ? npcs : w.captives).filter((n) => n.captive && alive(n) && !n.held).map((n) => ({ type: n.type, x: n.x, y: n.y, cage: n.caged ? n.cage : null }));
+    realmData.set(k, { kind: w.kind || 'den', mods: [...w.mods], terr: [...w.terr], wear: [...w.wear], chests: [...w.chests], rots: [...w.rots], racks: [...w.racks],
+      found: w.found ? [...w.found] : undefined, captives: caps });
+  }
   return [...realmData];
 }
 // Une maison déplacée au mode BÂTIR emporte son intérieur.
@@ -3712,6 +3829,234 @@ function doorOf(tx, ty, info) {
   return rotUV(base[0], base[1], info.built ? world.rotAt(tx, ty) : 0);
 }
 
+// ---------------------------------------------------------------- expéditions
+// Ses méfaits font monter son infamie (`player.infamy` : villageois, chevaliers, héros tués ou
+// enlevés, maisons rasées), qui retombe doucement. Assez haut, le royaume envoie une expédition :
+// des chevaliers (et des héros si l'infamie est grande) qui le traquent. S'il a un abri, ils
+// marchent dessus et l'assiègent ; s'il n'est pas là (ou caché dedans), ils libèrent ses
+// prisonniers. Tous tués : l'expédition est repoussée.
+const EXP_AT = 12; // infamie qui déclenche une expédition
+let expedition = null; // { members, base: [ax, ay, o] | null, siegeT, freed, t }
+let expCd = 90; // délai avant la prochaine
+const expAlive = () => (expedition ? expedition.members.filter((n) => alive(n) && npcs.includes(n) || (realm && realm.stash.npcs.includes(n) && alive(n))) : []);
+// son abri le plus proche (repaire ou entrée de tanière, dehors)
+function nearestBase() {
+  let best = null, bd = 70;
+  for (const [k, o] of surface.mods) {
+    if (o !== O.HUT && o !== O.LAIR) continue;
+    const [x, y] = k.split(',').map(Number), d = Math.hypot(x - (realm ? realm.out[0] : player.x), y - (realm ? realm.out[1] : player.y));
+    if (d < bd && OBJ_INFO[surface.objAt(x, y)].state < 2) { bd = d; best = [x, y, o]; }
+  }
+  return best;
+}
+const realmKeyOf = (base) => (base[2] === O.LAIR ? 'den' : 'room:' + base[0] + ',' + base[1]);
+function launchExpedition() {
+  const base = nearestBase(), fx = player.x, fy = player.y;
+  const knights = Math.min(8, 3 + Math.floor((player.infamy - EXP_AT) / 8)), heroes = player.infamy > 40 ? 2 : player.infamy > 22 ? 1 : 0;
+  const ang = Math.random() * Math.PI * 2, members = [];
+  const types = Array(knights).fill('knight').concat(Array(heroes).fill(0).map(() => HEROES[(Math.random() * HEROES.length) | 0]));
+  for (const type of types) {
+    for (let k = 0; k < 30; k++) {
+      const a = ang + (Math.random() - 0.5) * 0.8, r = 18 + Math.random() * 5, x = fx + Math.cos(a) * r, y = fy + Math.sin(a) * r;
+      if (!freeSpot(x, y)) continue;
+      const n = spawnNpc(type, x, y, { id: 'exp' }, null);
+      n.exp = true; n.state = 'chase'; n.fade = 0;
+      members.push(n);
+      break;
+    }
+  }
+  if (!members.length) return;
+  expedition = { members, base, siegeT: 0, freed: false, t: 0 };
+  showMsg('UNE EXPEDITION TE TRAQUE !', 4.5, members.length + ' GUERRIERS' + (base ? ' MARCHENT SUR TON ABRI' : ' SONT SUR TA PISTE'));
+  sfx.bell(); sfx.roar(0.4);
+}
+// Ils libèrent les prisonniers de l'abri assiégé (il n'était pas là pour les défendre).
+function freeCaptives(base) {
+  const key = realmKeyOf(base);
+  let n = 0;
+  if (realm && realm.key === key) { for (let i = npcs.length - 1; i >= 0; i--) if (npcs[i].captive && alive(npcs[i])) { npcs.splice(i, 1); n++; } }
+  const w = realmWorlds.get(key);
+  if (w) { n += w.captives.length; w.captives = []; }
+  const d = realmData.get(key);
+  if (d && d.captives) { if (!w) n += d.captives.length; d.captives = []; }
+  if (n) showMsg("L'EXPEDITION A LIBERE TES PRISONNIERS", 4, n + ' ONT FUI');
+}
+function updateExpedition(dt) {
+  player.infamy = Math.max(0, player.infamy - dt * 0.015);
+  if (!expedition) {
+    if ((expCd -= dt) <= 0 && player.infamy >= EXP_AT && !realm && !player.dead && mode === 'play') launchExpedition();
+    return;
+  }
+  const E = expedition, left = expAlive();
+  E.t += dt;
+  if (!left.length) {
+    // tous tombés : repoussée
+    if (E.t > 3) { stats.expWon++; showMsg('EXPEDITION REPOUSSEE !', 4, 'LE ROYAUME TREMBLE'); sfx.roar(1); player.infamy *= 0.5; }
+    expedition = null; expCd = 240;
+    return;
+  }
+  // caché dans son abri pendant qu'ils l'assiègent : ils cognent sur l'entrée
+  if (realm && E.base && E.atBase) {
+    E.siegeT += dt;
+    if (E.siegeT > 8) {
+      E.siegeT = 0;
+      const w = world;
+      world = surface;
+      damageBuilding(E.base[0], E.base[1], 2, true);
+      const st = OBJ_INFO[surface.objAt(E.base[0], E.base[1])].state;
+      world = w;
+      shake = Math.max(shake, 3); sfx.hitBuilding('stone');
+      showMsg("ILS ATTAQUENT L'ENTREE !", 2, st >= 2 ? 'ILS ENTRENT !' : 'SORS LES REPOUSSER');
+      if (st >= 2 && !E.freed) { E.freed = true; freeCaptives(E.base); }
+    }
+  }
+  // trop loin trop longtemps : ils abandonnent
+  if (!realm && left.every((n) => Math.hypot(n.x - player.x, n.y - player.y) > 60)) { for (const n of left) npcs.splice(npcs.indexOf(n), 1); expedition = null; expCd = 120; }
+}
+// L'IA d'un membre d'expédition, avant celle d'un chevalier ordinaire : rejoindre l'abri, l'assiéger.
+function updateExpMember(n, dt, d) {
+  const E = expedition;
+  if (!E || !E.base || d < 12) return null; // il voit le monstre : combat normal
+  const [bx, by] = E.base, db = Math.hypot(bx - n.x, by - n.y);
+  if (db > 2.3) { steer(n, bx, by, 2.4, dt); return 'run'; }
+  E.atBase = true;
+  n.dir = faceDir(bx - n.x, by - n.y);
+  // ils frappent l'abri ; personne pour défendre les prisonniers : ils les libèrent
+  n.atkT = Math.min(0.99, 1 - Math.max(0, n.cd) / 2.5); // le geste de frappe, en boucle
+  if ((n.cd -= dt) <= 0) {
+    n.cd = 2.5 + Math.random() * 1.5;
+    if (OBJ_INFO[world.objAt(bx, by)] && OBJ_INFO[world.objAt(bx, by)].state < 2) damageBuilding(bx, by, 1, true);
+    if (!E.freed && (E.siegeT += 1.5) > 30) { E.freed = true; freeCaptives(E.base); }
+  }
+  return 'attack';
+}
+// ressorti pendant le siège : ils l'attendent devant la porte
+function expAtDoor() {
+  const E = expedition;
+  if (!E || !E.atBase || !realm) return;
+  for (const n of expAlive()) {
+    for (let k = 0; k < 10; k++) {
+      const a = Math.random() * Math.PI * 2, r = 3 + Math.random() * 2, x = realm.out[0] + Math.cos(a) * r, y = realm.out[1] + Math.sin(a) * r;
+      if (freeSpot(x, y)) { n.x = x; n.y = y; n.state = 'chase'; break; }
+    }
+  }
+}
+// L'indicateur de l'expédition au bord de l'écran, quand elle n'est pas encore là.
+function drawExpedition() {
+  if (!expedition || realm) return;
+  let best = null, bd = 1e9;
+  for (const n of expAlive()) { const d = Math.hypot(n.x - player.x, n.y - player.y); if (d < bd) { bd = d; best = n; } }
+  if (!best || bd < 10) return;
+  const dx = best.x - player.x, dy = best.y - player.y;
+  let sdx = (dx - dy) * 16, sdy = (dx + dy) * 8;
+  const l = Math.hypot(sdx, sdy) || 1;
+  sdx /= l; sdy /= l;
+  const cx = Math.round(VW / 2 + sdx * (VW / 2 - 24)), cy = Math.round(VH / 2 + sdy * (VH / 2 - 30));
+  const t = 'EXPEDITION ' + Math.round(bd);
+  ctx.fillStyle = Math.floor(rt() * 4) % 2 ? '#ff2e3e' : '#9c1628';
+  for (let i = 0; i < 4; i++) ctx.fillRect(Math.round(cx + sdx * (4 - i) - 3 + i), Math.round(cy + sdy * (4 - i) - 3 + i), 7 - 2 * i, 7 - 2 * i);
+  drawText(ctx, t, Math.max(4, Math.min(VW - 4 - textWidth(t), cx - Math.round(textWidth(t) / 2))), cy + 6, '#ff9aa8');
+}
+
+// ---------------------------------------------------------------- villages qui se reconstruisent
+// Une maison rasée est rebâtie au bout de 10 minutes de jeu, s'il n'est pas dans les parages.
+let rebuildT = 0;
+function updateRebuild(dt) {
+  if (realm || (rebuildT -= dt) > 0) return;
+  rebuildT = 5;
+  for (const [k, t] of world.ruins) {
+    if (stats.play - t < 600) continue;
+    const [ax, ay] = k.split(',').map(Number);
+    if (Math.hypot(ax - player.x, ay - player.y) < 28) continue;
+    const info = OBJ_INFO[world.objAt(ax, ay)];
+    world.ruins.delete(k);
+    if (!info || !info.building || info.state < 2) continue;
+    world.setObj(ax, ay, BUILDINGS[info.building].ids[0]);
+    const v = villageAt(ax, ay, 8);
+    if (v) vstateOf(v).rebuilt = true;
+  }
+}
+
+// ---------------------------------------------------------------- villageois chez eux
+// En entrant dans une maison de village, ceux qui y sont rentrés (la nuit, sous la pluie) sont là :
+// endormis dans leur lit, ils se réveillent en sursaut ; terrorisés, ils fuient dans les coins.
+function bringResidents(stash, ax, ay) {
+  const beds = [];
+  for (let y = 0; y < world.h; y++) for (let x = 0; x < world.w; x++) if (world.objAt(x, y) === O.BED) beds.push([x, y]);
+  let i = 0;
+  for (let k = stash.npcs.length - 1; k >= 0; k--) {
+    const n = stash.npcs[k];
+    if (!n.inside || !alive(n) || !n.home || n.home.ax !== ax || n.home.ay !== ay) continue;
+    stash.npcs.splice(k, 1);
+    const bed = beds[i++];
+    let x = bed ? bed[0] + 0.5 : 0.5 + Math.random() * (world.w - 1), y = bed ? bed[1] + 0.5 : 0.5 + Math.random() * (world.h - 2);
+    Object.assign(n, { x, y, z: groundZ(x, y), inside: false, inRoom: true, asleep: !!bed && outsideDark() > 0.5, bed, state: 'wander', vx: 0, vy: 0 });
+    npcs.push(n);
+  }
+}
+function updateResident(n, dt, d) {
+  if (n.asleep) {
+    // il dort... jusqu'à ce que le monstre approche ou fasse du bruit
+    if (d < 2.5 || shake > 2) { n.asleep = false; sfx.scream(PEOPLE[n.type].voice * 1.2); n.alertT = 1.5; }
+    else { n.x = n.bed[0] + 0.5; n.y = n.bed[1] + 0.5; return 'ko'; } // il reste couché dans son lit
+  }
+  if (d < 3) {
+    const ax = n.x - player.x, ay = n.y - player.y, l = Math.hypot(ax, ay) || 1;
+    steer(n, n.x + ax / l * 2, n.y + ay / l * 2, 2.6 * n.speedK, dt);
+    if ((n.waveCd -= dt) <= 0) { n.waveCd = 2 + Math.random() * 3; sfx.scream(PEOPLE[n.type].voice); }
+    return 'flee';
+  }
+  n.dir = faceDir(player.x - n.x, player.y - n.y); // il ne le quitte pas des yeux
+  return n.kind === 'civ' ? 'wave' : 'idle';
+}
+
+// ---------------------------------------------------------------- prisonniers
+// Un habitant qu'il porte en entrant dans sa tanière (ou un abri) devient prisonnier : pour son
+// village il a disparu. Lâché près d'une cage, il y est enfermé ; libre, il cherche la sortie et
+// s'échappe s'il l'atteint. On peut le reprendre, le tuer et le dévorer : une réserve de viande.
+function makeCaptive(type, x, y, cage) {
+  const D = PEOPLE[type];
+  return { type, kind: D.kind, x, y, z: 0, jz: 0, vz: 0, vx: 0, vy: 0, air: false, dir: 2, anim: 'idle', t: 0, state: 'wander', v: null, home: null,
+    tx: x, ty: y, wait: 0, koT: 0, hp: D.kind === 'hero' ? D.hp : D.kind === 'knight' ? 4 : 1, maxHp: D.hp || 4, alertT: 0, atkT: 0, cd: 0, hurtT: 0, flash: 0,
+    waveT: 0, waveCd: 9, inside: false, stuck: 0, speedK: 1, fj: 0, fade: 1, captive: true, caged: !!cage, cage };
+}
+// Pour son village, un prisonnier est perdu (il ne reviendra pas peupler les rues).
+function kidnap(n) {
+  if (n.v && n.v !== 'exp') { if (n.boss) deathsOf(n.v).champion = 1; else deathsOf(n.v)[n.kind]++; player.infamy += 2; }
+  n.v = null; n.home = null; n.exp = false; n.captive = true; n.escapee = false;
+}
+// une cage libre tout près de (x, y)
+function cageNear(x, y) {
+  for (let ty = Math.floor(y) - 1; ty <= Math.floor(y) + 1; ty++) for (let tx = Math.floor(x) - 1; tx <= Math.floor(x) + 1; tx++) {
+    if (world.objAt(tx, ty) !== O.CAGE || Math.hypot(tx + 0.5 - x, ty + 0.5 - y) > 1.3) continue;
+    if (!npcs.some((n) => n.caged && n.cage[0] === tx && n.cage[1] === ty && alive(n))) return [tx, ty];
+  }
+  return null;
+}
+function updateCaptive(n, dt, d) {
+  if (n.caged) {
+    if (world.objAt(n.cage[0], n.cage[1]) !== O.CAGE) { n.caged = false; return 'idle'; } // la cage est cassée
+    n.x = n.cage[0] + 0.5; n.y = n.cage[1] + 0.5; n.vx = n.vy = 0;
+    n.dir = faceDir(player.x - n.x, player.y - n.y);
+    // il secoue les barreaux quand le monstre approche
+    if (d < 3 && n.kind === 'civ' && (n.waveCd -= dt) <= 0) { n.waveCd = 3 + Math.random() * 4; sfx.scream(PEOPLE[n.type].voice); }
+    return d < 3 ? (n.kind === 'civ' ? 'flee' : 'walk') : 'idle';
+  }
+  // libre : il cherche la sortie, et se fige de terreur si le monstre est tout près
+  if (d < 2.2) { n.dir = faceDir(player.x - n.x, player.y - n.y); return 'idle'; }
+  const [ex, ey] = (world.exitKey || '0,0').split(',').map(Number);
+  steer(n, ex + 0.5, ey + 0.5, 1.3, dt);
+  if (Math.hypot(ex + 0.5 - n.x, ey + 0.5 - n.y) < 0.7) { showMsg("UN PRISONNIER S'EST ECHAPPE !", 2.5); return 'escaped'; }
+  return 'walk';
+}
+// Ressorti avec lui, ou libéré dehors : il s'enfuit loin et disparaît.
+function updateEscapee(n, dt, d) {
+  if (d > 16) return 'escaped';
+  const ax = n.x - player.x, ay = n.y - player.y, l = Math.hypot(ax, ay) || 1;
+  steer(n, n.x + ax / l * 2, n.y + ay / l * 2, 3 * n.speedK, dt);
+  return n.kind === 'civ' ? 'flee' : 'run';
+}
+
 function enterBuilding(b) {
   const info = OBJ_INFO[b.o], [nx, ny] = b.door;
   let out = [b.tx + nx * 1.5, b.ty + ny * 1.5];
@@ -3722,16 +4067,23 @@ function enterBuilding(b) {
 
 function enterRealm(key, kind, out, name, sub = '') {
   if (realm || player.dead) return;
-  if (player.held) dropHeld();
+  // un habitant porté entre avec lui : il devient prisonnier
+  const cap = player.held && player.held.n && alive(player.held.n) && player.held.n.kind !== 'beast' ? player.held.n : null;
+  if (player.held && !cap) dropHeld();
   if (player.charging) { player.charging = false; player.chargeKind = null; player.aim = null; chargeStop(); }
   player.aiming = false; player.action = null; player.slide = null; player.sprinting = false; player.spd = 0;
   const stash = { npcs: npcs.splice(0), drops: drops.splice(0), thrown: thrown.splice(0), decals: decals.splice(0), bloods: bloods.splice(0),
     fx: fx.splice(0), flyers: flyers.splice(0), fires: new Map(fires), hits: new Map(hits) };
   fires.clear(); hits.clear(); particles.length = 0;
+  if (cap) stash.npcs.splice(stash.npcs.indexOf(cap), 1);
   realm = { key, kind, out, stash };
   world = realmOf(key, kind);
   const sp = world.findSpawn();
   player.x = sp.x; player.y = sp.y; player.z = groundZ(sp.x, sp.y);
+  npcs.push(...world.captives); world.captives = []; // ceux qu'il a laissés là
+  if (key.startsWith('room:') && world.village) { const [ax, ay] = key.slice(5).split(',').map(Number); bringResidents(stash, ax, ay); }
+  for (const n of npcs) n.z = groundZ(n.x, n.y);
+  if (cap) { kidnap(cap); npcs.push(cap); sub = 'UN PRISONNIER ! LACHE-LE PRES D\'UNE CAGE'; }
   player.air = false; player.jz = 0; player.vz = 0; player.water = 0;
   player.dir = kind === 'den' ? 2 : 6;
   setAnim('idle');
@@ -3743,12 +4095,23 @@ function enterRealm(key, kind, out, name, sub = '') {
 function exitRealm(quiet) {
   if (!realm) return;
   for (const d of drops) addItem(d.id, 1); // ce qui traîne par terre dedans lui revient
-  const S = realm.stash, out = realm.out;
+  const S = realm.stash, out = realm.out, carried = player.held && player.held.n;
+  world.captives = npcs.filter((n) => n !== carried && n.captive && alive(n)); // les prisonniers restent dedans
+  const residents = npcs.filter((n) => n.inRoom && alive(n) && n !== carried), harm = realm.harm;
   world = surface;
   for (const k of ['npcs', 'drops', 'thrown', 'decals', 'bloods', 'fx', 'flyers']) { const a = { npcs, drops, thrown, decals, bloods, fx, flyers }[k]; a.length = 0; a.push(...S[k]); }
+  // ceux de la maison restent chez eux
+  for (const n of residents) { Object.assign(n, { inRoom: false, asleep: false, inside: true, state: 'wander', x: n.home.door[0], y: n.home.door[1] }); npcs.push(n); }
+  if (carried) {
+    npcs.push(carried);
+    if (carried.inRoom) { carried.inRoom = false; carried.asleep = false; } // un villageois arraché de chez lui
+    else { carried.captive = false; carried.caged = false; carried.escapee = true; } // il ressort avec lui
+  }
+  if (harm) crime(6, out[0], out[1]); // on a entendu les cris : le village est en alerte
   fires.clear(); for (const [k, v] of S.fires) fires.set(k, v);
   hits.clear(); for (const [k, v] of S.hits) hits.set(k, v);
   particles.length = 0;
+  expAtDoor(); // assiégé : ils l'attendent devant la porte
   realm = null;
   player.x = out[0]; player.y = out[1]; player.z = groundZ(out[0], out[1]);
   player.air = false; player.jz = 0; player.vz = 0;
@@ -3793,6 +4156,7 @@ function digTile(tx, ty, dmg) {
   }
   hits.delete(key);
   openTile(tx, ty);
+  stats.dug++;
   spawnDrops(tx + 0.5, ty + 0.5, D.drops);
   burst(tx + 0.5, ty + 0.5, 4, cols.concat(DUST_COLS), 18, { up: 50, speed: 2.2, life: 0.9, big: 0.5, spread: 3 });
   sfx.dig(t !== T.EARTH);
@@ -3802,6 +4166,30 @@ function digTile(tx, ty, dmg) {
 function openTile(tx, ty) {
   world.setTile(tx, ty, T.DEN, 0, stats.play);
   world.setWear(tx, ty, 0, stats.play);
+  // parfois, la paroi cachait quelque chose (une seule fois par tuile)
+  const key = tx + ',' + ty, sec = world.secretAt && !world.found.has(key) && world.secretAt(tx, ty);
+  if (!sec) return;
+  world.found.add(key);
+  if (sec === 'chest') {
+    world.setObj(tx, ty, O.CHEST);
+    const c = Array(CHEST_N).fill(null);
+    world.loot(key).forEach((it, i) => { c[i] = it; });
+    world.chests.set(key, c);
+    showMsg('UN COFFRE ENFOUI !', 3, 'N : OUVRIR');
+  } else if (sec === 'bones') {
+    world.setObj(tx, ty, O.BONES);
+    spawnDrops(tx + 0.5, ty + 0.5, [['meat', 2]]);
+    showMsg('DES OSSEMENTS', 2.5, "LES RESTES D'UN FESTIN");
+  } else if (sec === 'fossil') {
+    world.setObj(tx, ty, O.FOSSIL);
+    showMsg('UN ANCIEN NOMU !', 3.5, 'N : EXAMINER');
+  } else {
+    world.setTile(tx, ty, T.WATER, 0, stats.play);
+    burst(tx + 0.5, ty + 0.5, 0, WATER_COLS, 20, { up: 60, speed: 1.4, life: 0.8 });
+    sfx.splash(0.8);
+    showMsg('UNE SOURCE !', 3, "DE L'EAU SOUS LA TERRE");
+  }
+  sfx.mutate();
 }
 
 // ---------------------------------------------------------------- interactions (bouton N)
@@ -3828,18 +4216,42 @@ function builtNear() {
   }
   for (let ty = Math.floor(player.y) - 1; ty <= Math.floor(player.y) + 1; ty++) for (let tx = Math.floor(player.x) - 1; tx <= Math.floor(player.x) + 1; tx++) {
     const o = world.objAt(tx, ty);
-    if (o !== O.CHEST && o !== O.NEST && o !== O.CAMPFIRE) continue;
+    if (o !== O.CHEST && o !== O.NEST && o !== O.CAMPFIRE && o !== O.RACK && o !== O.FOSSIL) continue;
     const d = Math.hypot(tx + 0.5 - player.x, ty + 0.5 - player.y);
     if (d < bd) { bd = d; best = { o, tx, ty }; }
   }
   return best;
 }
-const INTERACT_LABEL = { [O.CHEST]: 'OUVRIR', [O.NEST]: 'DORMIR', [O.CAMPFIRE]: 'CUIRE' };
+const INTERACT_LABEL = { [O.CHEST]: 'OUVRIR', [O.NEST]: 'DORMIR', [O.CAMPFIRE]: 'CUIRE', [O.RACK]: 'EXPOSER', [O.FOSSIL]: 'EXAMINER' };
+const TROPHIES = ['crown', 'emblem', 'helmet', 'shield']; // dans l'ordre où il les expose
+const trophyWorth = (id) => (id === 'crown' ? 3 : id === 'emblem' ? 2 : 1);
 const interactLabel = (b) => (b.enter ? 'ENTRER' : b.exit ? 'SORTIR' : INTERACT_LABEL[b.o]);
 
 function interact(b) {
   if (b.enter) { enterBuilding(b); return; }
   if (b.exit) { exitRealm(); return; }
+  if (b.o === O.RACK) {
+    // un trophée de chasse accroché : il en tire de la force (voir strength)
+    const k = b.tx + ',' + b.ty, list = world.racks.get(k) || [], id = TROPHIES.find((t) => countItem(t));
+    if (list.length >= 4) { showMsg('LE PRESENTOIR EST PLEIN', 1.5, 'CONSTRUIS-EN UN AUTRE'); return; }
+    if (!id) { showMsg('AUCUN TROPHEE', 1.8, 'CASQUES, BOUCLIERS, EMBLEMES, COURONNES'); return; }
+    takeItem(id, 1);
+    list.push(id); world.racks.set(k, list);
+    player.trophies += trophyWorth(id);
+    showMsg(ITEMS[id].name + ' EXPOSE', 2.5, 'FORCE +' + Math.round(trophyBonus() * 100 - 100) + '%');
+    sfx.place();
+    return;
+  }
+  if (b.o === O.FOSSIL) {
+    // un ancien Nomu : il le flaire, le dévore des yeux, apprend de lui
+    stats.fossils++;
+    world.setObj(b.tx, b.ty, O.BONES);
+    showMsg('UN ANCIEN NOMU', 3.5, 'IL APPREND DE SES OS : +15 EVOLUTION');
+    sfx.growl();
+    burst(b.tx + 0.5, b.ty + 0.5, 6, ['#d4c8b0', '#a89c88', '#c97249'], 20, { up: 40, speed: 1.4, life: 0.9 });
+    gainEvo(15);
+    return;
+  }
   if (b.o === O.CHEST) {
     const k = b.tx + ',' + b.ty;
     if (!world.chests.has(k)) {
@@ -4147,16 +4559,16 @@ function drawInv() {
   ctx.fillRect(0, 0, VW, VH);
   const px = Math.round(VW / 2 - PW / 2), py = Math.round(VH / 2 - PH / 2 + 7);
   // onglets au-dessus du panneau (l'actif se raccorde au panneau)
-  const tabs = [U.chest ? 'COFFRE' : 'SAC', 'MUTATIONS', 'FABRIQUER'];
-  let tx = px + 2;
+  const tabs = U.chest ? ['COFFRE', 'MUTATIONS', 'ATELIER'] : ['SAC', 'MUTATIONS', 'ATELIER', 'CARTE', 'SUCCES'];
+  let tx = px;
   tabs.forEach((t, i) => {
-    const w = textWidth(t) + 12, on = U.tab === i;
+    const w = textWidth(t) + 8, on = U.tab === i;
     mcPanel(tx, py - 13, w, on ? 17 : 14, on ? MC.bg : '#a0a0a0');
-    ink(t, tx + 6, py - 8, on ? MC.ink : '#5a5a5a');
+    ink(t, tx + 4, py - 8, on ? MC.ink : '#5a5a5a');
     hit(tx, py - 13, w, 13, () => { U.tab = i; U.sel = 0; U.tipT = 0; U.pick = null; sfx.ui(); });
     tx += w + 1;
   });
-  if (player.pendingLv > 0 && Math.floor(rt() * 3) % 2) { ctx.fillStyle = '#ff6b7a'; ctx.fillRect(px + 2 + textWidth(tabs[0]) + 13 + textWidth('MUTATIONS') + 8, py - 12, 3, 3); }
+  if (player.pendingLv > 0 && Math.floor(rt() * 3) % 2) { ctx.fillStyle = '#ff6b7a'; ctx.fillRect(px + textWidth(tabs[0]) + 9 + textWidth('MUTATIONS') + 4, py - 12, 3, 3); }
   // fermer (pour le tactile ; Échap / I / B ailleurs)
   mcPanel(px + PW - 15, py - 13, 15, 14, '#a0a0a0');
   ink('X', px + PW - 9, py - 8, '#8b1a1a');
@@ -4164,7 +4576,9 @@ function drawInv() {
   mcPanel(px, py, PW, PH);
   if (U.tab === 0) { if (U.chest) drawChestTab(px, py); else drawBagTab(px, py); }
   else if (U.tab === 1) drawTreeTab(px, py);
-  else drawCraftTab(px, py);
+  else if (U.tab === 2) drawCraftTab(px, py);
+  else if (U.tab === 3) drawMapTab(px, py);
+  else drawAchTab(px, py);
   // ce qu'on tient : sous le doigt / la souris, ou sur la case visée au clavier
   if (U.cursor) {
     let cx = U.px - 9, cy = U.py - 9;
@@ -4185,7 +4599,7 @@ function tipLines(s) {
   if (s.alter) return [ALTERS[s.alter].name + ' - NIVEAU ' + (player.alterLv[s.alter] || 1), ...wrap(ALTERS[s.alter].desc, 110)];
   const it = ITEMS[s.id];
   const info = it.kind === 'food' ? ['+' + it.food + ' FAIM' + (it.hp ? ', +' + it.hp + ' VIE' : ''), 'DANS LA BARRE : MANGER']
-    : it.kind === 'place' ? ['CONSTRUCTION', 'MODE BATIR (MARTEAU) : LA POSER']
+    : it.kind === 'place' ? ['CONSTRUCTION', 'DANS LA BARRE : LA POSER DEVANT LUI', 'DANS LA TANIERE : MODE BATIR']
     : it.kind === 'trophy' ? ['TROPHEE DE CHASSE'] : ['MATERIAU', 'SERT A FABRIQUER'];
   return [it.name, ...info];
 }
@@ -4359,6 +4773,8 @@ function overlayDown(x, y, right = false, shift = false) {
   const U = invUI;
   if (!U) { overlayTap(x, y); return; }
   U.pointer = true; U.px = x; U.py = y;
+  const px0 = Math.round(VW / 2 - PW / 2), py0 = Math.round(VH / 2 - PH / 2 + 7);
+  if (U.tab === 3 && U.map && x >= px0 + 6 && x < px0 + 6 + U.map.w && y >= py0 + 14 && y < py0 + 14 + U.map.h) { U.mapDrag = { x, y, cx: U.map.cx, cy: U.map.cy }; return; }
   const ref = slotAtPoint(x, y);
   if (!ref) {
     if (overlayTap(x, y)) return;
@@ -4374,6 +4790,12 @@ function overlayMove(x, y) {
   const U = invUI;
   if (!U) return;
   U.pointer = true; U.px = x; U.py = y;
+  if (U.mapDrag) {
+    // le monde suit le doigt (losanges : un pixel de la carte = z tuiles)
+    const D = U.mapDrag, ix = -(x - D.x) * U.map.z, iy = -(y - D.y) * U.map.z;
+    U.map.cx = D.cx + (ix + 2 * iy) / 2; U.map.cy = D.cy + (2 * iy - ix) / 2;
+    return;
+  }
   const P = U.press;
   if (P && !P.moved && Math.hypot(x - P.x, y - P.y) > 4) {
     // ça glisse : il prend la pile (s'il n'a rien en main) et la promène sous le doigt
@@ -4383,6 +4805,7 @@ function overlayMove(x, y) {
 }
 function overlayUp(x, y) {
   const U = invUI;
+  if (U && U.mapDrag) { U.mapDrag = null; return; }
   if (!U || !U.press) return;
   const P = U.press;
   U.press = null;
@@ -4422,7 +4845,10 @@ function overlayNav(dx, dy, ok, back, tab, alt = false, move = false) {
   if (!U) return;
   if (dx || dy || ok || alt || move) U.pointer = false;
   if (back) { closeInv(); return; }
-  if (tab) { U.tab = (U.tab + tab + 3) % 3; U.sel = 0; U.tipT = 0; sfx.ui(); return; }
+  const nt = U.chest ? 3 : 5;
+  if (tab) { U.tab = (U.tab + tab + nt) % nt; U.sel = 0; U.tipT = 0; sfx.ui(); return; }
+  // sur la carte, la direction la fait glisser
+  if (U.tab === 3 && U.map && (dx || dy)) { const ix = dx * 12 * U.map.z, iy = dy * 12 * U.map.z; U.map.cx += (ix + 2 * iy) / 2; U.map.cy += (2 * iy - ix) / 2; return; }
   if (dx || dy) {
     const cur = uiItems[U.sel];
     if (!cur) { U.sel = 0; return; }
@@ -4453,7 +4879,7 @@ function overlayKey(e) {
   const back = c === 'Escape' || c === 'KeyI';
   const tab = c === 'Tab' ? (e.shiftKey ? -1 : 1) : 0;
   if (mutChoice && /^Digit[1-3]$/.test(c) && +c[5] <= mutChoice.opts.length) { chooseMutation(+c[5] - 1); return; }
-  if (invUI && /^Digit[1-3]$/.test(c)) { invUI.tab = +c[5] - 1; invUI.sel = 0; sfx.ui(); return; }
+  if (invUI && /^Digit[1-5]$/.test(c) && +c[5] <= (invUI.chest ? 3 : 5)) { invUI.tab = +c[5] - 1; invUI.sel = 0; sfx.ui(); return; }
   overlayNav(dx, dy, ok, back, tab, alt, move);
 }
 let padRepeat = 0;
@@ -4838,7 +5264,7 @@ function seize() {
   if (tg && tg.n) {
     const n = tg.n;
     if (!npcs.includes(n) || n.held || n.inside || n.air || n.thrown || Math.hypot(n.x - player.x, n.y - player.y) > 1.7) { sfx.punchAir(); return; }
-    n.held = true; n.vx = n.vy = 0; n.jz = 0; n.flash = 0.1;
+    n.held = true; n.vx = n.vy = 0; n.jz = 0; n.flash = 0.1; n.caged = false;
     if (alive(n) && n.state !== 'ko') {
       if (n.kind !== 'beast') n.state = 'held';
       n.breakT = breakTime(n);
@@ -4931,6 +5357,15 @@ function releaseHeld(ux, uy, power, gentle) {
   if (h.n) {
     const n = h.n;
     n.held = false;
+    const cg = alive(n) && n.kind !== 'beast' && (gentle || power < 0.35) && cageNear(x, y);
+    if (cg) {
+      kidnap(n);
+      Object.assign(n, { x: cg[0] + 0.5, y: cg[1] + 0.5, z: groundZ(cg[0] + 0.5, cg[1] + 0.5), jz: 0, vx: 0, vy: 0, vz: 0, air: false, thrown: null, dying: false, state: 'wander', caged: true, cage: cg });
+      stats.caged++;
+      showMsg('PRISONNIER ENCAGE', 2.5, 'TUE-LE QUAND TU AURAS FAIM');
+      sfx.clank();
+      return;
+    }
     n.thrown = th;
     Object.assign(n, { x, y, fz, vx: ux * v, vy: uy * v, vz, air: true, rot: 0 });
     if (alive(n)) {
@@ -5304,7 +5739,10 @@ function dangerLevel() {
 
 function darkness() {
   if (realm) return realm.kind === 'den' ? 0.7 : 0.3; // sous terre il fait noir, dedans pénombre
-  // 0 en plein jour, 1 en pleine nuit
+  return outsideDark();
+}
+// la nuit dehors (même quand il est dedans) : 0 en plein jour, 1 en pleine nuit
+function outsideDark() {
   const d = Math.cos((tod - 0.5) * Math.PI * 2); // 1 à midi, -1 à minuit
   return Math.max(0, Math.min(1, (0.25 - d) / 0.6));
 }
@@ -5379,6 +5817,13 @@ function render() {
     if (!l) npcRows.set(r, l = []);
     l.push({ drop: d, x: d.x, y: d.y });
   }
+  for (const b of birds) {
+    if (b.h > 4) continue;
+    const r = Math.floor(b.x + 0.35) + Math.floor(b.y + 0.35);
+    let l = npcRows.get(r);
+    if (!l) npcRows.set(r, l = []);
+    l.push({ bird: b, x: b.x, y: b.y });
+  }
   for (const p of thrown) {
     const r = Math.floor(p.x + 0.35) + Math.floor(p.y + 0.35);
     let l = npcRows.get(r);
@@ -5433,7 +5878,10 @@ function render() {
       }
       const o = world.objAt(x, y);
       // un bâtiment passe avant tout ce qui est sur sa rangée (c'est devant lui)
-      if (o && (o < O.PART_W || o > O.PART_NW)) rowEnts.push({ o, x, y, sx, sy, depth: OBJ_INFO[o] && OBJ_INFO[o].building ? d - 0.5 : x + y + 1, bld: !!(OBJ_INFO[o] && OBJ_INFO[o].building) });
+      if (o && (o < O.PART_W || o > O.PART_NW)) {
+        rowEnts.push({ o, x, y, sx, sy, depth: OBJ_INFO[o] && OBJ_INFO[o].building ? d - 0.5 : x + y + 1 - (o === O.CAGE ? 0.3 : 0), bld: !!(OBJ_INFO[o] && OBJ_INFO[o].building) });
+        if (o === O.CAGE) rowEnts.push({ o: 'cageFront', x, y, sx, sy, depth: x + y + 1.06, bld: false }); // les barreaux de devant, par-dessus le prisonnier
+      }
     }
     const marks = decalRows.get(d);
     if (marks) {
@@ -5453,7 +5901,7 @@ function render() {
     const rn = npcRows.get(d);
     const rf = fireRows.get(d);
     if (rf) for (const f of rf) rowEnts.push({ fire: f, depth: f.bld ? d - 0.45 : d + 1.05 }); // juste devant ce qui brûle
-    if (rn) for (const n of rn) rowEnts.push(n.drop ? { drop: n.drop, mx: n.x, my: n.y, depth: n.x + n.y } : n.o ? { thrown: n, mx: n.x, my: n.y, depth: n.x + n.y } : { npc: n, mx: n.x, my: n.y, depth: n.x + n.y });
+    if (rn) for (const n of rn) rowEnts.push(n.bird ? { bird: n.bird, mx: n.x, my: n.y, depth: n.x + n.y } : n.drop ? { drop: n.drop, mx: n.x, my: n.y, depth: n.x + n.y } : n.o ? { thrown: n, mx: n.x, my: n.y, depth: n.x + n.y } : { npc: n, mx: n.x, my: n.y, depth: n.x + n.y });
     if (rowEnts.length) {
       // devant ou derrière un bâtiment de la même rangée ?
       for (const b of rowEnts) {
@@ -5469,6 +5917,7 @@ function render() {
         else if (e.thrown) drawThrown(e.thrown, ox, oy);
         else if (e.fire) drawFire(e.fire, ox, oy);
         else if (e.drop) drawDrop(e.drop, ox, oy);
+        else if (e.bird) drawBird(e.bird, ox, oy);
         else drawObject(e);
       }
     }
@@ -5502,6 +5951,7 @@ function render() {
   }
 
   drawFlyers(ox, oy, false);
+  for (const b of birds) if (b.h > 4) drawBird(b, ox, oy);
   if (!realm) drawWeather(Math.min(0.05, time - lastRender));
   lastRender = time;
   drawSky();
@@ -5606,10 +6056,14 @@ function drawNpc(n, ox, oy) {
       ctx.fillRect(Math.round(sx + Math.cos(a) * 6), Math.round(sy - 9 + Math.sin(a) * 2), 1, 1);
     }
   }
-  if (n.kind === 'hero' && (n.state !== 'guard' || Math.hypot(n.x - player.x, n.y - player.y) < 6)) {
-    // nom et barre de vie du héros
-    const name = PEOPLE[n.type].name, w = 22, y = sy - jz - 44;
-    drawText(ctx, name, Math.round(sx - textWidth(name) / 2), y - 7, '#ffe28a');
+  if (n.kind === 'hero' && (n.state !== 'guard' || Math.hypot(n.x - player.x, n.y - player.y) < (n.boss ? 10 : 6))) {
+    // nom et barre de vie du héros (le champion : en or, couronné, barre plus longue)
+    const name = (n.boss ? 'CHAMPION ' : '') + PEOPLE[n.type].name, w = n.boss ? 34 : 22, y = sy - jz - 44;
+    drawText(ctx, name, Math.round(sx - textWidth(name) / 2), y - 7, n.boss ? '#ffd23f' : '#ffe28a');
+    if (n.boss) {
+      ctx.fillStyle = '#e0b23a'; ctx.fillRect(sx - 4, y - 12, 9, 3);
+      ctx.fillStyle = '#ffe07a'; ctx.fillRect(sx - 4, y - 14, 1, 2); ctx.fillRect(sx, y - 15, 1, 3); ctx.fillRect(sx + 4, y - 14, 1, 2);
+    }
     ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(sx - w / 2 - 1, y - 1, w + 2, 4);
     ctx.fillStyle = '#e8465e'; ctx.fillRect(sx - w / 2, y, Math.round(w * Math.max(0, n.hp) / n.maxHp), 2);
   } else if (n.alertT > 0) {
@@ -5624,8 +6078,9 @@ function lowerAt(x, y, h) {
 }
 
 function drawObject(e) {
-  const frames = objSprites[e.o];
+  const frames = objFrames(e.o);
   if (!frames) return;
+  if (season === 3 && e.o >= O.FLOWER_R && e.o <= O.FLOWER_W) return; // pas de fleurs sous la neige
   const info = OBJ_INFO[e.o] || {};
   const rk = info.rot && objRot[e.o] ? world.rotAt(e.x, e.y) : 0; // quart de tour d'une construction
   const h = e.o === O.LILY ? -3 / 8 : world.hAt(e.x, e.y);
@@ -5647,13 +6102,18 @@ function drawObject(e) {
   }
   const img = rk ? objRot[e.o][rk].img : frames[f];
   draw(img, gx - img.ox, gy - img.oy);
+  if (e.o === O.RACK) { const T0 = world.racks.get(e.x + ',' + e.y); if (T0) T0.forEach((id, i) => ctx.drawImage(icons[id], gx - 13 + (i & 1) * 13, gy - 24 + (i >> 1) * 10)); }
   const gl = rk ? objRot[e.o][rk].glow : objGlow[e.o];
   if (gl && darkness() > 0.15) glows.push({ img: gl, x: gx - gl.ox, y: gy - gl.oy, behind: !playerDrawn, halo: e.o === O.LANTERN, hx: gx + 3, hy: gy - 15 });
   // feu de camp et torche : une vraie flamme qui danse
   if (e.o === O.CAMPFIRE) { drawFlame(1, gx, gy - 1, e.x + e.y); drawFlame(0, gx - 3, gy + 1, e.x * 3); }
   else if (e.o === O.TORCH) drawFlame(0, gx, gy - 16, e.x + e.y, 0.9);
-  // pétales qui tombent des cerisiers
-  if (e.o === O.CHERRY && Math.random() < 0.03 && particles.length < 300) {
+  // à l'automne, des feuilles rousses tombent des chênes
+  if (season === 2 && info.tree && e.o !== O.PINE && e.o !== O.PINE_L && e.o !== O.SNOW_PINE && Math.random() < 0.012 && particles.length < 300) {
+    burst(e.x + 0.5, e.y + 0.5, h * 8 + 24, AUTUMN_COLS, 1, { leaf: true, up: 0, g: 10, life: 3, spread: 10, speed: 0.6, drag: 0.3 });
+  }
+  // pétales qui tombent des cerisiers (au printemps)
+  if (e.o === O.CHERRY && season === 0 && Math.random() < 0.03 && particles.length < 300) {
     burst(e.x + 0.5, e.y + 0.5, h * 8 + 26, CHERRY_COLS, 1, { leaf: true, up: 0, g: 10, life: 3, spread: 10, speed: 0.6, drag: 0.3 });
   }
 }
@@ -5981,6 +6441,212 @@ function drawFx(f, ox, oy) {
   }
 }
 
+// ---------------------------------------------------------------- carte et succès
+// La carte (onglet du sac) ne montre que les morceaux du monde déjà parcourus, vus d'en haut dans le
+// même sens que le jeu (losanges). Villages, ses abris et lui-même y sont marqués.
+const explored = new Set(); // morceaux de 32x32 tuiles déjà vus (sauvé)
+let exploreT = 0;
+function updateExplore(dt) {
+  if (realm || (exploreT -= dt) > 0) return;
+  exploreT = 1;
+  const cx = Math.floor(player.x) >> 5, cy = Math.floor(player.y) >> 5;
+  for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) explored.add((cx + dx) + ',' + (cy + dy));
+}
+const MAP_COLS = {
+  [T.WATER]: [42, 102, 166], [T.DEEP]: [29, 75, 130], [T.SAND]: [223, 201, 138], [T.GRASS]: [92, 158, 63], [T.FOREST]: [60, 117, 51],
+  [T.STONE]: [135, 140, 150], [T.SNOW]: [227, 234, 241], [T.MEADOW]: [111, 179, 74], [T.PATH]: [148, 112, 74], [T.DIRT]: [102, 67, 48], [T.COBBLE]: [127, 120, 108],
+};
+// monde -> point de la carte (losanges : comme l'écran, en petit) et l'inverse
+const mapPos = (M, x, y) => [M.w / 2 + ((x - M.cx) - (y - M.cy)) / M.z, M.h / 2 + ((x - M.cx) + (y - M.cy)) / 2 / M.z];
+function mapImage(M) {
+  const c = document.createElement('canvas');
+  c.width = M.w; c.height = M.h;
+  const g = c.getContext('2d'), id = g.createImageData(M.w, M.h), d = id.data, S = surface;
+  for (let py = 0; py < M.h; py++) for (let px = 0; px < M.w; px++) {
+    const ix = (px - M.w / 2) * M.z, iy = (py - M.h / 2) * M.z;
+    const x = Math.floor(M.cx + (ix + 2 * iy) / 2), y = Math.floor(M.cy + (2 * iy - ix) / 2), o = (py * M.w + px) * 4;
+    d[o + 3] = 255;
+    if (!explored.has((x >> 5) + ',' + (y >> 5))) { const k = (px ^ py) & 1 ? 30 : 24; d[o] = k; d[o + 1] = k - 6; d[o + 2] = k + 10; continue; } // pas encore vu
+    const t = S.typeAt(x, y), ob = OBJ_INFO[S.objAt(x, y)];
+    let col = MAP_COLS[t] || [80, 70, 60];
+    if (season === 3 && (t === T.GRASS || t === T.FOREST || t === T.MEADOW)) col = [214, 224, 234];
+    if (ob && ob.tree) col = season === 2 ? [190, 110, 40] : season === 3 ? [110, 84, 64] : [36, 86, 44];
+    else if (ob && (ob.building || ob.part)) col = ob.built ? [224, 178, 58] : [168, 81, 58];
+    else if (ob && ob.tilebox) col = [110, 110, 118];
+    const k = S.walkable(x, y) ? 0.82 + Math.min(6, S.hAt(x, y)) * 0.06 : 1;
+    d[o] = Math.min(255, col[0] * k); d[o + 1] = Math.min(255, col[1] * k); d[o + 2] = Math.min(255, col[2] * k);
+  }
+  g.putImageData(id, 0, 0);
+  return c;
+}
+function drawMapTab(px, py) {
+  const U = invUI;
+  if (!U.map) U.map = { cx: realm ? realm.out[0] : player.x, cy: realm ? realm.out[1] : player.y, z: 2, w: PW - 12, h: PH - 36, img: null, key: '' };
+  const M = U.map, mx = px + 6, my = py + 14;
+  ink('CARTE - ' + SEASONS[season], px + 8, py + 5);
+  const key = [Math.round(M.cx), Math.round(M.cy), M.z, explored.size, season].join();
+  if (M.key !== key) { M.img = mapImage(M); M.key = key; }
+  mcSlot(mx - 1, my - 1, M.w + 2);
+  ctx.drawImage(M.img, mx, my);
+  ctx.save();
+  ctx.beginPath(); ctx.rect(mx, my, M.w, M.h); ctx.clip();
+  const mark = (x, y, draw0) => { const [a, b] = mapPos(M, x, y); draw0(Math.round(mx + a), Math.round(my + b)); };
+  // les villages déjà vus (les plus grands d'abord ; un nom qui en chevaucherait un autre est omis)
+  const labels = [];
+  for (const v of [...surface.villages.values()].filter(Boolean).sort((a, b) => b.kind - a.kind)) {
+    if (!explored.has((v.cx >> 5) + ',' + (v.cy >> 5))) continue;
+    mark(v.cx, v.cy, (x, y) => {
+      ctx.fillStyle = '#000000'; ctx.fillRect(x - 3, y - 3, 7, 6);
+      ctx.fillStyle = v.kind === 3 ? '#c4c6cb' : '#e8d8b0';
+      for (let i = 0; i < 3; i++) ctx.fillRect(x - i, y - 2 + i, 1 + 2 * i, 1);
+      ctx.fillRect(x - 2, y + 1, 5, 1);
+      const w = textWidth(v.name), r = { x: x - Math.round(w / 2), y: y + 4, w, h: 6 };
+      if (labels.some((o) => r.x < o.x + o.w + 2 && o.x < r.x + r.w + 2 && r.y < o.y + o.h && o.y < r.y + r.h)) return;
+      labels.push(r);
+      drawText(ctx, v.name, r.x, r.y, v.kind === 3 ? '#ffe28a' : '#ffffff', '#000000');
+    });
+  }
+  // ses abris
+  for (const [k, o] of surface.mods) {
+    if (o !== O.HUT && o !== O.LAIR) continue;
+    const [x, y] = k.split(',').map(Number);
+    mark(x, y, (a, b) => { ctx.fillStyle = '#000000'; ctx.fillRect(a - 3, b - 3, 7, 7); ctx.fillStyle = o === O.HUT ? '#e0b23a' : '#9a6d45'; ctx.fillRect(a - 2, b - 2, 5, 5); ctx.fillStyle = o === O.HUT ? '#22276b' : '#0a081a'; ctx.fillRect(a - 1, b, 3, 2); });
+  }
+  // l'expédition qui le traque
+  if (!realm) for (const n of npcs) if (n.exp && alive(n)) mark(n.x, n.y, (a, b) => { ctx.fillStyle = '#ff2e3e'; ctx.fillRect(a - 1, b - 1, 2, 2); });
+  // lui (il clignote)
+  const [lx, ly] = realm ? realm.out : [player.x, player.y];
+  if (Math.floor(rt() * 3) % 3) mark(lx, ly, (a, b) => { ctx.fillStyle = '#000000'; ctx.fillRect(a - 2, b - 2, 5, 5); ctx.fillStyle = '#ff5a5e'; ctx.fillRect(a - 1, b - 1, 3, 3); });
+  ctx.restore();
+  hit(mx, my, M.w, M.h, () => {}); // la carte se glisse au doigt (voir overlayDown)
+  const by = my + M.h + 4;
+  mcButton(mx, by, 18, 13, '-', M.z < 8, () => { M.z *= 2; });
+  mcButton(mx + 20, by, 18, 13, '+', M.z > 1, () => { M.z /= 2; });
+  mcButton(mx + 40, by, 30, 13, 'ICI', true, () => { M.cx = lx; M.cy = ly; });
+  ink('GLISSE POUR BOUGER', mx + 76, by + 4, '#5a5a5a');
+}
+
+// Les succès : vérifiés toutes les 2 s, annoncés un par un, sauvés avec le monde.
+const ACHIEVEMENTS = [
+  { id: 'meal', name: 'PREMIER REPAS', desc: 'DEVORER UNE PROIE', ok: () => stats.eaten >= 1 },
+  { id: 'lumber', name: 'BUCHERON', desc: 'ABATTRE 50 ARBRES', ok: () => stats.trees >= 50 },
+  { id: 'wreck', name: 'DEMOLISSEUR', desc: 'RASER 10 MAISONS', ok: () => stats.houses >= 10 },
+  { id: 'plague', name: 'FLEAU', desc: 'FAIRE 100 VICTIMES', ok: () => stats.victims + stats.knights >= 100 },
+  { id: 'heroes', name: 'MANGEUR DE HEROS', desc: 'DEVORER 5 HEROS', ok: () => stats.heroes >= 5 },
+  { id: 'champion', name: 'CHAMPION DECHU', desc: "TERRASSER UN CHAMPION", ok: () => stats.champions >= 1 },
+  { id: 'builder', name: 'BATISSEUR', desc: 'POSER 50 CONSTRUCTIONS', ok: () => stats.built >= 50 },
+  { id: 'digger', name: 'FOUISSEUR', desc: 'CREUSER 200 PAROIS', ok: () => stats.dug >= 200 },
+  { id: 'jailer', name: 'GEOLIER', desc: 'ENCAGER UN PRISONNIER', ok: () => stats.caged >= 1 },
+  { id: 'siege', name: 'INEBRANLABLE', desc: 'REPOUSSER UNE EXPEDITION', ok: () => stats.expWon >= 1 },
+  { id: 'lvl10', name: 'EVOLUE', desc: 'ATTEINDRE LE NIVEAU 10', ok: () => player.level >= 10 },
+  { id: 'mutant', name: 'MUTANT', desc: 'AVOIR 10 MUTATIONS', ok: () => player.muts.length >= 10 },
+  { id: 'quake', name: 'SEISME', desc: '100 FRAPPES AU SOL', ok: () => stats.smash >= 100 },
+  { id: 'year', name: 'QUATRE SAISONS', desc: 'VIVRE UNE ANNEE ENTIERE', ok: () => stats.play >= SEASON_LEN * 4 },
+  { id: 'trophy', name: 'COLLECTIONNEUR', desc: 'EXPOSER 5 TROPHEES', ok: () => player.trophies >= 5 },
+  { id: 'fossil', name: 'ARCHEOLOGUE', desc: 'TROUVER UN ANCIEN NOMU', ok: () => stats.fossils >= 1 },
+];
+let achT = 0;
+function updateAchievements(dt) {
+  if ((achT -= dt) > 0) return;
+  achT = 2;
+  const a = ACHIEVEMENTS.find((x) => !player.achieved.includes(x.id) && x.ok());
+  if (!a) return;
+  player.achieved.push(a.id);
+  showMsg('SUCCES : ' + a.name, 4, a.desc);
+  sfx.mutate();
+  burst(player.x, player.y, player.z + 30, ['#ffe07a', '#e0b23a', '#ffffff'], 30, { up: 50, speed: 1.6, life: 1 });
+}
+function drawAchTab(px, py) {
+  const U = invUI, per = 8, pages = Math.ceil(ACHIEVEMENTS.length / per);
+  U.achPage = Math.min(U.achPage || 0, pages - 1);
+  ink('SUCCES ' + player.achieved.length + '/' + ACHIEVEMENTS.length, px + 8, py + 5);
+  ACHIEVEMENTS.slice(U.achPage * per, U.achPage * per + per).forEach((a, i) => {
+    const x = px + 6, y = py + 14 + i * 16, got = player.achieved.includes(a.id);
+    mcSlot(x, y, 15, got ? '#c9a24a' : MC.slot);
+    ctx.fillStyle = got ? '#fff3b0' : '#5a5a5a';
+    if (got) { for (const [dx, dy] of [[7, 3], [6, 5], [7, 5], [8, 5], [4, 6], [5, 6], [9, 6], [10, 6], [5, 7], [9, 7], [6, 8], [8, 8], [5, 10], [9, 10], [6, 9], [7, 9], [8, 9]]) ctx.fillRect(x + dx, y + dy, 1, 1); } // étoile
+    else { ctx.fillRect(x + 5, y + 7, 5, 4); ctx.fillRect(x + 6, y + 4, 1, 3); ctx.fillRect(x + 8, y + 4, 1, 3); ctx.fillRect(x + 6, y + 4, 3, 1); } // cadenas
+    ink(a.name, x + 19, y + 2, got ? '#2a2a2a' : '#6a6a6a');
+    ink(a.desc, x + 19, y + 9, '#7a7a7a');
+  });
+  if (pages > 1) {
+    mcButton(px + PW - 46, py + PH - 18, 18, 13, '<', U.achPage > 0, () => { U.achPage--; });
+    mcButton(px + PW - 25, py + PH - 18, 18, 13, '>', U.achPage < pages - 1, () => { U.achPage++; });
+    ink((U.achPage + 1) + '/' + pages, px + PW - 66, py + PH - 14, '#5a5a5a');
+  }
+}
+
+// ---------------------------------------------------------------- oiseaux
+// Des petites volées posées dans l'herbe, qui picorent et sautillent. Quand Brainless approche en
+// courant, frappe ou rugit, toute la volée s'envole d'un coup et s'éloigne.
+const birds = [];
+const BIRD_KINDS = [
+  { body: '#6b4a2a', belly: '#b08a5a', head: '#4a3020' }, // moineau
+  { body: '#26262e', belly: '#3a3a46', head: '#16161c' }, // corbeau
+  { body: '#c9b440', belly: '#ecdc84', head: '#3a5a9a' }, // mésange
+];
+let flockId = 0;
+function updateBirds(dt) {
+  if (realm) { birds.length = 0; return; }
+  for (let i = birds.length - 1; i >= 0; i--) {
+    const b = birds[i];
+    if (Math.hypot(b.x - player.x, b.y - player.y) > 20 || b.h > 90) birds.splice(i, 1);
+  }
+  // une volée se pose de temps en temps, le jour, dans l'herbe autour de lui
+  if (darkness() < 0.5 && birds.length < 14 && Math.random() < dt * 0.2) {
+    const a = Math.random() * Math.PI * 2, r = 7 + Math.random() * 6;
+    const cx = player.x + Math.cos(a) * r, cy = player.y + Math.sin(a) * r, t = world.typeAt(Math.floor(cx), Math.floor(cy));
+    const oi = OBJ_INFO[world.objAt(Math.floor(cx), Math.floor(cy))];
+    if ((t === T.GRASS || t === T.MEADOW || t === T.FOREST || t === T.PATH || t === T.DIRT || t === T.SNOW) && !(oi && !oi.small)) {
+      const kind = BIRD_KINDS[season === 3 ? 1 : (Math.random() * 3) | 0], n = 3 + ((Math.random() * 4) | 0), id = ++flockId;
+      for (let k = 0; k < n; k++) birds.push({ x: cx + (Math.random() - 0.5) * 1.6, y: cy + (Math.random() - 0.5) * 1.6, h: 0, fly: false, flock: id, kind,
+        t: Math.random() * 5, side: Math.random() < 0.5 ? -1 : 1, vx: 0, vy: 0, vz: 0 });
+    }
+  }
+  const loud = shake > 2.2 || windT > 0.4;
+  for (const b of birds) {
+    b.t += dt;
+    if (!b.fly) {
+      const d = Math.hypot(b.x - player.x, b.y - player.y);
+      if (d < (player.spd > 3 ? 4.5 : 1.8) || (loud && d < 14)) {
+        // la volée entière s'envole, chacun dans une direction un peu différente
+        for (const o of birds) {
+          if (o.flock !== b.flock || o.fly) continue;
+          const ang = Math.atan2(o.y - player.y, o.x - player.x) + (Math.random() - 0.5) * 1.2, sp = 3 + Math.random() * 2;
+          Object.assign(o, { fly: true, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp, vz: 16 + Math.random() * 10, t: Math.random() });
+          o.side = Math.cos(ang) - Math.sin(ang) < 0 ? -1 : 1;
+        }
+        sfx.flap();
+      } else if (Math.random() < dt * 0.4) { b.x += (Math.random() - 0.5) * 0.25; b.y += (Math.random() - 0.5) * 0.25; b.side = -b.side; } // un petit saut
+    } else {
+      b.x += b.vx * dt; b.y += b.vy * dt; b.h += b.vz * dt;
+      b.vz = Math.min(40, b.vz + dt * 8);
+    }
+  }
+}
+function drawBird(b, ox, oy) {
+  const sx = Math.round(ox + isoX(b.x, b.y)), gy = oy + isoY(b.x, b.y) - groundZ(b.x, b.y), sy = Math.round(gy - b.h), K = b.kind;
+  ctx.globalAlpha = Math.max(0.1, 0.25 - b.h / 300);
+  ctx.fillStyle = '#0a1412'; ctx.fillRect(sx - 1, Math.round(gy), 3, 1); // son ombre
+  ctx.globalAlpha = Math.min(1, (90 - b.h) / 20);
+  if (!b.fly) {
+    const peck = (b.t % 1.7) < 0.3; // il picore
+    ctx.fillStyle = K.body; ctx.fillRect(sx - 1, sy - 2, 3, 1);
+    ctx.fillStyle = K.belly; ctx.fillRect(sx - 1, sy - 1, 3, 1);
+    ctx.fillStyle = K.head; ctx.fillRect(sx + b.side * 2, sy - (peck ? 1 : 3), 1, 1);
+    ctx.fillStyle = '#e0b23a'; ctx.fillRect(sx + b.side * 3, sy - (peck ? 0 : 3), 1, 1);
+    ctx.fillStyle = K.body; ctx.fillRect(sx - b.side * 2, sy - 2, 1, 1); // la queue
+  } else {
+    const up = Math.floor(b.t * 14) % 2;
+    ctx.fillStyle = K.body; ctx.fillRect(sx - 1, sy, 3, 1);
+    ctx.fillStyle = K.head; ctx.fillRect(sx + b.side * 2, sy - 1, 1, 1);
+    ctx.fillStyle = K.body;
+    if (up) { ctx.fillRect(sx - 3, sy - 2, 1, 1); ctx.fillRect(sx - 2, sy - 1, 1, 1); ctx.fillRect(sx + 2, sy - 1, 1, 1); ctx.fillRect(sx + 3, sy - 2, 1, 1); }
+    else { ctx.fillRect(sx - 3, sy + 1, 1, 1); ctx.fillRect(sx - 2, sy + 1, 1, 1); ctx.fillRect(sx + 2, sy + 1, 1, 1); ctx.fillRect(sx + 3, sy + 1, 1, 1); }
+  }
+  ctx.globalAlpha = 1;
+}
+
 function drawFlyers(ox, oy, glowPass) {
   for (const f of flyers) {
     if (f.night !== glowPass) continue;
@@ -6163,9 +6829,9 @@ function drawMuteButton() {
 }
 
 const HINTS = {
-  touch: ['JOYSTICK A FOND: IL COURT', 'MAINTIENS B POUR CHARGER', 'SPRINT: MAINTIENS >> EN MARCHANT', 'N: FLAIRER LA VIANDE FRAICHE', 'P: PRENDRE, P: LANCER (MAINTENIR = VISER)', 'SAC EN HAUT A DROITE, BARRE: TOUCHE 2 FOIS = UTILISER', 'MARTEAU EN HAUT: BATIR'],
-  keys: ['ZQSD: COURIR  C: MARCHER  MAJ: SPRINT  ESPACE: SAUT', 'J/CLIC: COUP (MAINTENIR = CHARGE)', 'K/CLIC DROIT: FRAPPE AU SOL  R: FLAIRER', 'L/CLIC MOLETTE: PRENDRE, LANCER (MAINTENIR = VISER)', 'I/TAB: SAC  1-9: BARRE  T: UTILISER  B: BATIR', 'F: PLEIN ECRAN  N: MUSIQUE'],
-  pad: ['STICK: MARCHER, A FOND: COURIR  B/R2: SPRINT  A: SAUT', 'X: COUP (MAINTENIR = CHARGE)', 'Y: FRAPPE AU SOL  L1: FLAIRER', 'R1: PRENDRE, LANCER (MAINTENIR = VISER)', 'CROIX: BARRE, HAUT = UTILISER, BAS = SAC', 'R3: BATIR  SELECT: SON'],
+  touch: ['JOYSTICK A FOND: IL COURT', 'MAINTIENS B POUR CHARGER', 'SPRINT: MAINTIENS >> EN MARCHANT', 'N: FLAIRER LA VIANDE FRAICHE', 'P: PRENDRE, P: LANCER (MAINTENIR = VISER)', 'SAC EN HAUT A DROITE, BARRE: TOUCHE 2 FOIS = UTILISER', 'DANS TA TANIERE, LE MARTEAU: BATIR'],
+  keys: ['ZQSD: COURIR  C: MARCHER  MAJ: SPRINT  ESPACE: SAUT', 'J/CLIC: COUP (MAINTENIR = CHARGE)', 'K/CLIC DROIT: FRAPPE AU SOL  R: FLAIRER', 'L/CLIC MOLETTE: PRENDRE, LANCER (MAINTENIR = VISER)', 'I/TAB: SAC  V: CARTE  1-9: BARRE  T: UTILISER  B: BATIR (TANIERE)', 'F: PLEIN ECRAN  N: MUSIQUE'],
+  pad: ['STICK: MARCHER, A FOND: COURIR  B/R2: SPRINT  A: SAUT', 'X: COUP (MAINTENIR = CHARGE)', 'Y: FRAPPE AU SOL  L1: FLAIRER', 'R1: PRENDRE, LANCER (MAINTENIR = VISER)', 'CROIX: BARRE, HAUT = UTILISER, BAS = SAC', 'R3: BATIR (TANIERE)  SELECT: SON'],
 };
 
 function drawHUD() {
@@ -6176,16 +6842,25 @@ function drawHUD() {
   buttons.n.sub = player.nearCorpse ? 'DEVORER' : player.interact ? interactLabel(player.interact) : 'FLAIR';
   buttons.g.sub = player.held ? 'LANCER' : 'PRENDRE';
   buttons.a.sub = player.held ? 'ECRASER' : 'COUP';
-  const night = darkness() > 0.5;
-  drawText(ctx, (night ? 'NUIT' : 'JOUR') + '  ARBRES ' + stats.trees + '  MAISONS ' + stats.houses + '  VICTIMES ' + (stats.victims + stats.knights), x0, y0 + 8, '#e8f0ff');
+  const night = outsideDark() > 0.5;
+  drawText(ctx, (night ? 'NUIT' : 'JOUR') + ' - ' + SEASONS[season] + '  ARBRES ' + stats.trees + '  MAISONS ' + stats.houses + '  VICTIMES ' + (stats.victims + stats.knights), x0, y0 + 8, '#e8f0ff');
   drawSprintBar(x0, y0 + 17);
   drawHpBar(x0, y0 + 26);
   drawHungerBar(x0, y0 + 35);
-  if (player.equip.some(Boolean)) drawText(ctx, 'ALTERS: ' + player.equip.filter(Boolean).map((a) => ALTERS[a].name + (player.alterLv[a] > 1 ? ' ' + player.alterLv[a] : '')).join(' '), x0, y0 + 44, '#c9a0ff');
+  if (player.infamy >= 3) {
+    // la menace : quand la barre est pleine, une expédition part
+    const k = Math.min(1, player.infamy / EXP_AT), w = 50;
+    drawText(ctx, 'MENACE', x0, y0 + 44, expedition ? '#ff5a5e' : '#ff9aa8');
+    ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(x0 + 27, y0 + 45, w + 2, 4);
+    ctx.fillStyle = expedition && Math.floor(rt() * 3) % 2 ? '#ffffff' : '#d22838'; ctx.fillRect(x0 + 28, y0 + 46, Math.round(w * k), 2);
+  }
+  if (player.equip.some(Boolean)) drawText(ctx, 'ALTERS: ' + player.equip.filter(Boolean).map((a) => ALTERS[a].name + (player.alterLv[a] > 1 ? ' ' + player.alterLv[a] : '')).join(' '), x0, y0 + (player.infamy >= 3 ? 53 : 44), '#c9a0ff');
   drawHotbar();
   drawBagButton();
   drawBuildButton();
+  drawMapButton();
   drawScent();
+  drawExpedition();
   drawMuteButton();
   drawMusicButton();
   drawHomeButton();
@@ -6277,7 +6952,7 @@ function updateMenu(dt) {
     window.BRAINLESS = { get world() { return world; }, player, startWorld, createWorld, listWorlds, quitToMenu, get mode() { return mode; }, stats, O, T, decals, particles, npcs, damage, hurtPlayer,
       vstate, crime, killNpc, hitNpc, nearestPrey, get scent() { return scent; },
       get tod() { return tod; }, set tod(v) { tod = v; }, weather, spawnBeast, gainEvo, has, get pages() { return atlasMain.pages.concat(atlasNomu.pages); }, blockedFor, freeSpot, OBJ_INFO, overlapping, crackTile, craterTile, doSlam, doBigPunch, doRushHit, openMutChoice, chooseMutation, openInv, addItem, useItem, get mutChoice() { return mutChoice; }, get invUI() { return invUI; }, get baking() { return baking; }, drops, fires, ignite, oilSplash, thrown, startGrab, releaseHeld, grabTarget, holdPts,
-      get realm() { return realm; }, get surface() { return surface; }, enterRealm, exitRealm, enterBuilding, builtNear, openBuild, get build() { return build; }, buildPlace, buildDig, digTile, doPunchHit, builtAtScreen };
+      get realm() { return realm; }, get surface() { return surface; }, enterRealm, exitRealm, enterBuilding, builtNear, openBuild, get build() { return build; }, buildPlace, buildDig, digTile, doPunchHit, builtAtScreen, birds, get season() { return season; }, interact, openTile, spawnNpc, launchExpedition, get expedition() { return expedition; }, populate, vstate, deathsOf };
   }
   await loadAssets();
   loading.style.display = 'none';
