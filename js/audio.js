@@ -483,6 +483,33 @@ export const sfx = {
     noise({ type: 'highpass', f: 2800, gain: 0.22, a: 0.02, dec: 0.6 });
     noise({ f: 1200, f2: 600, q: 0.8, gain: 0.15, a: 0.01, dec: 0.25 }); // l'eau qui s'écrase
   },
+  // --- inventaire, mutations, constructions
+  pickup() {
+    if (!ready() || !gate('pickup', 0.05)) return;
+    tone({ f: rnd(880, 960), f2: 1400, type: 'square', gain: 0.04, dec: 0.06 });
+  },
+  // mutation : grondement de chair qui se tord, puis un scintillement
+  mutate() {
+    if (!ready() || !gate('mutate', 0.5)) return;
+    tone({ f: 60, f2: 120, type: 'sawtooth', gain: 0.18, a: 0.2, dec: 0.8, lp: 500 });
+    noise({ type: 'lowpass', f: 300, f2: 900, gain: 0.25, a: 0.3, dec: 0.6 });
+    for (let i = 0; i < 6; i++) tone({ f: 600 + i * 180, type: 'triangle', gain: 0.03, dec: 0.25, delay: 0.4 + i * 0.07 });
+  },
+  place() {
+    if (!ready()) return;
+    tone({ f: 110, f2: 55, gain: 0.5, dec: 0.18 });
+    noise({ type: 'lowpass', f: 900, gain: 0.3, dec: 0.12 });
+  },
+  craft() {
+    if (!ready()) return;
+    for (let i = 0; i < 3; i++) { tone({ f: rnd(1600, 2200), type: 'square', gain: 0.04, dec: 0.05, delay: i * 0.12 }); noise({ f: 1800, q: 2, gain: 0.12, dec: 0.05, delay: i * 0.12 }); }
+  },
+  // la viande grésille sur le feu
+  cook() {
+    if (!ready()) return;
+    noise({ type: 'highpass', f: 3500, gain: 0.18, a: 0.05, dec: 0.9 });
+    for (let i = 0; i < 8; i++) tone({ f: rnd(2000, 4000), type: 'square', gain: 0.015, dec: 0.015, delay: Math.random() * 0.8 });
+  },
   tired() {
     if (!ready() || !gate('tired', 1)) return;
     for (let i = 0; i < 3; i++) noise({ f: 600, q: 3, gain: 0.12, a: 0.05, dec: 0.2, delay: i * 0.35 });

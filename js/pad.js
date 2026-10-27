@@ -1,7 +1,8 @@
 // Manette (API Gamepad, disposition "standard") : contrôles intégrés de l'AYN Thor,
 // manettes Xbox / PlayStation / Switch branchées sur PC ou Android.
 //
-//   stick gauche / croix : bouger        A (bas)    : sauter
+//   stick gauche          : bouger         A (bas)    : sauter
+//   croix                 : barre d'objets (gauche/droite), utiliser (haut), sac (bas) ; menus
 //   X (gauche)            : coup (maintenir = coup chargé)
 //   Y (haut)              : frappe au sol (maintenir pour charger)
 //   B (droite), R2, L3    : sprint (maintenir)
@@ -13,7 +14,7 @@ const DEAD = 0.2;
 const prev = [];
 
 export const pad = {
-  connected: false, x: 0, y: 0,
+  connected: false, x: 0, y: 0, sx: 0, sy: 0,
   sprint: false, charge: false, punch: false, grab: false,
   jumpPressed: false, punchPressed: false, mutePressed: false, sniffPressed: false, grabPressed: false, any: false,
 };
@@ -34,13 +35,14 @@ export function pollPad() {
     if (g.buttons.some((b) => b.pressed) || Math.hypot(g.axes[0] || 0, g.axes[1] || 0) > DEAD) { gp = g; break; }
   }
   pad.connected = !!gp;
-  if (!gp) { pad.x = pad.y = 0; pad.sprint = pad.charge = pad.punch = pad.grab = false; return pad; }
+  if (!gp) { pad.x = pad.y = pad.sx = pad.sy = 0; pad.sprint = pad.charge = pad.punch = pad.grab = false; return pad; }
   active = gp;
 
   // stick avec zone morte radiale, croix en secours
   let x = gp.axes[0] || 0, y = gp.axes[1] || 0;
   const m = Math.hypot(x, y);
   if (m < DEAD) { x = 0; y = 0; } else { const k = Math.min(1, (m - DEAD) / (1 - DEAD)) / m; x *= k; y *= k; }
+  pad.sx = x; pad.sy = y; // le stick seul (en jeu, la croix sert à la barre d'objets)
   if (down(gp, 14)) x = -1;
   if (down(gp, 15)) x = 1;
   if (down(gp, 12)) y = -1;

@@ -776,6 +776,94 @@ function wallRubble() {
   return renderSolids(rubble(55, 6, [STONE, STONE, STONE], 4, 5, true), 56, 56, 28, 40);
 }
 
+// ---------------------------------------------------------------- constructions de Brainless
+// Mur de bois : une palissade de rondins pointus qui couvre toute la tuile.
+function woodWall() {
+  const logs = (u, v) => (((u + v + 32) % 4) + 4) % 4;
+  return renderSolids([{
+    b: [-7.5, 7.5, -7.5, 7.5, 0, 21], ramp: WOOD,
+    mat: (q) => {
+      if (q.face === 't') return 3;
+      const k = logs(q.u, q.v);
+      if (Math.abs(q.z - 6) < 0.7 || Math.abs(q.z - 13) < 0.7) return METAL[1]; // cordes
+      return k < 0.7 ? 0 : k > 3.1 ? Math.min(3, q.shade + 1) : hash(Math.floor(q.z), Math.floor(k), 5) < 0.12 ? Math.max(0, q.shade - 1) : q.shade;
+    },
+    inside: (u, v, z) => Math.abs(u) <= 7.5 && Math.abs(v) <= 7.5 && z >= 0 && z <= 16 + (2 - Math.abs(logs(u, v) - 2)) * 2.5,
+  }], 56, 80, 28, 62);
+}
+
+// Mur de pierre : des moellons en quinconce, plus bas qu'un rempart.
+function stoneWall() {
+  const stone = (q) => {
+    if (q.face === 't') return 2;
+    const a = q.face === 'l' ? q.u : q.v, row = Math.floor(q.z / 3.2), aa = a + (row & 1) * 2.2;
+    let sh = q.shade;
+    if (q.z / 3.2 - row < 0.25 || ((aa % 4.4) + 4.4) % 4.4 < 0.5) sh--;
+    else { const r = hash(Math.floor(aa / 4.4), row, 61); if (r < 0.25) sh--; else if (r > 0.85) sh++; }
+    return Math.max(0, Math.min(3, sh));
+  };
+  return renderSolids([box(-7.5, 7.5, -7.5, 7.5, 0, 17, STONE, stone)], 56, 80, 28, 62);
+}
+
+// Piège à piques : une planche hérissée de pieux pointus.
+function spikeTrap() {
+  const prims = [box(-6.5, 6.5, -6.5, 6.5, 0, 1.4, WOOD, (q) => (q.face === 't' && ((q.u + 20) % 3) < 0.5 ? 1 : q.shade))];
+  for (let i = 0; i < 9; i++) {
+    const u = -4.5 + (i % 3) * 4.5, v = -4.5 + Math.floor(i / 3) * 4.5;
+    prims.push(capsule([u, v, 1], [u + 0.6, v - 0.6, 5.5], 0.6, WOOD), capsule([u + 0.6, v - 0.6, 5.5], [u + 0.8, v - 0.8, 7.5], 0.3, METAL));
+  }
+  return propSprite(prims);
+}
+
+// Feu de camp : un cercle de pierres, des bûches en croix, des braises (allumées : couche lumineuse).
+function campfire() {
+  const prims = [];
+  for (let i = 0; i < 8; i++) {
+    const a = i / 8 * Math.PI * 2;
+    prims.push(ellipsoid(Math.cos(a) * 5.2, Math.sin(a) * 5.2, 1, 1.7, 1.7, 1.4, STONE, null, 0));
+  }
+  prims.push(capsule([-4, -1.5, 1.2], [3.5, 1.5, 2.8], 0.9, CHAR), capsule([-3, 3, 1.2], [3, -3, 2.8], 0.9, WOOD));
+  prims.push({ ...ellipsoid(0, 0, 0.6, 2.6, 2.6, 1, CHAR, (q) => { q.glow = 1; return hash(Math.floor(q.u * 2), Math.floor(q.v * 2), 3) < 0.5 ? hex('#ff7a2a') : hex('#ffc04a'); }, 0), smooth: true });
+  return propSprite(prims);
+}
+
+// Torche : un pieu planté, une tête de paille enduite (la flamme est animée en jeu).
+function torch() {
+  return propSprite([
+    box(-0.7, 0.7, -0.7, 0.7, 0, 14, WOOD, (q) => (q.face === 't' ? 2 : q.shade)),
+    cylinder(0, 0, 1.6, 13, 16.5, THATCH, (q) => { if (q.face === 't') { q.glow = 1; return hex('#ffb347'); } return Math.abs(q.z - 14.5) < 0.4 ? METAL[1] : q.shade; }),
+  ]);
+}
+
+// Coffre : du bois cerclé de fer, une serrure dorée.
+function chest() {
+  return propSprite([{ ...box(-5, 5, -3.6, 3.6, 0, 7.5, WOOD, (q) => {
+    if (q.face === 't') return Math.abs(q.v) > 2.8 ? METAL[2] : 3;
+    const a = q.face === 'l' ? q.u : q.v;
+    if (Math.abs(Math.abs(a) - (q.face === 'l' ? 3.8 : 2.4)) < 0.5) return METAL[Math.min(3, q.shade + 1)]; // cerclages
+    if (Math.abs(q.z - 5) < 0.4) return 0; // le couvercle
+    if (q.face === 'l' && Math.abs(q.u) < 0.8 && q.z > 3.4 && q.z < 5.8) return GOLDR[Math.min(3, q.shade + 1)];
+    return q.shade;
+  }), smooth: true }]);
+}
+
+// Nid : une couronne de paille et de branches tressées, creusée au milieu.
+function nest() {
+  const prims = [
+    cylinder(0, 0, 7.2, 0, 3.6, THATCH, (q) => {
+      if (q.face === 't' && Math.hypot(q.u, q.v) < 4.6) return INTERIOR[1];
+      const r = hash(Math.floor(Math.atan2(q.v, q.u) * 6), Math.floor(q.z * 2), 4);
+      return r < 0.25 ? Math.max(0, q.shade - 1) : r > 0.8 ? Math.min(3, q.shade + 1) : q.shade;
+    }, { inner: 4.4, bulge: 0.8 }),
+    box(-4.5, 4.5, -4.5, 4.5, 0, 0.8, INTERIOR),
+  ];
+  for (let i = 0; i < 6; i++) {
+    const a = i / 6 * Math.PI * 2 + 0.3;
+    prims.push(capsule([Math.cos(a) * 5.5, Math.sin(a) * 5.5, 2.5], [Math.cos(a + 0.9) * 7.5, Math.sin(a + 0.9) * 7.5, 4.5], 0.45, WOOD));
+  }
+  return propSprite(prims);
+}
+
 // Tous les sprites de village : S[id] = [{img, glow}…] (une seule frame sauf les blés).
 export function buildVillageSprites() {
   const S = {};
@@ -799,5 +887,12 @@ export function buildVillageSprites() {
   S[O.WALL_TOWER] = [wallSprite(true, 0)];
   S[O.WALL_TOWER_D] = [wallSprite(true, 1)];
   S[O.WALL_R] = [wallRubble()];
+  S[O.WALL_WOOD] = [woodWall()];
+  S[O.WALL_STONE] = [stoneWall()];
+  S[O.SPIKES] = [spikeTrap()];
+  S[O.CAMPFIRE] = [campfire()];
+  S[O.TORCH] = [torch()];
+  S[O.CHEST] = [chest()];
+  S[O.NEST] = [nest()];
   return S;
 }

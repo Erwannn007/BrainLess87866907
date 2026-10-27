@@ -61,7 +61,8 @@ du même jeu.
   (Brainless, habitants, animaux, bâtiments, objets, fissures, sang) est rogné au plus près de son
   dessin puis rangé dans une planche de 2048x2048. On le dessine avec `draw(sprite, x, y)` (coin
   haut-gauche = position du point d'ancrage moins `sprite.ox/oy`), jamais avec `ctx.drawImage`
-  directement. Tout tient aujourd'hui dans deux planches (~33 Mo). Les tuiles, l'eau, les
+  directement. Deux jeux de planches : `atlasMain` (cuit une fois) et `atlasNomu` (Brainless, vidé et
+  recuit à chaque mutation visible par `rebakeNomu`, le jeu attend sur un écran « MUTATION… »). Les tuiles, l'eau, les
   ombres et les boutons restent de petits canvas à part. `drawCentered` / `drawTurned` dessinent un
   sprite tourné d'un quart de tour (rotation exacte, les pixels restent nets).
 - Les cadres de cuisson sont larges exprès (le rognage les rend gratuits) : un membre ne doit
@@ -128,6 +129,15 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
     l'horizontale), lancer de javelot `throwAim1` (bras libre tendu vers la cible, prise armée
     derrière) / `throw1`. ÉCRASER repasse à deux mains (`heave`).
 
+- **Mutations** (`js/mutations.js`) : à chaque niveau (`LEVEL_AT`, 19 niveaux), le jeu se met en
+  pause et propose 3 mutations (`draw3`, une par branche si possible) ; arbre à 3 branches BRUTE /
+  PRÉDATEUR / COLOSSE, `req` = il faut l'une de ces mutations. `look: true` : elle se voit,
+  `nomuParts(P, M)` lit le même nom (bras de titan, griffes d'acier, poings-masses, dos d'épines,
+  pattes rayées, bec béant, yeux rouges `EYE_RED`, queue, carapace d'os, gros cerveau, peau cramoisie
+  `SKIN_FIRE`, masse = taille x1.13 `sizeOf`). Les effets de jeu sont lus par `mut(id)` dans `main.js`.
+- **Alters** : dévorés = possédés (`player.alters`), 3 emplacements équipés (`player.equip`, onglet
+  ALTERS du sac), niveau 1 à 3 en dévorant un autre héros du même type (`alterLv`).
+
 ## 5. Le décor (`js/sprites.js`, `js/world.js`)
 
 | Matière | Rampe |
@@ -169,6 +179,20 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
   saut normal ≈ 23 (rochers, clôtures, tonneaux), super saut BOND ≈ 60 (arbres, remparts,
   maisons ; pas la tour de guet). Retombé dans un obstacle, `escapeObstacle` le pose de l'autre
   côté s'il avançait, sinon au plus près. Sans `tall`, l'obstacle bloque toujours.
+
+- **Inventaire** (`js/items.js`) : 36 cases (`player.inv`, les 9 premières = la barre), piles de 64.
+  Matériaux (bois, pierre, paille, fer), nourriture (viande crue, cuite, baies), trophées (casque,
+  bouclier, emblème), constructions. Ce qu'on casse lâche ses matériaux (`DROPS`, `RUIN_DROPS`,
+  `lootOf` pour chevaliers et héros) : des objets qui sautent puis volent jusqu'à lui (`drops`).
+  Repu, ce qu'il dévore en trop devient de la viande crue. Icônes 12x12 dessinées par code (`buildIcons`).
+- **Sac** (icône en haut à droite, I/Tab, croix bas) : onglets SAC (ou COFFRE), MUTATIONS (l'arbre),
+  ALTERS, FABRIQUER (`RECIPES`). Le jeu est en pause tant qu'il est ouvert (`overlayOpen`). Écrans
+  dessinés sur le canvas, zones touchables `uiHits`, navigation clavier/manette `overlayNav`.
+- **Constructions** (`O.WALL_WOOD … O.TORCH`, `built: true`, sprites dans `buildings.js`) : choisies
+  dans la barre, un aperçu vert/rouge s'affiche sur la tuile devant lui (`placeTarget`), UTILISER les
+  pose. Le bouton N devient OUVRIR (coffre, contenu dans `world.chests`, sauvé), DORMIR (nid : nuit
+  passée, vie pleine, il s'y réveille après une défaite), CUIRE (feu de camp : viande crue -> cuite).
+  Piège à piques : blesse qui marche dessus. Feu de camp et torche : flamme animée et lueur la nuit.
 
 ## 6. Villages et bâtiments (`js/buildings.js`, `js/world.js`)
 
@@ -330,7 +354,11 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
 - 3 modes de contrôle (`inputMode`) : `touch` (boutons à l'écran), `keys` (clavier + souris, PC),
   `pad` (manette, `js/pad.js`, ex. AYN Thor). Les boutons tactiles ne s'affichent qu'en `touch` ;
   l'aide (`HINTS`) s'adapte au mode. Toute nouvelle action doit être jouable dans les 3 modes.
-- Bouton N (rose) : FLAIR, ou DÉVORER près d'un cadavre (R au clavier, L1 à la manette).
+- Bouton N (rose) : FLAIR, ou DÉVORER près d'un cadavre, OUVRIR / DORMIR / CUIRE près d'une
+  construction (R au clavier, L1 à la manette).
+- Barre d'objets (en bas au milieu, en haut en portrait) : toucher une case = la choisir, la toucher
+  encore = l'utiliser ; clavier 1–9 / molette et T ; manette croix gauche/droite et haut (la croix ne
+  sert plus à marcher en jeu, `pad.sx/sy` = le stick seul). Sac : icône, I/Tab, croix bas.
   Bouton P (bleu-vert `[60,165,190]`) : PRENDRE, puis LANCER (maintenir = viser) ; le libellé de
   COUP devient ÉCRASER quand il porte (L / G / clic molette au clavier, R1 à la manette).
   Icône maison en haut à droite (Échap, Start) : retour à l'accueil. Icône note à côté (N au

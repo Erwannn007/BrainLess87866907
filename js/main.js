@@ -1,7 +1,9 @@
 import { World, T, O, OBJ_INFO, VG } from './world.js';
 import { buildVillageSprites } from './buildings.js';
 import { renderPerson, PEOPLE, PEOPLE_ANIMS, CIVILIANS, HEROES } from './people.js';
-import { renderNomu, ANIMS, holdPoint } from './nomu.js';
+import { renderNomu, ANIMS, holdPoint, sizeOf } from './nomu.js';
+import { MUTATIONS, BRANCHES, draw3, looks } from './mutations.js';
+import { ITEMS, RECIPES, DROPS, STACK, buildIcons } from './items.js';
 import { renderBeast, BEASTS, BEAST_ANIMS, BEAST_MEAL } from './beasts.js';
 import { valueNoise } from './noise.js';
 import * as SP from './sprites.js';
@@ -56,11 +58,14 @@ function toCanvas(buf) {
 // Planches de sprites : chaque sprite est rogné au plus près de son dessin, puis rangé dans
 // une grande planche de 2048x2048, rangée après rangée. Quelques grandes images en mémoire au
 // lieu de milliers de petites, presque sans pixels vides.
+// Deux jeux de planches : celles de Brainless sont réutilisées (vidées puis remplies à nouveau)
+// chaque fois que ses mutations changent, le reste est cuit une fois pour toutes.
 const ATLAS = 2048;
-const pages = [];
-let page = null, packX = 0, packY = 0, rowH = 0;
+const atlasMain = { pages: [], used: 0, page: null, x: 0, y: 0, rowH: 0 };
+const atlasNomu = { pages: [], used: 0, page: null, x: 0, y: 0, rowH: 0 };
+function resetAtlas(A) { A.used = 0; A.page = null; A.x = A.y = A.rowH = 0; }
 
-function toSprite(buf) {
+function toSprite(buf, A = atlasMain) {
   const { w, h, data } = buf;
   let x0 = w, y0 = h, x1 = -1, y1 = -1;
   for (let y = 0; y < h; y++) {
@@ -71,20 +76,23 @@ function toSprite(buf) {
   }
   if (x1 < 0) return { page: null, sx: 0, sy: 0, w: 0, h: 0, width: 0, height: 0, ox: 0, oy: 0 };
   const sw = x1 - x0 + 1, sh = y1 - y0 + 1;
-  if (page && packX + sw > ATLAS) { packX = 0; packY += rowH + 1; rowH = 0; } // rangée suivante
-  if (!page || packY + sh > ATLAS) {
-    page = document.createElement('canvas');
-    page.width = page.height = ATLAS;
-    page.c = page.getContext('2d');
-    pages.push(page);
-    packX = packY = rowH = 0;
+  if (A.page && A.x + sw > ATLAS) { A.x = 0; A.y += A.rowH + 1; A.rowH = 0; } // rangée suivante
+  if (!A.page || A.y + sh > ATLAS) {
+    // planche suivante : on reprend une planche déjà créée (vidée) avant d'en créer une neuve
+    let pg = A.pages[A.used];
+    if (!pg) { pg = document.createElement('canvas'); pg.width = pg.height = ATLAS; pg.c = pg.getContext('2d'); A.pages.push(pg); }
+    else pg.c.clearRect(0, 0, ATLAS, ATLAS);
+    A.used++;
+    A.page = pg;
+    A.x = A.y = A.rowH = 0;
   }
+  const page = A.page, packX = A.x, packY = A.y;
   const img = new ImageData(sw, sh);
   for (let y = 0; y < sh; y++) img.data.set(data.subarray(((y + y0) * w + x0) * 4, ((y + y0) * w + x1 + 1) * 4), y * sw * 4);
   page.c.putImageData(img, packX, packY);
   const spr = { page, sx: packX, sy: packY, w: sw, h: sh, width: sw, height: sh, ox: buf.ox - x0, oy: buf.oy - y0 };
-  packX += sw + 1; // 1 px d'écart entre deux sprites
-  rowH = Math.max(rowH, sh);
+  A.x += sw + 1; // 1 px d'écart entre deux sprites
+  A.rowH = Math.max(A.rowH, sh);
   return spr;
 }
 
@@ -116,7 +124,7 @@ const HOLD_ANIMS = ['grab', 'carry', 'carryWalk', 'carryJump', 'throwAim', 'thro
 // à une main (la droite) ; dérapage et freinage en sprint : la prise traîne sous sa main
 const HOLD1_ANIMS = ['grab1', 'carry1', 'carryWalk1', 'carryJump1', 'run1', 'drop1', 'rise1', 'throwAim1', 'throw1', 'skid', 'brake'];
 const holdPts = {};
-let objSprites, objGlow, crackImgs, peopleImgs, bloodImgs, ashImgs, flameImgs, fogImg, waterImgs, foamImgs, rimImgs, shadows, ui;
+let objSprites, objGlow, icons, crackImgs, peopleImgs, bloodImgs, ashImgs, flameImgs, fogImg, waterImgs, foamImgs, rimImgs, shadows, ui;
 const blockCache = new Map();
 
 function block(type, h, v) {
@@ -128,15 +136,48 @@ function block(type, h, v) {
 
 const tick = () => new Promise(r => setTimeout(r, 0));
 
-async function loadAssets() {
+// Cuisson de Brainless avec ses mutations visibles `M` (toutes les anims x 8 directions).
+let nomuKey = null; // les mutations visibles des sprites cuits
+let baking = null; // { p } : recuisson en cours après une mutation (le jeu attend)
+function nomuJobs(M) {
   const jobs = [];
   for (const anim in ANIMS) {
     nomu[anim] = [];
     for (let d = 0; d < 8; d++) {
       const list = nomu[anim][d] = [];
-      for (let f = 0; f < ANIMS[anim].frames; f++) jobs.push(() => { list[f] = toSprite(renderNomu(anim, f / ANIMS[anim].frames, d)); });
+      for (let f = 0; f < ANIMS[anim].frames; f++) jobs.push(() => { list[f] = toSprite(renderNomu(anim, f / ANIMS[anim].frames, d, { muts: M }), atlasNomu); });
     }
   }
+  return jobs;
+}
+function bakeHoldPts(M) {
+  for (const anim of HOLD_ANIMS.concat(HOLD1_ANIMS)) {
+    const one = HOLD1_ANIMS.includes(anim);
+    holdPts[anim] = [];
+    for (let d = 0; d < 8; d++) holdPts[anim][d] = Array.from({ length: ANIMS[anim].frames }, (_, f) => holdPoint(anim, f / ANIMS[anim].frames, d, one, sizeOf(M)));
+  }
+}
+const lookKey = (M) => Object.keys(M).sort().join(',');
+// Après une mutation visible (ou au chargement d'un monde) : on recuit Brainless, par petits bouts.
+async function rebakeNomu() {
+  const M = looks(player.muts), key = lookKey(M);
+  if (key === nomuKey || baking) return;
+  baking = { p: 0 };
+  resetAtlas(atlasNomu);
+  const jobs = nomuJobs(M);
+  for (let i = 0; i < jobs.length; i++) {
+    jobs[i]();
+    if (i % 24 === 0) { baking.p = i / jobs.length; await tick(); }
+  }
+  bakeHoldPts(M);
+  nomuKey = key;
+  baking = null;
+  if (lookKey(looks(player.muts)) !== key) rebakeNomu(); // muté encore pendant la cuisson
+}
+
+async function loadAssets() {
+  const jobs = nomuJobs({});
+  nomuKey = '';
   // villageois et chevaliers : chaque anim x 8 directions
   peopleImgs = {};
   for (const type in PEOPLE) {
@@ -161,11 +202,10 @@ async function loadAssets() {
       }
     }
   }
-  for (const anim of HOLD_ANIMS.concat(HOLD1_ANIMS)) {
-    const one = HOLD1_ANIMS.includes(anim);
-    holdPts[anim] = [];
-    for (let d = 0; d < 8; d++) holdPts[anim][d] = Array.from({ length: ANIMS[anim].frames }, (_, f) => holdPoint(anim, f / ANIMS[anim].frames, d, one));
-  }
+  bakeHoldPts({});
+  icons = {};
+  const ic = buildIcons();
+  for (const id in ic) icons[id] = toCanvas(ic[id]);
   fogImg = toCanvas(fogBuffer());
   const total = jobs.length + 5;
   let done = 0;
@@ -177,7 +217,7 @@ async function loadAssets() {
   }
   const raw = SP.buildObjectSprites();
   objSprites = {};
-  for (const id in raw) objSprites[id] = raw[id].map(toSprite);
+  for (const id in raw) objSprites[id] = raw[id].map((b) => toSprite(b));
   done++; progress(); await tick();
   // bâtiments et objets de village, avec leur couche de fenêtres allumées pour la nuit
   const vs = buildVillageSprites();
@@ -247,6 +287,9 @@ const player = { x: 0, y: 0, z: 0, dir: 2, anim: 'idle', t: 0, spd: 0, phase: 0,
   // attraper / lancer : ce qu'il porte ({ o } objet du décor ou { n } habitant/animal, w = poids),
   // visée du lancer (bouton maintenu) et force
   burnT: 0, // en feu
+  // mutations choisies, alters (niveau, équipés : 3 emplacements), choix de mutation en attente,
+  // inventaire (36 cases, les 9 premières = la barre), case choisie, nid où il se réveille
+  muts: [], alterLv: {}, equip: [], pendingLv: 0, inv: Array(36).fill(null), sel: 0, spawn: null, meatAcc: 0, sleep: null, spikeT: 0,
   held: null, grabTarget: null, grabArm: false, grabHoldT: 0, aiming: false, throwPow: 0, throwPower: 0 };
 const npcs = []; // villageois et chevaliers autour de Brainless
 const vstate = new Map(); // id du village -> { populated, anger, alarm }
@@ -270,6 +313,7 @@ function resetState() {
   for (const k in stats) stats[k] = 0;
   npcs.length = particles.length = flyers.length = fx.length = decals.length = bloods.length = thrown.length = 0;
   hits.clear(); vstate.clear(); bumpT.clear(); fires.clear();
+  drops.length = 0; mutChoice = null; invUI = null; toast = null;
   scent = null; msg = null; shake = 0; windT = 0; tod = 0.3; curVillage = null;
   Object.assign(weather, { kind: 'clear', left: 40, rain: 0, cloud: 0, fog: 0, storm: 0, flash: 0, boltT: 6 });
   weather.drops.length = weather.flakes.length = thunders.length = 0;
@@ -287,6 +331,7 @@ function startWorld(meta) {
   mode = 'play';
   hintT = 9;
   showMsg(meta.name, 2.5);
+  rebakeNomu(); // ses mutations visibles (rien à faire s'il n'en a pas)
 }
 
 function quitToMenu() {
@@ -307,6 +352,10 @@ function load(s) {
       tod = s.tod ?? tod;
       player.x = s.x; player.y = s.y;
       player.hunger = s.hunger ?? 100; player.xp = s.xp ?? 0; player.level = s.level ?? 1; player.alters = s.alters || [];
+      player.muts = s.muts || []; player.alterLv = s.alterLv || {}; player.equip = s.equip || player.alters.slice(0, 3);
+      player.pendingLv = s.pendingLv || 0; player.spawn = s.spawn || null; player.meatAcc = s.meatAcc || 0;
+      if (Array.isArray(s.inv)) player.inv = Array.from({ length: INV }, (_, i) => (s.inv[i] && ITEMS[s.inv[i].id] ? s.inv[i] : null));
+      world.chests = new Map(s.chests || []);
       player.hp = s.hp ?? maxHp();
       if (world.walkable(Math.floor(player.x), Math.floor(player.y))) return;
     }
@@ -318,7 +367,9 @@ function load(s) {
 function save() {
   if (mode !== 'play' || !current) return;
   saveWorldData(current.id, {
-    x: player.x, y: player.y, hp: player.hp, hunger: player.hunger, xp: player.xp, level: player.level, alters: player.alters, tod, stats, mods: [...world.mods], terr: [...world.terr], wear: [...world.wear], deaths: [...world.deaths],
+    x: player.x, y: player.y, hp: player.hp, hunger: player.hunger, xp: player.xp, level: player.level, alters: player.alters, tod,
+    muts: player.muts, alterLv: player.alterLv, equip: player.equip, pendingLv: player.pendingLv, spawn: player.spawn, meatAcc: player.meatAcc,
+    inv: player.inv, chests: [...world.chests], stats, mods: [...world.mods], terr: [...world.terr], wear: [...world.wear], deaths: [...world.deaths],
   });
 }
 document.addEventListener('visibilitychange', () => { if (document.hidden) save(); });
@@ -388,9 +439,15 @@ function onTouchStart(e) {
   e.preventDefault();
   unlockAudio();
   setMode('touch');
+  if (mode === 'play' && overlayOpen()) {
+    for (const t of e.changedTouches) overlayTap(...toGame(t));
+    return;
+  }
   for (const t of e.changedTouches) {
     const [x, y] = toGame(t);
     if (Math.hypot(x - muteBtn.x, y - muteBtn.y) < muteBtn.r + 6) { toggleMute(); sfx.ui(); continue; }
+    if (mode === 'play' && Math.hypot(x - bagBtn.x, y - bagBtn.y) < bagBtn.r + 4) { openInv(); return; }
+    if (mode === 'play' && hotbarTap(x, y)) continue;
     if (mode === 'play' && Math.hypot(x - musicBtn.x, y - musicBtn.y) < musicBtn.r + 4) { switchMusic(); continue; }
     if (mode === 'play' && Math.hypot(x - homeBtn.x, y - homeBtn.y) < homeBtn.r + 5) { sfx.ui(); quitToMenu(); return; }
     const k = buttonAt(x, y, 6);
@@ -443,6 +500,10 @@ window.addEventListener('keydown', (e) => {
   unlockAudio();
   setMode('keys');
   if (mode !== 'play') { keys.delete(e.code); return; } // le menu gère ses touches
+  if (overlayOpen()) { keys.delete(e.code); e.preventDefault(); overlayKey(e); return; } // sac ou choix de mutation
+  if (e.code === 'KeyI' || e.code === 'Tab') { e.preventDefault(); openInv(); return; }
+  if (/^Digit[1-9]$/.test(e.code)) player.sel = +e.code[5] - 1;
+  if (e.code === 'KeyT') useItem();
   if (e.code === 'KeyM') toggleMute();
   if (e.code === 'Escape') { quitToMenu(); return; }
   if (e.code === 'KeyF') toggleFullscreen();
@@ -454,6 +515,8 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyN') switchMusic();
 });
 window.addEventListener('keyup', (e) => keys.delete(e.code));
+// molette : change de case dans la barre
+canvas.addEventListener('wheel', (e) => { if (mode === 'play' && !overlayOpen()) player.sel = (player.sel + (e.deltaY > 0 ? 1 : 8)) % 9; }, { passive: true });
 window.addEventListener('blur', () => { keys.clear(); mouse.punch = mouse.charge = mouse.grab = false; });
 
 // Souris (PC) : clic gauche = coup (maintenir = coup chargé), clic droit = frappe au sol.
@@ -461,7 +524,10 @@ canvas.addEventListener('mousedown', (e) => {
   unlockAudio();
   setMode('keys');
   const x = e.clientX / cssPerPx, y = e.clientY / cssPerPx;
+  if (mode === 'play' && overlayOpen()) { overlayTap(x, y); return; }
   if (Math.hypot(x - muteBtn.x, y - muteBtn.y) < muteBtn.r + 6) { toggleMute(); sfx.ui(); return; }
+  if (mode === 'play' && Math.hypot(x - bagBtn.x, y - bagBtn.y) < bagBtn.r + 4) { openInv(); return; }
+  if (mode === 'play' && hotbarTap(x, y)) return;
   if (mode === 'play' && Math.hypot(x - musicBtn.x, y - musicBtn.y) < musicBtn.r + 4) { switchMusic(); return; }
   if (mode === 'play' && Math.hypot(x - homeBtn.x, y - homeBtn.y) < homeBtn.r + 5) { sfx.ui(); quitToMenu(); return; }
   if (e.button === 0) { mouse.punch = true; input.punch = true; }
@@ -503,7 +569,13 @@ function readPad() {
   if (pad.startPressed && mode === 'play') quitToMenu();
   if (pad.sniffPressed) input.sniff = true;
   if (pad.grabPressed) input.grab = true;
-  return pad.x || pad.y ? [pad.x, pad.y] : null;
+  // croix : gauche/droite = case de la barre, haut = utiliser, bas = sac
+  const P = pad.pressed || [];
+  if (P[14]) player.sel = (player.sel + 8) % 9;
+  if (P[15]) player.sel = (player.sel + 1) % 9;
+  if (P[12]) useItem();
+  if (P[13]) openInv();
+  return pad.sx || pad.sy ? [pad.sx, pad.sy] : null;
 }
 
 function keyboardVector() {
@@ -702,6 +774,8 @@ function damage(tx, ty, dmg) {
     burst(cx, cy, gz + 2, cols.concat(o === O.PLANKS ? [] : LEAF_COLS), 6, { leaf: o !== O.PLANKS, up: 25, g: 30 });
   }
   world.setObj(tx, ty, next);
+  if (DROPS[o]) spawnDrops(cx, cy, DROPS[o]); // ses matériaux
+  if (o === O.CHEST && world.chests.has(key)) { spawnDrops(cx, cy, world.chests.get(key).filter(Boolean).map((s) => [s.id, s.n])); world.chests.delete(key); }
   if (info.prop === 'lantern') oilSplash(tx, ty); // l'huile de la lanterne s'enflamme
   if (info.village) crime(info.crime || 0.2, cx, cy);
   return true;
@@ -750,6 +824,7 @@ function damageBuilding(ax, ay, dmg, quiet) { // quiet : le feu (pas un méfait 
     burst(ax, ay, gz + 6, DUST_COLS.concat(cols), 60, { up: 60, speed: 3.5, g: 60, life: 1.6, spread: 18, big: 0.6 });
     burst(ax, ay, top, cols.concat(WOOD_COLS), 30, { up: 80, speed: 3, big: 0.7 });
     if (!quiet) crime(4, ax, ay);
+    if (!quiet) spawnDrops(ax, ay, RUIN_DROPS[info.mat] || []); // ce qu'on récupère dans les décombres
     releaseHome(ax, ay);
   } else {
     sfx.buildingCrack();
@@ -847,7 +922,14 @@ function doPunchHit(strong) {
     const d = Math.hypot(n.x - hx, n.y - hy);
     if (d < wd) { wd = d; who = n; }
   }
-  if (who) { hitNpc(who, (strong ? 2 : 1) * strength(), dx, dy, strong ? 0.35 : 0.15); shake = Math.max(shake, strong ? 2.5 : 1.5); return; }
+  if (strong && mut('tail')) tailSweep(); // QUEUE : le 3e coup balaie tout autour
+  if (mut('fists')) fistShock(hx, hy); // POINGS-MASSES : onde de choc au point d'impact
+  if (who) {
+    hitNpc(who, (strong ? 2 : 1) * strength(), dx, dy, strong ? 0.35 : 0.15);
+    if (mut('claws') && alive(who)) who.bleedT = 3; // GRIFFES D'ACIER : il saigne
+    shake = Math.max(shake, strong ? 2.5 : 1.5);
+    return;
+  }
   let best = null, bestD = 0.8;
   for (let ty = Math.floor(hy) - 1; ty <= Math.floor(hy) + 1; ty++) {
     for (let tx = Math.floor(hx) - 1; tx <= Math.floor(hx) + 1; tx++) {
@@ -878,6 +960,7 @@ function doRushHit() {
     if (n.inside || n.held || !alive(n) || !inFan(n.x, n.y)) continue;
     const rx = n.x - player.x, ry = n.y - player.y, d = Math.hypot(rx, ry) || 1;
     hitNpc(n, strength(), rx / d, ry / d, 0.12);
+    if (mut('claws') && alive(n)) n.bleedT = 3;
     hit = true;
   }
   const houses = new Set(); // un bâtiment couvre 4 tuiles : un seul coup par salve
@@ -1161,11 +1244,15 @@ function update(dt) {
   if (player.dead) {
     updateDead(dt);
     input.punch = input.jump = input.sniff = input.grab = false;
+  } else if (player.sleep) {
+    updateSleep(dt);
+    input.punch = input.jump = input.sniff = input.grab = false;
+    setAnim('idle');
   } else {
     // --- saut
     if (input.jump && !player.air && !player.action && !player.charging && !player.aiming && !player.slide && player.water < 2) {
       player.air = true;
-      player.vz = JUMP_V * (player.sprinting ? 1.1 : 1) * (has('leap') ? 1.6 : 1);
+      player.vz = JUMP_V * (player.sprinting ? 1.1 : 1) * (has('leap') ? 1.4 + 0.2 * alterLv('leap') : 1) * (mut('hams') ? 1.35 : 1);
       player.bigJump = has('leap');
       sfx.jump();
       burst(player.x, player.y, player.z, DUST_COLS, 6, { up: 15, speed: 1.2, g: 60, life: 0.5, spread: 1 });
@@ -1268,9 +1355,11 @@ function update(dt) {
 
     // flairer : il s'arrête, lève la tête et renifle l'air
     player.nearCorpse = player.action || player.held ? null : corpseNear();
+    player.interact = player.action || player.held || player.nearCorpse ? null : builtNear();
     if (input.sniff && !player.action && !player.charging && !player.held && !player.air && !player.slide && player.water < 2) {
       player.sprinting = false;
       if (player.nearCorpse) startEat(player.nearCorpse);
+      else if (player.interact) interact(player.interact);
       else { startAction('sniff'); sfx.sniff(); }
     }
     input.punch = input.jump = input.sniff = input.grab = false;
@@ -1281,8 +1370,8 @@ function update(dt) {
       const A = ANIMS[player.action];
       const dur = A.frames / A.fps;
       const prev = player.actionT;
-      player.actionT += dt / dur;
       const act = player.action;
+      player.actionT += dt / dur * (act === 'eat' && mut('jaw') ? 2 : 1); // MACHOIRE BEANTE : il dévore deux fois plus vite
       const hitAt = HIT_AT[act] ?? 0.4;
       if (act === 'eat') for (const c of CHOMPS) if (prev < c && player.actionT >= c) chomp();
       if (prev < hitAt && player.actionT >= hitAt) {
@@ -1326,7 +1415,7 @@ function update(dt) {
       if (!player.air) player.sprinting = run;
       player.moving = mag > 0.15;
       // vitesse réelle : rattrape en douceur la vitesse voulue (sprint, ou selon le joystick)
-      const target = player.water === 2 ? 0 : player.sprinting ? SPRINT_V * (has('engine') ? 1.35 : 1)
+      const target = player.water === 2 ? 0 : player.sprinting ? SPRINT_V * (has('engine') ? 1.2 + 0.15 * alterLv('engine') : 1) * (mut('legs') ? 1.25 : 1)
         : stickSpeed(mag) * (player.water ? 0.62 : 1) * (player.held ? 1.1 - 0.15 * player.held.w : 1); // plus c'est lourd, plus il est lent
       player.spd += Math.max(-dt * 9, Math.min(dt * (player.sprinting ? 12 : 6), target - player.spd));
       // passage debout <-> quatre pattes : il plonge sur les mains, ou se redresse en courant
@@ -1377,7 +1466,7 @@ function update(dt) {
     }
     // un coup, une charge ou un freinage interrompt le galop : pas de « redressement » après coup
     if (player.action || player.charging || player.aiming || (player.slide && player.slide.kind === 'brake')) { player.quad = false; player.trans = null; }
-    if (player.sprinting && !player.air) player.stamina = Math.max(0, player.stamina - dt / 4.5 / (1 + 0.08 * (player.level - 1)) * (has('engine') ? 0.6 : 1));
+    if (player.sprinting && !player.air) player.stamina = Math.max(0, player.stamina - dt / 4.5 / (1 + 0.08 * (player.level - 1)) * (has('engine') ? 0.7 - 0.1 * alterLv('engine') : 1) / (mut('lungs') ? 1.5 : 1));
     else if (!player.sprinting) player.stamina = Math.min(1, player.stamina + dt / (player.tired ? 3 : 5));
     const A = ANIMS[player.anim];
     // les allures et les transitions règlent elles-mêmes leur image
@@ -1410,7 +1499,10 @@ function update(dt) {
   healGround(dt);
 
   updateThrown(dt);
+  updateDrops(dt);
   updateParticles(dt);
+  // un niveau gagné : le choix de mutation s'ouvre dès qu'il a les mains libres de toute action
+  if (player.pendingLv > 0 && !mutChoice && !baking && !player.dead && !player.action && !player.air && !player.sleep) openMutChoice();
   for (let i = decals.length - 1; i >= 0; i--) if ((decals[i].age += dt) > 9) decals.splice(i, 1);
   updateMusic(dt, { night: darkness(), danger: dangerLevel(), rain: weather.rain });
   updateAmbience(dt, { night: darkness() > 0.5, water: waterNearby(), height: world.hAt(Math.floor(player.x), Math.floor(player.y)),
@@ -1441,6 +1533,7 @@ function walkSteps() {
     if (player.water) { sfx.splash(0.3); burst(player.x, player.y, WATER_LINE, WATER_COLS, 4, { up: 30, speed: 0.6, g: 120, life: 0.4, spread: 0 }); }
     else {
       sfx.step(surfaceAt(player.x, player.y), player.held ? 1 + player.held.w * 0.25 : 1);
+      if (mut('mass')) shake = Math.max(shake, 1); // MASSE : le sol tremble sous ses pas
       if (player.held && player.held.w >= 2.5) {
         // sous un arbre ou un gros rocher, chaque pas fait trembler le sol
         shake = Math.max(shake, 1.2);
@@ -1524,7 +1617,12 @@ function waterNearby() {
 // opts : { kb : force du recul, lift : il décolle du sol }
 function hurtPlayer(dmg, fx0, fy0, opts = {}) {
   if (player.dead || player.invuln > 0) return;
-  dmg *= [0.6, 1, 1.5][world.p.difficulty] * (has('absorb') ? 0.5 : 1);
+  dmg *= [0.6, 1, 1.5][world.p.difficulty] * (has('absorb') ? 0.6 - 0.1 * alterLv('absorb') : 1) * (mut('carapace') ? 0.75 : 1);
+  if (mut('spikes')) {
+    // dos d'épines : celui qui le frappe au corps à corps s'y empale
+    const n = npcs.find((m) => alive(m) && !m.held && Math.hypot(m.x - fx0, m.y - fy0) < 0.6);
+    if (n) { const d = Math.hypot(n.x - player.x, n.y - player.y) || 1; hitNpc(n, 2 * strength(), (n.x - player.x) / d, (n.y - player.y) / d, 0.3); }
+  }
   if (has('absorb')) burst(player.x, player.y, player.z + 20, ['#ffe28a', '#ffffff'], 6, { up: 20, speed: 2, life: 0.3 }); // le coup rebondit
   player.hp -= dmg;
   player.lastHurt = time;
@@ -1542,7 +1640,7 @@ function hurtPlayer(dmg, fx0, fy0, opts = {}) {
     player.slide = null; player.sprinting = false; player.mv = null;
     if (opts.lift && !player.air && !player.water) { player.air = true; player.vz = opts.lift; player.jz = 0.1; player.bigJump = false; }
     if (player.action === 'eat' && player.eating) { player.eating.eaten = false; player.eating = null; } // repas interrompu
-    dropHeld(); // le choc lui fait lâcher ce qu'il portait
+    if (!mut('grip')) dropHeld(); // le choc lui fait lâcher ce qu'il portait (sauf POIGNE)
     startAction('hurt');
     sfx.bodyHit(false, true);
   }
@@ -1570,7 +1668,9 @@ function updateDead(dt) {
   D.t += dt;
   if (D.t > 3.4 && !D.moved) {
     D.moved = true;
-    const sp = world.findSpawn();
+    // il se réveille dans son nid s'il en a un, sinon au point de départ
+    const nest = player.spawn && world.objAt(player.spawn[0], player.spawn[1]) === O.NEST ? { x: player.spawn[0] + 0.5, y: player.spawn[1] + 1.5 } : null;
+    const sp = nest && world.walkable(Math.floor(nest.x), Math.floor(nest.y)) ? nest : world.findSpawn();
     player.x = sp.x; player.y = sp.y; player.z = groundZ(sp.x, sp.y);
     player.hp = maxHp();
     player.hunger = Math.max(player.hunger, 50);
@@ -1596,7 +1696,7 @@ function updateHealth(dt) {
   }
   // La faim : elle descend toujours, plus vite en sprint. Le ventre vide, il dépérit.
   if (!player.dead) {
-    player.hunger = Math.max(0, player.hunger - dt * 100 / 420 * [0.7, 1, 1.3][world.p.difficulty] * (player.sprinting ? 1.8 : 1));
+    player.hunger = Math.max(0, player.hunger - dt * 100 / 420 * [0.7, 1, 1.3][world.p.difficulty] * (player.sprinting ? 1.8 : 1) * (mut('stomach') ? 0.6 : 1));
     if (player.hunger <= 0) {
       player.hp -= dt * 1.5;
       if (!player.starveMsg) { player.starveMsg = true; showMsg('IL A FAIM...', 3, 'DEVORE QUELQUE CHOSE'); }
@@ -1604,9 +1704,9 @@ function updateHealth(dt) {
     } else if (player.hunger > 20) player.starveMsg = false;
   }
   // Super régénération : quelques secondes sans coup, et ses blessures se referment (pas le ventre vide).
-  if (!player.dead && player.hp < maxHp() && time - player.lastHurt > 3 && player.hunger > 15) {
+  if (!player.dead && player.hp < maxHp() && time - player.lastHurt > (mut('brain') ? 1.8 : 3) && player.hunger > 15) {
     if (!player.regen) { player.regen = true; sfx.regen(); }
-    player.hp = Math.min(maxHp(), player.hp + 22 * dt);
+    player.hp = Math.min(maxHp(), player.hp + 22 * (mut('brain') ? 2 : 1) * dt);
     if (Math.random() < dt * 10) {
       burst(player.x + (Math.random() - 0.5) * 0.6, player.y + (Math.random() - 0.5) * 0.6, player.z + 6 + Math.random() * 20,
         ['#8f9cff', '#c9d0ff', '#ff8a9a'], 1, { up: 18, g: -10, speed: 0.1, life: 0.8, spread: 0 });
@@ -1615,7 +1715,7 @@ function updateHealth(dt) {
 }
 
 // ---------------------------------------------------------------- faim, évolution, alters
-const LEVEL_AT = [0, 3, 8, 15, 25, 40, 60, 85, 115, 150, 200];
+const LEVEL_AT = [0, 3, 8, 15, 25, 40, 60, 85, 115, 150, 200, 260, 330, 410, 500, 600, 720, 850, 1000];
 const ALTERS = {
   absorb: { name: 'ABSORPTION', desc: 'LES COUPS LUI FONT DEUX FOIS MOINS MAL' },
   leap: { name: 'BOND', desc: 'SAUTS GEANTS, ONDE DE CHOC A LA RECEPTION' },
@@ -1623,9 +1723,12 @@ const ALTERS = {
   iron: { name: 'FER', desc: 'SES COUPS FONT 50% DE DEGATS EN PLUS' },
   storm: { name: 'FOUDRE', desc: 'SES COUPS CHARGES FONT TOMBER LA FOUDRE' },
 };
-const has = (a) => player.alters.includes(a);
-const maxHp = () => 100 + 15 * (player.level - 1);
-const strength = () => (1 + 0.12 * (player.level - 1)) * (has('iron') ? 1.5 : 1);
+// un alter compte s'il est équipé (3 emplacements) ; dévorer un autre héros du même type le monte (niveau 1 à 3)
+const has = (a) => player.equip.includes(a);
+const alterLv = (a) => (has(a) ? player.alterLv[a] || 1 : 0);
+const mut = (id) => player.muts.includes(id);
+const maxHp = () => 100 + 15 * (player.level - 1) + (mut('mass') ? 40 : 0);
+const strength = () => (1 + 0.12 * (player.level - 1)) * (has('iron') ? 1.3 + 0.2 * alterLv('iron') : 1) * (mut('arms') ? 1.25 : 1) * (mut('claws') ? 1.15 : 1);
 const fighter = (n) => n.kind === 'knight' || n.kind === 'hero';
 
 // Ce que rapporte une proie : de quoi manger, et des points d'évolution.
@@ -1657,7 +1760,12 @@ function startEat(n) {
 function chomp() {
   const n = player.eating;
   if (!n || !npcs.includes(n)) return;
-  player.hunger = Math.min(100, player.hunger + mealOf(n).food / CHOMPS.length);
+  const food = mealOf(n).food / CHOMPS.length;
+  // repu : le reste se garde en viande crue dans l'inventaire
+  player.meatAcc += Math.max(0, player.hunger + food - 100);
+  player.hunger = Math.min(100, player.hunger + food);
+  while (player.meatAcc >= 18) { player.meatAcc -= 18; giveOrDrop('meat', 1); toastItem('meat', 1); }
+  if (mut('jaw')) player.hp = Math.min(maxHp(), player.hp + 6);
   burst(n.x, n.y, n.z + 3, BLOOD_COLS, 8, { up: 40, speed: 1.2, life: 0.6 });
   sfx.crunch();
   if (Math.random() < 0.5) sfx.splat();
@@ -1673,9 +1781,17 @@ function finishEat() {
   bloods.push({ x: n.x, y: n.y, h: world.hAt(Math.floor(n.x), Math.floor(n.y)), img: bloodImgs[0], age: 0 });
   gainEvo(mealOf(n).evo);
   const alter = PEOPLE[n.type] && PEOPLE[n.type].alter;
-  if (alter && !has(alter)) {
+  if (alter && player.alters.includes(alter) && (player.alterLv[alter] || 1) < 3) {
+    // le même alter une deuxième (troisième) fois : il monte de niveau
+    player.alterLv[alter] = (player.alterLv[alter] || 1) + 1;
+    showMsg(ALTERS[alter].name + ' NIVEAU ' + player.alterLv[alter], 3.5, 'ALTER PLUS PUISSANT');
+    sfx.mutate();
+  } else if (alter && !player.alters.includes(alter)) {
     player.alters.push(alter);
-    showMsg('ALTER DEVORE : ' + ALTERS[alter].name, 4, ALTERS[alter].desc);
+    player.alterLv[alter] = 1;
+    const slot = player.equip.length < 3;
+    if (slot) player.equip.push(alter);
+    showMsg('ALTER DEVORE : ' + ALTERS[alter].name, 4, slot ? ALTERS[alter].desc : 'EQUIPE-LE DANS LE SAC (ONGLET ALTERS)');
     sfx.roar(1);
     burst(player.x, player.y, player.z + 20, ['#c9a0ff', '#ffffff', '#8f9cff'], 40, { up: 60, speed: 2.5, life: 1 });
     fx.push({ kind: 'ring', x: player.x, y: player.y, z: player.z, t: 0, r: 3 });
@@ -1687,7 +1803,8 @@ function gainEvo(x) {
   while (player.level < LEVEL_AT.length && player.xp >= LEVEL_AT[player.level]) {
     player.level++;
     player.hp = maxHp();
-    showMsg('EVOLUTION ! NIVEAU ' + player.level, 3.5, 'PLUS DE VIE, DES COUPS PLUS FORTS');
+    player.pendingLv++; // une mutation à choisir
+    showMsg('EVOLUTION ! NIVEAU ' + player.level, 3.5, 'UNE MUTATION APPARAIT...');
     sfx.roar(1);
     shake = Math.max(shake, 6);
     fx.push({ kind: 'ring', x: player.x, y: player.y, z: player.z, t: 0, r: 2.5 });
@@ -1714,7 +1831,7 @@ function landingShock() {
 // FOUDRE : ses gros coups font tomber des éclairs sur les ennemis proches.
 function lightningChain(power) {
   const targets = npcs.filter((n) => alive(n) && !n.inside && Math.hypot(n.x - player.x, n.y - player.y) < 7)
-    .sort((a, b) => Math.hypot(a.x - player.x, a.y - player.y) - Math.hypot(b.x - player.x, b.y - player.y)).slice(0, 2 + Math.round(power * 2));
+    .sort((a, b) => Math.hypot(a.x - player.x, a.y - player.y) - Math.hypot(b.x - player.x, b.y - player.y)).slice(0, 1 + alterLv('storm') + Math.round(power * 2));
   for (const n of targets) {
     fx.push({ kind: 'bolt', x: n.x, y: n.y, z: n.z, t: 0, seed: Math.random() * 1000 });
     ignite(Math.floor(n.x), Math.floor(n.y), 2);
@@ -1926,6 +2043,7 @@ function killNpc(n, crushed) {
   n.state = 'dead'; n.anim = crushed ? 'crushed' : 'dead'; n.t = 0;
   n.deadT = 0; n.air = false; n.jz = 0; n.vx = n.vy = 0; n.alertT = 0;
   if (n.v) deathsOf(n.v)[n.kind]++;
+  spawnDrops(n.x, n.y, lootOf(n)); // fer, casque, bouclier, emblème
   if (n.kind === 'knight' || n.kind === 'hero') stats.knights++; else if (n.kind === 'beast') stats.prey = (stats.prey || 0) + 1; else stats.victims++;
   const h = world.hAt(Math.floor(n.x), Math.floor(n.y));
   bloods.push({ x: n.x, y: n.y, h, img: bloodImgs[crushed ? 2 : 1], age: 0 });
@@ -2146,6 +2264,18 @@ function updateNpcs(dt) {
       continue;
     }
     if (n.burnT > 0 && burnNpc(n, dt)) continue;
+    if (n.bleedT > 0) {
+      // il saigne (GRIFFES D'ACIER)
+      n.bleedT -= dt; n.hp -= dt * 0.3;
+      if (Math.random() < dt * 8) burst(n.x, n.y, n.z + 8, BLOOD_COLS, 1, { up: 5, speed: 0.2, life: 0.5, spread: 6 });
+      if (n.hp <= 0) { n.bleedT = 0; killNpc(n, false); continue; }
+    }
+    if (!n.air && world.objAt(Math.floor(n.x), Math.floor(n.y)) === O.SPIKES && time - (n.spikeT ?? -9) > 1) {
+      // il marche sur un piège à piques
+      n.spikeT = time;
+      hitNpc(n, 2 * strength(), 0, 0, 0.2);
+      if (n.kind === 'beast' && alive(n)) { n.state = 'flee'; n.fleeT = 3; }
+    }
     n.alertT = Math.max(0, n.alertT - dt); n.flash = Math.max(0, n.flash - dt);
     n.cd -= dt; n.waveCd -= dt;
     if (n.inside) {
@@ -2187,7 +2317,7 @@ function updateNpcs(dt) {
         if ((n.hurtT -= dt) <= 0) n.state = 'chase';
         break;
       case 'flee': {
-        anim = 'flee';
+        anim = n.kind === 'civ' ? 'flee' : 'run'; // un chevalier en feu court, il n'a pas l'anim de fuite
         const ax = n.x - player.x, ay = n.y - player.y, l = Math.hypot(ax, ay) || 1;
         const c = Math.cos(n.fj), sn = Math.sin(n.fj);
         steer(n, n.x + (ax * c - ay * sn) / l * 2, n.y + (ax * sn + ay * c) / l * 2, 3.2 * n.speedK, dt);
@@ -2300,6 +2430,7 @@ function updateNpcs(dt) {
         if ((n.blockT -= dt) <= 0 && !player.charging) n.state = 'chase';
         break;
     }
+    if (!animsOf(n)[anim]) anim = animsOf(n).run ? 'run' : 'walk'; // une anim qu'il n'a pas : on ne plante pas
     if (n.anim !== anim) { n.anim = anim; n.t = 0; }
     n.t += dt * animsOf(n)[anim].fps;
   }
@@ -2536,6 +2667,670 @@ function drawWeather(dt) {
   }
 }
 
+// ---------------------------------------------------------------- mutations : effets de combat
+// QUEUE : le 3e coup de l'enchaînement fouette tout autour de lui.
+function tailSweep() {
+  const R = 1.7;
+  fx.push({ kind: 'ring', x: player.x, y: player.y, z: player.z + 6, t: 0, r: R });
+  burst(player.x, player.y, player.z, DUST_COLS, 14, { up: 15, speed: 3, g: 60, life: 0.5, spread: 1 });
+  for (const n of npcs) {
+    const rx = n.x - player.x, ry = n.y - player.y, d = Math.hypot(rx, ry);
+    if (n.inside || n.held || !alive(n) || d > R || d < 0.01) continue;
+    hitNpc(n, 1.5 * strength(), rx / d, ry / d, 0.4);
+  }
+  for (let ty = Math.floor(player.y) - 2; ty <= Math.floor(player.y) + 2; ty++) for (let tx = Math.floor(player.x) - 2; tx <= Math.floor(player.x) + 2; tx++) {
+    const info = OBJ_INFO[world.objAt(tx, ty)];
+    if (info && info.small && Math.hypot(tx + 0.5 - player.x, ty + 0.5 - player.y) < R) damage(tx, ty, 1);
+  }
+  sfx.whoosh();
+}
+
+// POINGS-MASSES : une petite onde de choc là où le poing frappe.
+function fistShock(x, y) {
+  fx.push({ kind: 'ring', x, y, z: player.z + 2, t: 0, r: 1.1 });
+  burst(x, y, player.z, DUST_COLS.concat(ROCK_COLS), 8, { up: 30, speed: 2, life: 0.5 });
+  for (const n of npcs) {
+    const d = Math.hypot(n.x - x, n.y - y);
+    if (n.inside || n.held || !alive(n) || d > 1.1 || d < 0.3) continue;
+    hitNpc(n, strength(), (n.x - x) / d, (n.y - y) / d, 0.25);
+  }
+  crackTile(Math.floor(x), Math.floor(y), 1);
+}
+
+// ---------------------------------------------------------------- inventaire
+const INV = 36, CHEST_N = 18;
+const drops = []; // objets tombés au sol, qui volent jusqu'à lui
+let toast = null; // « +2 BOIS » au-dessus de la barre
+
+// Range `n` objets dans `slots` (piles de 64). Renvoie ce qui n'a pas trouvé de place.
+function addItem(id, n, slots = player.inv) {
+  for (let i = 0; i < slots.length && n > 0; i++) {
+    const s = slots[i];
+    if (s && s.id === id && s.n < STACK) { const k = Math.min(n, STACK - s.n); s.n += k; n -= k; }
+  }
+  for (let i = 0; i < slots.length && n > 0; i++) if (!slots[i]) { const k = Math.min(n, STACK); slots[i] = { id, n: k }; n -= k; }
+  return n;
+}
+const countItem = (id) => player.inv.reduce((t, s) => t + (s && s.id === id ? s.n : 0), 0);
+function takeItem(id, n) {
+  if (countItem(id) < n) return false;
+  for (let i = INV - 1; i >= 0 && n > 0; i--) {
+    const s = player.inv[i];
+    if (!s || s.id !== id) continue;
+    const k = Math.min(n, s.n);
+    s.n -= k; n -= k;
+    if (!s.n) player.inv[i] = null;
+  }
+  return true;
+}
+function giveOrDrop(id, n) {
+  const left = addItem(id, n);
+  if (left) spawnDrops(player.x, player.y, [[id, left]]);
+}
+function toastItem(id, n) {
+  toast = toast && toast.id === id && toast.t > 0.5 ? { id, n: toast.n + n, t: 2 } : { id, n, t: 2 };
+}
+
+// Ce que rapporte ce qui est cassé : des objets qui sautent du point d'impact.
+function spawnDrops(x, y, list) {
+  for (const [id, n] of list) {
+    for (let k = 0; k < n; k++) {
+      const a = Math.random() * Math.PI * 2, sp = 0.6 + Math.random() * 1.2;
+      drops.push({ id, x, y, z: groundZ(x, y) + 6, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, vz: 50 + Math.random() * 40, t: 0 });
+    }
+  }
+  if (drops.length > 160) drops.splice(0, drops.length - 160);
+}
+
+function updateDrops(dt) {
+  for (let i = drops.length - 1; i >= 0; i--) {
+    const d = drops[i];
+    d.t += dt;
+    const dist = Math.hypot(player.x - d.x, player.y - d.y);
+    if (d.t > 0.6 && dist < 2.6 && !player.dead) {
+      // aimanté : il file vers Brainless
+      const k = Math.min(1, dt * 9 / Math.max(0.2, dist));
+      d.x += (player.x - d.x) * k; d.y += (player.y - d.y) * k; d.z += (player.z + 12 - d.z) * k;
+      if (dist < 0.45 && addItem(d.id, 1) === 0) { drops.splice(i, 1); sfx.pickup(); toastItem(d.id, 1); }
+      continue;
+    }
+    d.vz -= 260 * dt;
+    d.x += d.vx * dt; d.y += d.vy * dt; d.z += d.vz * dt;
+    const gz = groundZ(d.x, d.y);
+    if (d.z < gz) { d.z = gz; d.vz = Math.abs(d.vz) > 30 ? -d.vz * 0.35 : 0; d.vx *= 0.5; d.vy *= 0.5; }
+    if (d.t > 150) drops.splice(i, 1);
+  }
+  if (toast && (toast.t -= dt) <= 0) toast = null;
+}
+
+function drawDrop(d, ox, oy) {
+  const sx = ox + Math.round(isoX(d.x, d.y)), sy = oy + Math.round(isoY(d.x, d.y));
+  const gz = Math.round(groundZ(d.x, d.y)), bob = d.t > 0.6 ? Math.round(Math.sin(time * 4 + d.x * 3) * 1.5) : 0;
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.fillRect(sx - 3, sy - gz, 7, 2);
+  const ic = icons[d.id];
+  ctx.drawImage(ic, sx - 6, sy - Math.round(d.z) - 10 + bob);
+}
+
+// Ce qu'il casse lâche ses matériaux (un bâtiment effondré : selon ce qu'il était).
+const RUIN_DROPS = { thatch: [['straw', 4], ['wood', 3]], tile: [['wood', 4], ['stone', 2]], slate: [['wood', 3], ['stone', 3]], barn: [['wood', 6]], stone: [['stone', 6]] };
+
+// Une proie qui meurt peut laisser du fer et des trophées.
+function lootOf(n) {
+  if (n.kind === 'knight') return [['iron', 1 + (Math.random() < 0.5 ? 1 : 0)]].concat(Math.random() < 0.3 ? [['helmet', 1]] : [], Math.random() < 0.2 ? [['shield', 1]] : []);
+  if (n.kind === 'hero') return [['emblem', 1], ['iron', 2]];
+  return [];
+}
+
+// Manger ou poser ce qui est dans la case choisie de la barre.
+function useItem() {
+  const s = player.inv[player.sel];
+  if (!s) { showMsg('CASE VIDE', 1); return; }
+  const it = ITEMS[s.id];
+  if (it.kind === 'food') {
+    if (player.hunger >= 99 && player.hp >= maxHp()) { showMsg("IL N'A PAS FAIM", 1.2); return; }
+    player.hunger = Math.min(100, player.hunger + it.food);
+    player.hp = Math.min(maxHp(), player.hp + it.hp);
+    s.n--; if (!s.n) player.inv[player.sel] = null;
+    sfx.crunch();
+    burst(player.x, player.y, player.z + 24, s.id === 'berries' ? ['#a8162a', '#e8283c', '#4a923d'] : BLOOD_COLS, 6, { up: 25, speed: 0.8, life: 0.5 });
+    return;
+  }
+  if (it.kind === 'place') { tryPlace(s); return; }
+  showMsg(it.name, 1.2, it.kind === 'trophy' ? 'UN TROPHEE DE CHASSE' : 'SERT A FABRIQUER (SAC)');
+}
+
+// La tuile devant lui où poser une construction, et si c'est possible.
+function placeTarget() {
+  const [dx, dy] = dirWorld(player.dir);
+  let tx = Math.floor(player.x + dx * 1.05), ty = Math.floor(player.y + dy * 1.05);
+  if (tx === Math.floor(player.x) && ty === Math.floor(player.y)) { tx = Math.floor(player.x + dx * 1.6); ty = Math.floor(player.y + dy * 1.6); }
+  const info = OBJ_INFO[world.objAt(tx, ty)];
+  let ok = world.walkable(tx, ty) && (!info || (info.small && !info.part)) && Math.abs(world.hAt(tx, ty) * 8 - player.z) < 9 && !player.air;
+  if (ok && Math.hypot(tx + 0.5 - player.x, ty + 0.5 - player.y) < 0.6) ok = false;
+  if (ok) for (const n of npcs) if (!n.inside && !n.held && Math.hypot(n.x - tx - 0.5, n.y - ty - 0.5) < 0.6) { ok = false; break; }
+  return { tx, ty, ok };
+}
+
+function tryPlace(s) {
+  const t = placeTarget();
+  if (!t.ok) { showMsg('PAS ICI', 0.8); sfx.ui(); return; }
+  let obj = ITEMS[s.id].obj;
+  if (obj === O.FENCE_X) { const [dx, dy] = dirWorld(player.dir); obj = Math.abs(dx) > Math.abs(dy) ? O.FENCE_Y : O.FENCE_X; } // en travers de son regard
+  world.setObj(t.tx, t.ty, obj);
+  if (obj === O.CHEST) world.chests.set(t.tx + ',' + t.ty, Array(CHEST_N).fill(null));
+  s.n--; if (!s.n) player.inv[player.sel] = null;
+  sfx.place();
+  shake = Math.max(shake, 1.5);
+  burst(t.tx + 0.5, t.ty + 0.5, world.hAt(t.tx, t.ty) * 8, DUST_COLS, 10, { up: 25, speed: 1.4, g: 60, life: 0.5, spread: 2 });
+}
+
+// Aperçu de la construction choisie, posée devant lui : verte si c'est possible, rouge sinon.
+function drawPlaceGhost(ox, oy) {
+  const s = player.inv[player.sel];
+  if (!s || ITEMS[s.id].kind !== 'place' || player.held || player.dead) return;
+  const t = placeTarget(), h = world.hAt(t.tx, t.ty);
+  const sx = ox + isoX(t.tx, t.ty), sy = oy + isoY(t.tx, t.ty) - h * 8;
+  let obj = ITEMS[s.id].obj;
+  if (obj === O.FENCE_X) { const [dx, dy] = dirWorld(player.dir); obj = Math.abs(dx) > Math.abs(dy) ? O.FENCE_Y : O.FENCE_X; }
+  const img = objSprites[obj][0], gx = sx, gy = sy + 8;
+  ctx.globalAlpha = 0.55;
+  draw(img, gx - img.ox, gy - img.oy);
+  ctx.globalAlpha = 0.8 + Math.sin(time * 8) * 0.2;
+  ctx.fillStyle = t.ok ? '#7ee08a' : '#ff5a5e';
+  for (let r = 0; r < 8; r++) {
+    // le losange de la tuile en pointillés
+    if (r & 1) continue;
+    const w = 14 - 2 * r;
+    ctx.fillRect(sx - 16 + 2 * r, sy + r, 2, 1); ctx.fillRect(sx + 14 - 2 * r, sy + r, 2, 1);
+    ctx.fillRect(sx - 16 + 2 * r, sy + 15 - r, 2, 1); ctx.fillRect(sx + 14 - 2 * r, sy + 15 - r, 2, 1);
+    void w;
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ---------------------------------------------------------------- interactions (bouton N)
+// Près d'un coffre, d'un nid ou d'un feu de camp, le bouton N fait la bonne chose.
+function builtNear() {
+  let best = null, bd = 1.5;
+  for (let ty = Math.floor(player.y) - 1; ty <= Math.floor(player.y) + 1; ty++) for (let tx = Math.floor(player.x) - 1; tx <= Math.floor(player.x) + 1; tx++) {
+    const o = world.objAt(tx, ty);
+    if (o !== O.CHEST && o !== O.NEST && o !== O.CAMPFIRE) continue;
+    const d = Math.hypot(tx + 0.5 - player.x, ty + 0.5 - player.y);
+    if (d < bd) { bd = d; best = { o, tx, ty }; }
+  }
+  return best;
+}
+const INTERACT_LABEL = { [O.CHEST]: 'OUVRIR', [O.NEST]: 'DORMIR', [O.CAMPFIRE]: 'CUIRE' };
+
+function interact(b) {
+  if (b.o === O.CHEST) {
+    const k = b.tx + ',' + b.ty;
+    if (!world.chests.has(k)) world.chests.set(k, Array(CHEST_N).fill(null));
+    openInv(0, k);
+  } else if (b.o === O.NEST) {
+    player.sleep = { t: 0, tx: b.tx, ty: b.ty, done: false };
+    sfx.growl();
+  } else {
+    const n = countItem('meat');
+    if (!n) { showMsg('PAS DE VIANDE CRUE', 1.5, 'DEVORE UNE PROIE EN ETANT REPU'); return; }
+    takeItem('meat', n);
+    giveOrDrop('steak', n);
+    toastItem('steak', n);
+    sfx.cook();
+    burst(b.tx + 0.5, b.ty + 0.5, world.hAt(b.tx, b.ty) * 8 + 8, SMOKE_COLS.concat(['#c98a4a']), 12, { up: 30, g: -6, speed: 0.6, life: 1.4, spread: 4 });
+  }
+}
+
+// Dans le nid : l'écran s'assombrit, il dort jusqu'au matin, régénéré ; il se réveillera ici.
+function updateSleep(dt) {
+  const S = player.sleep;
+  S.t += dt;
+  if (S.t > 1.3 && !S.done) {
+    S.done = true;
+    if (darkness() > 0.2) tod = 0.27;
+    player.hp = maxHp();
+    player.spawn = [S.tx, S.ty];
+    save();
+    showMsg('LE NID EST TON REFUGE', 3, 'TU TE REVEILLERAS ICI');
+    sfx.regen();
+  }
+  if (S.t > 2.6) player.sleep = null;
+}
+
+// ---------------------------------------------------------------- écrans (choix de mutation, sac)
+let mutChoice = null; // { opts, sel } : 3 mutations au choix
+let invUI = null; // { tab, cur, pick, chest, slot } : le sac ouvert
+const uiHits = []; // zones touchables de l'écran affiché : { x, y, w, h, fn }
+const TABS = ['SAC', 'MUTATIONS', 'ALTERS', 'FABRIQUER'];
+const overlayOpen = () => !!(mutChoice || invUI || baking);
+
+function openMutChoice() {
+  const opts = draw3(player.muts);
+  if (!opts.length) { player.pendingLv = 0; return; } // tout est déjà pris
+  mutChoice = { opts, sel: Math.min(1, opts.length - 1), t: 0 };
+  releaseInputs();
+  sfx.mutate();
+}
+
+function chooseMutation(i) {
+  const id = mutChoice.opts[i], M = MUTATIONS[id];
+  mutChoice = null;
+  player.pendingLv = Math.max(0, player.pendingLv - 1);
+  player.muts.push(id);
+  if (id === 'mass') player.hp = Math.min(maxHp(), player.hp + 40);
+  showMsg('MUTATION : ' + M.name, 3.5, M.desc.join(' - '));
+  sfx.roar(1);
+  shake = Math.max(shake, 6);
+  fx.push({ kind: 'ring', x: player.x, y: player.y, z: player.z, t: 0, r: 2.5 });
+  burst(player.x, player.y, player.z + 20, [BRANCHES[M.branch].col, '#ffffff', '#c9a0ff'], 50, { up: 70, speed: 2.5, life: 1.2 });
+  if (M.look) rebakeNomu();
+}
+
+function openInv(tab = 0, chest = null) {
+  invUI = { tab, cur: 0, pick: -1, chest, slot: 0, col: 0, row: 0 };
+  releaseInputs();
+  sfx.ui();
+}
+function closeInv() { invUI = null; sfx.ui(); }
+
+function releaseInputs() {
+  input.punch = input.jump = input.sniff = input.grab = false;
+  input.x = input.y = 0; joy.id = null;
+  btnTouches.clear(); keys.clear(); mouse.punch = mouse.charge = mouse.grab = false;
+  if (player.charging) { player.charging = false; player.chargeKind = null; player.aim = null; chargeStop(); }
+  player.aiming = false; player.grabArm = false;
+}
+
+// Petit cadre pixel : bord sombre, liseré, fond.
+function frame9(x, y, w, h, fill = 'rgba(11,13,20,0.94)', edge = '#2e3450') {
+  ctx.fillStyle = '#05060a'; ctx.fillRect(x - 1, y - 1, w + 2, h + 2);
+  ctx.fillStyle = edge; ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = fill; ctx.fillRect(x + 1, y + 1, w - 2, h - 2);
+}
+function hit(x, y, w, h, fn) { uiHits.push({ x, y, w, h, fn }); }
+function textC(t, cx, y, col) { drawText(ctx, t, Math.round(cx - textWidth(t) / 2), y, col); }
+// Coupe un texte en lignes qui tiennent dans `w` pixels.
+function wrap(str, w) {
+  const out = [];
+  let line = '';
+  for (const word of str.split(' ')) {
+    const t = line ? line + ' ' + word : word;
+    if (textWidth(t) > w && line) { out.push(line); line = word; } else line = t;
+  }
+  if (line) out.push(line);
+  return out;
+}
+
+function drawOverlay() {
+  uiHits.length = 0;
+  if (baking) drawBaking();
+  else if (mutChoice) drawMutChoice();
+  else if (invUI) drawInv();
+}
+
+function drawBaking() {
+  ctx.fillStyle = 'rgba(8,4,16,0.75)';
+  ctx.fillRect(0, 0, VW, VH);
+  const w = 90, x = Math.round(VW / 2 - w / 2), y = Math.round(VH / 2);
+  textC('MUTATION...', VW / 2, y - 14, '#c9a0ff');
+  ctx.fillStyle = '#20243a'; ctx.fillRect(x, y, w, 5);
+  ctx.fillStyle = Math.floor(time * 8) % 2 ? '#c9a0ff' : '#ff6b7a'; ctx.fillRect(x, y, Math.round(w * baking.p), 5);
+}
+
+function drawMutChoice() {
+  const C = mutChoice;
+  C.t += 1 / 60;
+  ctx.fillStyle = 'rgba(8,4,16,0.8)';
+  ctx.fillRect(0, 0, VW, VH);
+  const top = 8 + safe.t;
+  textC('MUTATION !', VW / 2, top, '#ff6b7a');
+  textC('NIVEAU ' + player.level + ' - CHOISIS UN POUVOIR', VW / 2, top + 8, '#e8f0ff');
+  const n = C.opts.length, gap = 5;
+  const cw = Math.min(82, Math.floor((VW - 12 - safe.l - safe.r - gap * (n - 1)) / n)), ch = Math.min(96, VH - top - 52);
+  const x0 = Math.round(VW / 2 - (cw * n + gap * (n - 1)) / 2), y0 = top + 20;
+  C.opts.forEach((id, i) => {
+    const M = MUTATIONS[id], B = BRANCHES[M.branch], sel = i === C.sel;
+    const x = x0 + i * (cw + gap), y = y0 - (sel ? 2 + Math.round(Math.sin(time * 6)) : 0);
+    frame9(x, y, cw, ch, sel ? 'rgba(30,22,48,0.97)' : 'rgba(14,14,24,0.95)', sel ? B.col : '#2e3450');
+    ctx.fillStyle = B.dark; ctx.fillRect(x + 1, y + 1, cw - 2, 9);
+    textC(B.name, x + cw / 2, y + 3, B.col);
+    let ty = y + 14;
+    for (const l of wrap(M.name, cw - 6)) { textC(l, x + cw / 2, ty, '#ffe28a'); ty += 7; }
+    ty += 3;
+    for (const d of M.desc) for (const l of wrap(d, cw - 6)) { textC(l, x + cw / 2, ty, '#e8f0ff'); ty += 7; }
+    textC(M.look ? 'SE VOIT SUR LUI' : 'INVISIBLE', x + cw / 2, y + ch - 9, M.look ? '#c9a0ff' : '#5a6288');
+    hit(x, y, cw, ch, () => { if (C.sel === i) chooseMutation(i); else { C.sel = i; sfx.ui(); } });
+  });
+  // bouton de validation
+  const bw = 60, bx = Math.round(VW / 2 - bw / 2), by = y0 + ch + 6;
+  frame9(bx, by, bw, 13, '#e1465a', '#14101e');
+  textC('MUTER', VW / 2, by + 4, '#ffffff');
+  hit(bx, by, bw, 13, () => chooseMutation(C.sel));
+  textC(player.pendingLv > 1 ? 'ENCORE ' + (player.pendingLv - 1) + ' APRES' : '', VW / 2, by + 17, '#8a93b8');
+}
+
+// --- le sac
+function invGeom() {
+  const pw = Math.min(VW - 10 - safe.l - safe.r, 236), ph = Math.min(VH - 10 - safe.t - safe.b, 180);
+  return { pw, ph, px: Math.round(VW / 2 - pw / 2), py: Math.round(VH / 2 - ph / 2) };
+}
+
+function drawSlot(x, y, s, sel, picked) {
+  frame9(x, y, 16, 16, picked ? '#3a2a10' : sel ? '#2a2440' : '#141826', sel ? '#ffe28a' : picked ? '#ffb347' : '#2e3450');
+  if (!s) return;
+  ctx.drawImage(icons[s.id], x + 2, y + 2);
+  if (s.n > 1) { const t = String(s.n); drawText(ctx, t, x + 16 - textWidth(t), y + 11, '#ffffff'); }
+}
+
+function drawInv() {
+  const U = invUI, { pw, ph, px, py } = invGeom();
+  ctx.fillStyle = 'rgba(4,4,10,0.55)';
+  ctx.fillRect(0, 0, VW, VH);
+  frame9(px, py, pw, ph);
+  // onglets
+  const tw = Math.floor((pw - 16) / 4);
+  TABS.forEach((t, i) => {
+    const x = px + 2 + i * tw, on = U.tab === i, label = i === 0 && U.chest ? 'COFFRE' : t;
+    frame9(x, py + 2, tw - 2, 11, on ? '#2a2440' : '#141826', on ? '#ffe28a' : '#2e3450');
+    textC(label, x + (tw - 2) / 2, py + 5, on ? '#ffe28a' : '#8a93b8');
+    hit(x, py + 2, tw - 2, 11, () => { U.tab = i; U.cur = 0; U.pick = -1; sfx.ui(); });
+  });
+  // fermer
+  const cx = px + pw - 13;
+  frame9(cx, py + 2, 11, 11, '#5e1a14', '#14101e');
+  textC('X', cx + 6, py + 5, '#ffffff');
+  hit(cx, py + 2, 11, 11, closeInv);
+  const body = { x: px + 4, y: py + 17, w: pw - 8, h: ph - 21 };
+  if (U.tab === 0) drawBag(body);
+  else if (U.tab === 1) drawTree(body);
+  else if (U.tab === 2) drawAlters(body);
+  else drawCraft(body);
+}
+
+// Sac (et coffre) : une grille de 9 colonnes ; la rangée du bas est la barre.
+function bagSlots() {
+  const U = invUI;
+  const chest = U.chest ? world.chests.get(U.chest) : null;
+  return { chest, count: (chest ? CHEST_N : 0) + INV };
+}
+function slotAt(i) {
+  const { chest } = bagSlots();
+  if (chest) return i < CHEST_N ? [chest, i] : [player.inv, i - CHEST_N];
+  return [player.inv, i];
+}
+function drawBag(b) {
+  const U = invUI, { chest, count } = bagSlots();
+  const gx = Math.round(b.x + b.w / 2 - (9 * 17) / 2);
+  let y = b.y;
+  const cell = (i, x, yy) => {
+    const [arr, k] = slotAt(i);
+    drawSlot(x, yy, arr[k], U.cur === i, U.pick === i);
+    hit(x, yy, 16, 16, () => { U.cur = i; bagAction(i); });
+  };
+  if (chest) {
+    drawText(ctx, 'COFFRE', gx, y, '#ffb347'); y += 7;
+    for (let i = 0; i < CHEST_N; i++) cell(i, gx + (i % 9) * 17, y + Math.floor(i / 9) * 17);
+    y += 2 * 17 + 3;
+  }
+  const off = chest ? CHEST_N : 0;
+  drawText(ctx, 'SAC', gx, y, '#8a93b8'); y += 7;
+  for (let r = 0; r < 3; r++) for (let c = 0; c < 9; c++) cell(off + 9 + r * 9 + c, gx + c * 17, y + r * 17);
+  y += 3 * 17 + 2;
+  drawText(ctx, 'BARRE', gx, y, '#ffe28a'); y += 7;
+  for (let c = 0; c < 9; c++) cell(off + c, gx + c * 17, y);
+  y += 19;
+  // ce qu'il y a sous le curseur
+  const [arr, k] = slotAt(Math.min(U.cur, count - 1)), s = arr[k];
+  if (s && y + 12 < b.y + b.h) {
+    const it = ITEMS[s.id];
+    drawText(ctx, it.name + (s.n > 1 ? ' X' + s.n : ''), gx, y, '#ffe28a');
+    const info = it.kind === 'food' ? '+' + it.food + ' FAIM' + (it.hp ? ' +' + it.hp + ' VIE' : '') + ' - DANS LA BARRE, UTILISER POUR MANGER'
+      : it.kind === 'place' ? 'DANS LA BARRE, UTILISER POUR LE POSER DEVANT LUI'
+      : it.kind === 'trophy' ? 'TROPHEE DE CHASSE' : 'MATERIAU - ONGLET FABRIQUER';
+    wrap(info, b.w - (gx - b.x) * 2).slice(0, 2).forEach((l, i) => drawText(ctx, l, gx, y + 7 + i * 7, '#8a93b8'));
+  }
+  if (chest && y + 30 < b.y + b.h) drawText(ctx, 'TOUCHE UN OBJET POUR LE CHANGER DE COTE', gx, b.y + b.h - 6, '#5a6288');
+}
+// Toucher une case : avec un coffre ouvert, la pile passe de l'autre côté ; sinon on prend puis on échange.
+function bagAction(i) {
+  const U = invUI, { chest } = bagSlots();
+  const [arr, k] = slotAt(i);
+  if (chest) {
+    const s = arr[k];
+    if (!s) return;
+    const left = addItem(s.id, s.n, arr === chest ? player.inv : chest);
+    if (left === s.n) { sfx.ui(); return; }
+    if (left) s.n = left; else arr[k] = null;
+    sfx.pickup();
+    return;
+  }
+  if (U.pick < 0) { if (arr[k]) { U.pick = i; sfx.ui(); } return; }
+  const [pa, pk] = slotAt(U.pick);
+  const a = pa[pk], b = arr[k];
+  if (U.pick !== i) {
+    if (b && a && b.id === a.id && b.n < STACK) { const m = Math.min(a.n, STACK - b.n); b.n += m; a.n -= m; if (!a.n) pa[pk] = null; }
+    else { pa[pk] = b; arr[k] = a; }
+    sfx.pickup();
+  }
+  U.pick = -1;
+}
+
+// Arbre des mutations : 3 colonnes (branches), du haut (base) vers le bas (avancées).
+const treeCols = () => Object.keys(BRANCHES).map((b) => Object.keys(MUTATIONS).filter((id) => MUTATIONS[id].branch === b).sort((x, y) => MUTATIONS[x].row - MUTATIONS[y].row));
+function mutState(id) {
+  if (mut(id)) return 'own';
+  const r = MUTATIONS[id].req;
+  return !r || r.some((q) => mut(q)) ? 'open' : 'lock';
+}
+function drawTree(b) {
+  const U = invUI, cols = treeCols(), cw = Math.floor(b.w / 3);
+  U.col = Math.min(U.col, 2); U.row = Math.min(U.row, cols[U.col].length - 1);
+  cols.forEach((list, c) => {
+    const B = BRANCHES[Object.keys(BRANCHES)[c]], x = b.x + c * cw;
+    textC(B.name, x + cw / 2, b.y, B.col);
+    list.forEach((id, r) => {
+      const st = mutState(id), y = b.y + 8 + r * 13, sel = U.col === c && U.row === r;
+      frame9(x + 1, y, cw - 3, 11, st === 'own' ? B.dark : '#141826', sel ? '#ffe28a' : st === 'lock' ? '#20243a' : B.col);
+      const name = MUTATIONS[id].name, short = textWidth(name) > cw - 7 ? name.slice(0, Math.floor((cw - 9) / 4)) + '.' : name;
+      textC(short, x + cw / 2, y + 3, st === 'own' ? B.col : st === 'open' ? '#e8f0ff' : '#4a5070');
+      hit(x + 1, y, cw - 3, 11, () => { U.col = c; U.row = r; sfx.ui(); });
+    });
+  });
+  // la mutation sous le curseur
+  const id = cols[U.col][U.row], M = MUTATIONS[id], st = mutState(id);
+  let y = b.y + 8 + 6 * 13 + 3;
+  drawText(ctx, M.name, b.x + 2, y, '#ffe28a');
+  drawText(ctx, st === 'own' ? 'ACQUISE' : st === 'open' ? 'DISPONIBLE' : 'DEMANDE : ' + M.req.map((q) => MUTATIONS[q].name).join(' OU '), b.x + 2, y + 7, st === 'own' ? '#7ee08a' : st === 'open' ? '#8fb4ff' : '#ff7a7a');
+  drawText(ctx, M.desc.join(' - '), b.x + 2, y + 14, '#8a93b8');
+  if (player.pendingLv > 0) {
+    const bw = 120, bx = Math.round(b.x + b.w / 2 - bw / 2), by = b.y + b.h - 13;
+    frame9(bx, by, bw, 12, '#e1465a', '#14101e');
+    textC('CHOISIR UNE MUTATION (' + player.pendingLv + ')', bx + bw / 2, by + 4, '#ffffff');
+    hit(bx, by, bw, 12, () => { invUI = null; openMutChoice(); });
+  }
+}
+
+// Alters : 3 emplacements équipés, et la liste de ceux qui ont été dévorés.
+function drawAlters(b) {
+  const U = invUI, sw = Math.floor((b.w - 8) / 3);
+  for (let i = 0; i < 3; i++) {
+    const a = player.equip[i], x = b.x + i * (sw + 4), sel = U.slot === i;
+    frame9(x, b.y, sw, 22, a ? '#2a2440' : '#141826', sel ? '#ffe28a' : '#2e3450');
+    textC('EMPLACEMENT ' + (i + 1), x + sw / 2, b.y + 2, '#5a6288');
+    if (a) { textC(ALTERS[a].name, x + sw / 2, b.y + 9, '#c9a0ff'); textC('*'.repeat(player.alterLv[a] || 1), x + sw / 2, b.y + 15, '#ffe28a'); }
+    else textC('VIDE', x + sw / 2, b.y + 11, '#4a5070');
+    hit(x, b.y, sw, 22, () => { if (U.slot === i && player.equip[i]) { player.equip.splice(i, 1); sfx.ui(); } U.slot = i; });
+  }
+  let y = b.y + 28;
+  if (!player.alters.length) {
+    wrap("DEVORE UN HEROS POUR VOLER SON ALTER. UN DEUXIEME DU MEME TYPE LE FAIT MONTER DE NIVEAU.", b.w - 4).forEach((l, i) => drawText(ctx, l, b.x + 2, y + i * 7, '#8a93b8'));
+    return;
+  }
+  U.cur = Math.min(U.cur, player.alters.length - 1);
+  player.alters.forEach((a, i) => {
+    const on = player.equip.includes(a), sel = U.cur === i;
+    frame9(b.x, y, b.w, 11, sel ? '#2a2440' : '#141826', sel ? '#ffe28a' : '#2e3450');
+    drawText(ctx, ALTERS[a].name + ' NIV ' + (player.alterLv[a] || 1), b.x + 3, y + 3, on ? '#c9a0ff' : '#e8f0ff');
+    const t = on ? 'EQUIPE' : 'EQUIPER';
+    drawText(ctx, t, b.x + b.w - textWidth(t) - 3, y + 3, on ? '#7ee08a' : '#8a93b8');
+    hit(b.x, y, b.w, 11, () => { U.cur = i; toggleAlter(a); });
+    y += 13;
+  });
+  const a = player.alters[U.cur];
+  if (a && y + 7 < b.y + b.h) wrap(ALTERS[a].desc, b.w - 4).forEach((l, i) => drawText(ctx, l, b.x + 2, y + 2 + i * 7, '#8a93b8'));
+}
+function toggleAlter(a) {
+  const U = invUI, i = player.equip.indexOf(a);
+  if (i >= 0) player.equip.splice(i, 1);
+  else if (player.equip.length < 3) player.equip.push(a);
+  else player.equip[U.slot] = a; // les 3 emplacements sont pris : il remplace celui choisi
+  sfx.ui();
+}
+
+// Fabriquer : chaque recette, ce qu'elle coûte (rouge s'il en manque), toucher pour fabriquer.
+function canCraft(r) { return Object.keys(r.need).every((id) => countItem(id) >= r.need[id]); }
+function craft(r) {
+  if (!canCraft(r)) { showMsg('IL MANQUE DES MATERIAUX', 1.2); sfx.ui(); return; }
+  for (const id in r.need) takeItem(id, r.need[id]);
+  giveOrDrop(r.out, r.n);
+  toastItem(r.out, r.n);
+  sfx.craft();
+}
+function drawCraft(b) {
+  const U = invUI, rh = Math.min(15, Math.floor((b.h - 8) / RECIPES.length));
+  U.cur = Math.min(U.cur, RECIPES.length - 1);
+  RECIPES.forEach((r, i) => {
+    const y = b.y + i * rh, ok = canCraft(r), sel = U.cur === i;
+    frame9(b.x, y, b.w, rh - 2, sel ? '#2a2440' : '#141826', sel ? '#ffe28a' : ok ? '#3a6a46' : '#2e3450');
+    ctx.drawImage(icons[r.out], b.x + 1, y + Math.round((rh - 2) / 2) - 6);
+    drawText(ctx, ITEMS[r.out].name + (r.n > 1 ? ' X' + r.n : ''), b.x + 15, y + Math.round((rh - 2) / 2) - 2, ok ? '#e8f0ff' : '#8a93b8');
+    let x = b.x + b.w - 3;
+    for (const id of Object.keys(r.need).reverse()) {
+      const t = countItem(id) + '/' + r.need[id];
+      x -= textWidth(t);
+      drawText(ctx, t, x, y + Math.round((rh - 2) / 2) - 2, countItem(id) >= r.need[id] ? '#7ee08a' : '#ff7a7a');
+      x -= 13;
+      ctx.drawImage(icons[id], x, y + Math.round((rh - 2) / 2) - 6);
+      x -= 3;
+    }
+    hit(b.x, y, b.w, rh - 2, () => { if (U.cur === i || inputMode === 'touch') craft(r); U.cur = i; });
+  });
+  const r = RECIPES[U.cur];
+  drawText(ctx, r.desc, b.x + 2, b.y + RECIPES.length * rh + 1, '#8a93b8');
+}
+
+// --- commandes des écrans : toucher, clavier, manette
+function overlayTap(x, y) {
+  for (let i = uiHits.length - 1; i >= 0; i--) {
+    const h = uiHits[i];
+    if (x >= h.x && x < h.x + h.w && y >= h.y && y < h.y + h.h) { h.fn(); return true; }
+  }
+  return false;
+}
+// Une direction (dx, dy), « valider » (ok), « retour » (back), onglet (tab : -1 / +1).
+function overlayNav(dx, dy, ok, back, tab) {
+  if (baking) return;
+  if (mutChoice) {
+    const n = mutChoice.opts.length;
+    if (dx) { mutChoice.sel = (mutChoice.sel + dx + n) % n; sfx.ui(); }
+    if (ok) chooseMutation(mutChoice.sel);
+    return;
+  }
+  const U = invUI;
+  if (!U) return;
+  if (back) { closeInv(); return; }
+  if (tab) { U.tab = (U.tab + tab + 4) % 4; U.cur = 0; U.pick = -1; sfx.ui(); return; }
+  if (U.tab === 0) {
+    const { count } = bagSlots();
+    if (dx || dy) { U.cur = (U.cur + dx + dy * 9 + count) % count; }
+    if (ok) bagAction(U.cur);
+  } else if (U.tab === 1) {
+    const cols = treeCols();
+    if (dx) { U.col = (U.col + dx + 3) % 3; U.row = Math.min(U.row, cols[U.col].length - 1); }
+    if (dy) U.row = (U.row + dy + cols[U.col].length) % cols[U.col].length;
+    if (ok && player.pendingLv > 0) { invUI = null; openMutChoice(); }
+  } else if (U.tab === 2) {
+    if (dx) U.slot = (U.slot + dx + 3) % 3;
+    if (dy && player.alters.length) U.cur = (U.cur + dy + player.alters.length) % player.alters.length;
+    if (ok && player.alters.length) toggleAlter(player.alters[U.cur]);
+  } else {
+    if (dy) U.cur = (U.cur + dy + RECIPES.length) % RECIPES.length;
+    if (ok) craft(RECIPES[U.cur]);
+  }
+}
+function overlayKey(e) {
+  const c = e.code;
+  const dx = c === 'ArrowLeft' || c === 'KeyA' || c === 'KeyQ' ? -1 : c === 'ArrowRight' || c === 'KeyD' ? 1 : 0;
+  const dy = c === 'ArrowUp' || c === 'KeyW' || c === 'KeyZ' ? -1 : c === 'ArrowDown' || c === 'KeyS' ? 1 : 0;
+  const ok = c === 'Enter' || c === 'Space' || c === 'KeyJ';
+  const back = c === 'Escape' || c === 'KeyI';
+  const tab = c === 'Tab' ? (e.shiftKey ? -1 : 1) : 0;
+  if (mutChoice && /^Digit[1-3]$/.test(c) && +c[5] <= mutChoice.opts.length) { chooseMutation(+c[5] - 1); return; }
+  if (invUI && /^Digit[1-4]$/.test(c)) { invUI.tab = +c[5] - 1; invUI.cur = 0; invUI.pick = -1; sfx.ui(); return; }
+  overlayNav(dx, dy, ok, back, tab);
+}
+let padRepeat = 0;
+function overlayPad(dt) {
+  pollPad();
+  if (!pad.connected) return;
+  padRepeat -= dt;
+  const dx = Math.abs(pad.x) > 0.5 ? Math.sign(pad.x) : 0, dy = Math.abs(pad.y) > 0.5 ? Math.sign(pad.y) : 0;
+  let mx = 0, my = 0;
+  if ((dx || dy) && padRepeat <= 0) { mx = dy ? 0 : dx; my = dy; padRepeat = 0.2; }
+  if (!dx && !dy) padRepeat = 0;
+  const P = pad.pressed;
+  overlayNav(mx, my, P[0], P[1] || P[9], P[4] ? -1 : P[5] ? 1 : 0);
+}
+
+// --- barre d'objets (en bas au milieu, en haut en portrait pour laisser la place aux boutons)
+const hotbarBox = () => {
+  const w = 9 * 15 + 2, x = Math.round(VW / 2 - w / 2);
+  return { x, y: VW < VH ? 56 + safe.t : VH - 18 - safe.b, w };
+};
+function drawHotbar() {
+  const { x, y } = hotbarBox();
+  for (let i = 0; i < 9; i++) {
+    const s = player.inv[i], sx = x + i * 15, on = i === player.sel;
+    frame9(sx, y, 14, 14, on ? 'rgba(42,36,64,0.9)' : 'rgba(10,12,20,0.7)', on ? '#ffe28a' : '#2e3450');
+    if (s) {
+      ctx.drawImage(icons[s.id], sx + 1, y + 1);
+      if (s.n > 1) { const t = String(s.n); drawText(ctx, t, sx + 14 - textWidth(t), y + 9, '#ffffff'); }
+    }
+  }
+  const s = player.inv[player.sel];
+  if (toast) {
+    ctx.globalAlpha = Math.min(1, toast.t);
+    const t = '+' + toast.n + ' ' + ITEMS[toast.id].name;
+    textC(t, VW / 2, VW < VH ? y + 17 : y - 8, '#7ee08a');
+    ctx.globalAlpha = 1;
+  } else if (s && ITEMS[s.id].kind === 'place') textC('POSER : ' + useKey(), VW / 2, VW < VH ? y + 17 : y - 8, '#ffe28a');
+  else if (s && ITEMS[s.id].kind === 'food') textC('MANGER : ' + useKey(), VW / 2, VW < VH ? y + 17 : y - 8, '#ffb870');
+}
+const useKey = () => ({ touch: 'TOUCHE LA CASE', keys: 'T', pad: 'CROIX HAUT' }[inputMode]);
+// Toucher la barre : une case = la choisir, la case déjà choisie = l'utiliser.
+function hotbarTap(x, y) {
+  const b = hotbarBox();
+  if (y < b.y || y > b.y + 14 || x < b.x || x > b.x + b.w) return false;
+  const i = Math.min(8, Math.floor((x - b.x) / 15));
+  if (i === player.sel) useItem(); else { player.sel = i; sfx.ui(); }
+  return true;
+}
+
+// Icône sac (en haut à droite) : ouvre l'inventaire.
+const bagBtn = { x: 0, y: 0, r: 7 };
+function drawBagButton() {
+  bagBtn.x = VW - 72 - safe.r;
+  bagBtn.y = 11 + safe.t;
+  const x = bagBtn.x - 5, y = bagBtn.y - 4;
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.fillRect(x - 3, y - 3, 17, 14);
+  ctx.fillStyle = '#a87a52'; ctx.fillRect(x + 1, y + 2, 9, 6);
+  ctx.fillStyle = '#5e3d22'; ctx.fillRect(x + 3, y, 5, 2); ctx.fillRect(x + 1, y + 4, 9, 1);
+  ctx.fillStyle = '#e0b23a'; ctx.fillRect(x + 5, y + 4, 1, 2);
+  if (player.pendingLv > 0 && Math.floor(time * 3) % 2) { ctx.fillStyle = '#ff6b7a'; ctx.fillRect(x + 9, y - 2, 3, 3); } // une mutation attend
+}
+
 // ---------------------------------------------------------------- feu
 // Une tuile qui brûle : ses flammes montent, consument son combustible (`fuel` dans OBJ_INFO, ou le
 // toit d'un bâtiment) puis retombent. Bien chaude, elle allume ses voisines selon leur
@@ -2633,7 +3428,7 @@ function updateFires(dt) {
     if (f.heat > 0.3) {
       const r = f.bld ? 1.3 : 0.55;
       for (const n of npcs) if (alive(n) && !n.inside && !n.held && !n.thrown && Math.hypot(n.x - cx, n.y - cy) < r) setOnFire(n);
-      if (!player.dead && !player.water && player.jz < 12 && Math.hypot(player.x - cx, player.y - cy) < r) player.burnT = Math.max(player.burnT, 1.2);
+      if (!player.dead && !player.water && player.jz < 12 && !mut('fireproof') && Math.hypot(player.x - cx, player.y - cy) < r) player.burnT = Math.max(player.burnT, 1.2);
     }
     // fumée et braises qui montent
     if (particles.length < 330) {
@@ -2787,7 +3582,7 @@ const thrown = []; // objets du décor en vol
 const npcWeight = (n) => (n.kind === 'beast' ? { rabbit: 0.6, deer: 1.5, boar: 1.6 }[n.type] || 1 : n.kind === 'knight' ? 1.3 : 1);
 // un héros en forme se dégage vite ; un chevalier se débat ; les autres ne s'en sortent pas
 const breakTime = (n) => (n.kind === 'hero' ? (n.hp > n.maxHp * 0.4 ? 1.3 : 3) : n.kind === 'knight' ? 3.5 : 1e9);
-const throwDmg = (th) => Math.max(1, Math.round((1 + th.w * 1.5) * (0.5 + th.power) * strength()));
+const throwDmg = (th) => Math.max(1, Math.round((1 + th.w * 1.5) * (0.5 + th.power) * strength() * (mut('thrower') ? 1.4 : 1)));
 const tough = (n) => n.kind === 'hero' && n.hp > n.maxHp * 0.4; // un héros encore en forme
 // léger (habitant, petit animal, caisse, tonneau…) : il le tient d'une main et peut galoper avec
 const lightLoad = (w, big) => !big && w <= 1.5;
@@ -2795,7 +3590,8 @@ const oneHand = () => !!(player.held && player.held.one);
 
 // Vitesse de lancer : la force du bras, freinée par le poids.
 function throwSpeed(power, w) {
-  return { v: (3.5 + power * 8.5) / (0.75 + 0.25 * w), vz: 70 + power * 60 };
+  const k = mut('thrower') ? 1.25 : 1; // LANCEUR
+  return { v: (3.5 + power * 8.5) / (0.75 + 0.25 * w) * k, vz: (70 + power * 60) * (mut('thrower') ? 1.1 : 1) };
 }
 
 // Ce qu'il peut empoigner devant lui : une proie passe avant le décor.
@@ -3095,6 +3891,7 @@ function shatter(p, ev) {
     if (info.prop === 'barrel') burst(p.x, p.y, z + 4, ['#7a2232', '#5a1a26', '#a8433f'], 14, { up: 35, speed: 1.8 });
     if (info.prop === 'lantern') burst(p.x, p.y, z + 8, ['#ffd77a', '#fff0b8', '#ffffff'], 10, { up: 30, speed: 1.4, life: 0.5 });
     if (free && info.next) world.setObj(tx, ty, info.next);
+    if (DROPS[p.o]) spawnDrops(p.x, p.y, DROPS[p.o]);
   }
 }
 
@@ -3237,7 +4034,8 @@ function addSkidMarks(s, cx, cy) {
 function nearestPrey() {
   const rx = Math.floor(player.x / VG), ry = Math.floor(player.y / VG);
   let best = null;
-  for (let j = -3; j <= 3; j++) for (let i = -3; i <= 3; i++) {
+  const R = mut('eyes') ? 5 : 3; // YEUX DE CHASSEUR : il flaire plus loin
+  for (let j = -R; j <= R; j++) for (let i = -R; i <= R; i++) {
     const v = world.villageIn(rx + i, ry + j);
     if (!v) continue;
     const dd = world.deaths.get(v.id) || { civ: 0, knight: 0, hero: 0 };
@@ -3251,7 +4049,7 @@ function nearestPrey() {
 function doSniff() {
   const p = nearestPrey();
   if (!p) { showMsg('RIEN A FLAIRER...', 2.5); return; }
-  scent = { v: p.v, t: 12 };
+  scent = { v: p.v, t: mut('eyes') ? 25 : 12 };
   sfx.growl();
 }
 
@@ -3371,6 +4169,12 @@ function render() {
     if (!l) npcRows.set(r, l = []);
     l.push(n);
   }
+  for (const d of drops) {
+    const r = Math.floor(d.x + 0.35) + Math.floor(d.y + 0.35);
+    let l = npcRows.get(r);
+    if (!l) npcRows.set(r, l = []);
+    l.push({ drop: d, x: d.x, y: d.y });
+  }
   for (const p of thrown) {
     const r = Math.floor(p.x + 0.35) + Math.floor(p.y + 0.35);
     let l = npcRows.get(r);
@@ -3444,7 +4248,7 @@ function render() {
     const rn = npcRows.get(d);
     const rf = fireRows.get(d);
     if (rf) for (const f of rf) rowEnts.push({ fire: f, depth: f.bld ? d - 0.45 : d + 1.05 }); // juste devant ce qui brûle
-    if (rn) for (const n of rn) rowEnts.push(n.o ? { thrown: n, mx: n.x, my: n.y, depth: n.x + n.y } : { npc: n, mx: n.x, my: n.y, depth: n.x + n.y });
+    if (rn) for (const n of rn) rowEnts.push(n.drop ? { drop: n.drop, mx: n.x, my: n.y, depth: n.x + n.y } : n.o ? { thrown: n, mx: n.x, my: n.y, depth: n.x + n.y } : { npc: n, mx: n.x, my: n.y, depth: n.x + n.y });
     if (rowEnts.length) {
       // devant ou derrière un bâtiment de la même rangée ?
       for (const b of rowEnts) {
@@ -3459,6 +4263,7 @@ function render() {
         if (e.player) { drawPlayer(ox, oy, 1); playerDrawn = true; } else if (e.npc) drawNpc(e.npc, ox, oy);
         else if (e.thrown) drawThrown(e.thrown, ox, oy);
         else if (e.fire) drawFire(e.fire, ox, oy);
+        else if (e.drop) drawDrop(e.drop, ox, oy);
         else drawObject(e);
       }
     }
@@ -3483,6 +4288,7 @@ function render() {
   if (player.charging) drawChargeAura(ox, oy);
   if (player.charging && player.chargeKind === 'punch') drawAim(ox, oy);
   if (player.aiming && player.held) drawThrowAim(ox, oy);
+  if (mode === 'play' && !overlayOpen()) drawPlaceGhost(ox, oy);
   // Brainless visible en transparence derrière les arbres
   if (mode === 'play') {
     ctx.globalAlpha = 0.28;
@@ -3503,6 +4309,7 @@ function render() {
   if (mode !== 'play') return;
   drawFade();
   drawHUD();
+  drawOverlay();
 }
 
 // La nuit, les fenêtres et les lanternes restent allumées par-dessus la teinte bleue.
@@ -3530,8 +4337,8 @@ function drawGlows() {
 
 // Fondu au noir quand Brainless s'effondre.
 function drawFade() {
-  if (!player.dead) return;
-  const t = player.dead.t;
+  if (!player.dead && !player.sleep) return;
+  const t = player.dead ? player.dead.t : player.sleep.t + 1.6; // dans le nid : il s'endort puis se réveille
   const a = t < 2.4 ? 0 : t < 3.4 ? (t - 2.4) : Math.max(0, 1 - (t - 3.4) / 0.8);
   if (a <= 0) return;
   ctx.fillStyle = `rgba(6,6,16,${Math.min(1, a)})`;
@@ -3625,6 +4432,9 @@ function drawObject(e) {
   draw(img, gx - img.ox, gy - img.oy);
   const gl = objGlow[e.o];
   if (gl && darkness() > 0.15) glows.push({ img: gl, x: gx - gl.ox, y: gy - gl.oy, behind: !playerDrawn, halo: e.o === O.LANTERN, hx: gx + 3, hy: gy - 15 });
+  // feu de camp et torche : une vraie flamme qui danse
+  if (e.o === O.CAMPFIRE) { drawFlame(1, gx, gy - 1, e.x + e.y); drawFlame(0, gx - 3, gy + 1, e.x * 3); }
+  else if (e.o === O.TORCH) drawFlame(0, gx, gy - 16, e.x + e.y, 0.9);
   // pétales qui tombent des cerisiers
   if (e.o === O.CHERRY && Math.random() < 0.03 && particles.length < 300) {
     burst(e.x + 0.5, e.y + 0.5, h * 8 + 26, CHERRY_COLS, 1, { leaf: true, up: 0, g: 10, life: 3, spread: 10, speed: 0.6, drag: 0.3 });
@@ -3632,6 +4442,7 @@ function drawObject(e) {
 }
 
 function drawPlayer(ox, oy, withShadow) {
+  if (baking) return; // ses sprites sont en train d'être recuits
   const sx = ox + Math.round(isoX(player.x, player.y));
   const sy = oy + Math.round(isoY(player.x, player.y));
   const gz = Math.round(player.z);
@@ -4134,9 +4945,9 @@ function drawMuteButton() {
 }
 
 const HINTS = {
-  touch: ['JOYSTICK A FOND: IL COURT', 'MAINTIENS B POUR CHARGER', 'SPRINT: MAINTIENS >> EN MARCHANT', 'N: FLAIRER LA VIANDE FRAICHE', 'P: PRENDRE, P: LANCER (MAINTENIR = VISER)'],
-  keys: ['ZQSD: COURIR  C: MARCHER  MAJ: SPRINT  ESPACE: SAUT', 'J/CLIC: COUP (MAINTENIR = CHARGE)', 'K/CLIC DROIT: FRAPPE AU SOL  R: FLAIRER', 'L/CLIC MOLETTE: PRENDRE, LANCER (MAINTENIR = VISER)', 'F: PLEIN ECRAN  N: MUSIQUE'],
-  pad: ['STICK: MARCHER, A FOND: COURIR  B/R2: SPRINT  A: SAUT', 'X: COUP (MAINTENIR = CHARGE)', 'Y: FRAPPE AU SOL  L1: FLAIRER', 'R1: PRENDRE, LANCER (MAINTENIR = VISER)', 'SELECT: SON'],
+  touch: ['JOYSTICK A FOND: IL COURT', 'MAINTIENS B POUR CHARGER', 'SPRINT: MAINTIENS >> EN MARCHANT', 'N: FLAIRER LA VIANDE FRAICHE', 'P: PRENDRE, P: LANCER (MAINTENIR = VISER)', 'SAC EN HAUT A DROITE, BARRE: TOUCHE 2 FOIS = UTILISER'],
+  keys: ['ZQSD: COURIR  C: MARCHER  MAJ: SPRINT  ESPACE: SAUT', 'J/CLIC: COUP (MAINTENIR = CHARGE)', 'K/CLIC DROIT: FRAPPE AU SOL  R: FLAIRER', 'L/CLIC MOLETTE: PRENDRE, LANCER (MAINTENIR = VISER)', 'I/TAB: SAC  1-9: BARRE  T: UTILISER', 'F: PLEIN ECRAN  N: MUSIQUE'],
+  pad: ['STICK: MARCHER, A FOND: COURIR  B/R2: SPRINT  A: SAUT', 'X: COUP (MAINTENIR = CHARGE)', 'Y: FRAPPE AU SOL  L1: FLAIRER', 'R1: PRENDRE, LANCER (MAINTENIR = VISER)', 'CROIX: BARRE, HAUT = UTILISER, BAS = SAC', 'SELECT: SON'],
 };
 
 function drawHUD() {
@@ -4144,7 +4955,7 @@ function drawHUD() {
   const x0 = 6 + safe.l, y0 = 6 + safe.t;
   drawText(ctx, 'BRAINLESS', x0, y0, '#f6a6bd');
   drawText(ctx, 'NIV ' + player.level, x0 + 40, y0, '#c9a0ff');
-  buttons.n.sub = player.nearCorpse ? 'DEVORER' : 'FLAIR';
+  buttons.n.sub = player.nearCorpse ? 'DEVORER' : player.interact ? INTERACT_LABEL[player.interact.o] : 'FLAIR';
   buttons.g.sub = player.held ? 'LANCER' : 'PRENDRE';
   buttons.a.sub = player.held ? 'ECRASER' : 'COUP';
   const night = darkness() > 0.5;
@@ -4152,7 +4963,9 @@ function drawHUD() {
   drawSprintBar(x0, y0 + 17);
   drawHpBar(x0, y0 + 26);
   drawHungerBar(x0, y0 + 35);
-  if (player.alters.length) drawText(ctx, 'ALTERS: ' + player.alters.map((a) => ALTERS[a].name).join(' '), x0, y0 + 44, '#c9a0ff');
+  if (player.equip.length) drawText(ctx, 'ALTERS: ' + player.equip.map((a) => ALTERS[a].name + (player.alterLv[a] > 1 ? ' ' + player.alterLv[a] : '')).join(' '), x0, y0 + 44, '#c9a0ff');
+  drawHotbar();
+  drawBagButton();
   drawScent();
   drawMuteButton();
   drawMusicButton();
@@ -4191,16 +5004,27 @@ function drawHUD() {
 }
 
 // ---------------------------------------------------------------- boucle
-let last = 0, saveT = 0;
+let last = 0, saveT = 0, errT = -99;
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000 || 0);
   last = now;
-  if (mode === 'play') { if (hitstop > 0) hitstop -= dt; else update(dt); }
-  else updateMenu(dt);
-  render();
-  saveT += dt;
-  if (saveT > 4) { saveT = 0; save(); }
+  // l'image suivante est demandée d'abord : une erreur ne fige plus jamais le jeu
   requestAnimationFrame(frame);
+  try {
+    if (mode === 'play') {
+      if (overlayOpen()) overlayPad(dt); // sac ou choix de mutation ouvert : le jeu est en pause
+      else if (hitstop > 0) hitstop -= dt;
+      else update(dt);
+    }
+    else updateMenu(dt);
+    render();
+    saveT += dt;
+    if (saveT > 4) { saveT = 0; save(); }
+  } catch (e) {
+    console.error(e);
+    // affichée un instant (pas plus d'une fois toutes les 10 s) pour pouvoir la signaler
+    if (time - errT > 10) { errT = time; showMsg('ERREUR (LE JEU CONTINUE)', 4, String(e && e.message || e).toUpperCase().slice(0, 48)); }
+  }
 }
 
 // Écran d'accueil : la caméra survole lentement le monde.
@@ -4231,7 +5055,7 @@ function updateMenu(dt) {
   if (location.hash === '#debug') {
     window.BRAINLESS = { get world() { return world; }, player, startWorld, createWorld, listWorlds, quitToMenu, get mode() { return mode; }, stats, O, T, decals, particles, npcs, damage, hurtPlayer,
       vstate, crime, killNpc, hitNpc, nearestPrey, get scent() { return scent; },
-      get tod() { return tod; }, set tod(v) { tod = v; }, weather, spawnBeast, gainEvo, has, pages, blockedFor, freeSpot, OBJ_INFO, overlapping, crackTile, craterTile, doSlam, doBigPunch, doRushHit, fires, ignite, oilSplash, thrown, startGrab, releaseHeld, grabTarget, holdPts };
+      get tod() { return tod; }, set tod(v) { tod = v; }, weather, spawnBeast, gainEvo, has, get pages() { return atlasMain.pages.concat(atlasNomu.pages); }, blockedFor, freeSpot, OBJ_INFO, overlapping, crackTile, craterTile, doSlam, doBigPunch, doRushHit, openMutChoice, chooseMutation, openInv, addItem, useItem, get mutChoice() { return mutChoice; }, get invUI() { return invUI; }, get baking() { return baking; }, drops, fires, ignite, oilSplash, thrown, startGrab, releaseHeld, grabTarget, holdPts };
   }
   await loadAssets();
   loading.style.display = 'none';

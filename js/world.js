@@ -23,6 +23,8 @@ export const O = {
   WALL: 54, WALL_D: 55, WALL_R: 56, WALL_TOWER: 57, WALL_TOWER_D: 58,
   // ce que laisse le feu
   BURNT: 59,
+  // constructions de Brainless (fabriquées dans l'inventaire, posées sur la grille)
+  WALL_WOOD: 60, WALL_STONE: 61, SPIKES: 62, CAMPFIRE: 63, CHEST: 64, NEST: 65, TORCH: 66,
 };
 
 // Résistance des bâtiments : points de vie avant d'être abîmé, puis avant de s'effondrer.
@@ -65,6 +67,14 @@ export const OBJ_INFO = {
   [O.CABBAGE]: { hp: 0, small: true, crop: true, village: true, crime: 0.1, fuel: 1.5 },
   [O.PLANKS]: { hp: 0, small: true, fuel: 4 },
   [O.BURNT]: { solid: 0.25, tall: 20, hp: 1, wood: true, burnt: true, lift: 2 },
+  // constructions (`built`) : `light` = flamme allumée, `spikes` = blesse qui marche dessus
+  [O.WALL_WOOD]: { tilebox: true, tall: 18, hp: 5, prop: 'wood', built: true, fuel: 10 },
+  [O.WALL_STONE]: { tilebox: true, tall: 18, hp: 10, prop: 'stone', built: true },
+  [O.SPIKES]: { hp: 2, prop: 'wood', built: true, spikes: true, fuel: 4 },
+  [O.CAMPFIRE]: { solid: 0.3, tall: 6, hp: 2, prop: 'stone', built: true, light: true },
+  [O.TORCH]: { solid: 0.12, tall: 16, hp: 1, prop: 'wood', built: true, light: true, fuel: 3 },
+  [O.CHEST]: { solid: 0.3, tall: 9, hp: 3, prop: 'wood', built: true, fuel: 6 },
+  [O.NEST]: { hp: 3, prop: 'hay', built: true, fuel: 6 },
   // `tilebox` : bloque toute la tuile (un mur continu, pas un tronc rond)
   [O.WALL]: { tilebox: true, tall: 28, hp: 8, prop: 'stone', village: true, crime: 1, next: O.WALL_D },
   [O.WALL_D]: { tilebox: true, tall: 20, hp: 8, prop: 'stone', village: true, crime: 1, next: O.WALL_R },
@@ -99,6 +109,7 @@ export class World {
     this.wear = new Map(); // "x,y" -> [niveau 1..3, instant] : sol fissuré
     this.villages = new Map();
     this.deaths = new Map(); // id du village -> { civ, knight } : les morts ne reviennent pas
+    this.chests = new Map(); // "x,y" -> contenu d'un coffre posé par Brainless
     this._lastKey = null;
     this._lastChunk = null;
   }

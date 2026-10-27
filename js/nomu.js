@@ -17,6 +17,10 @@ const BEAK_LOW = ramp('#5e3e06', '#a8760e', '#d9a924', '#f2cf5a');
 const CLAW = ramp('#3a3f78', '#585ea0', '#8086c4', '#aab0e0');
 // bras fantômes de la rafale : la peau, éclaircie (traînée de vitesse)
 const GHOST = ramp('#151848', '#2a3180', '#4a52aa', '#7c84d8');
+// mutations
+const SKIN_FIRE = ramp('#1e0814', '#46122a', '#701e3e', '#9a3254'); // peau ignifuge : indigo virant au cramoisi
+const STEEL = ramp('#4a5060', '#8a92a4', '#c4cad6', '#f0f4fa'); // griffes d'acier
+const EYE_RED = ramp('#5e0a0a', '#a8161a', '#ff3a2a', '#ffb4a4'); // yeux de chasseur
 const MOUTH = [22, 6, 12];
 const PUPIL = [6, 4, 4];
 
@@ -653,7 +657,9 @@ function skeleton(P) {
   return { ub, hip, pitch, U, handAt };
 }
 
-export function nomuParts(P) {
+// `M` : les mutations qui se voient ({ arms: true, tail: true… }, voir js/mutations.js).
+export function nomuParts(P, M = {}) {
+  const SK = M.fireproof ? SKIN_FIRE : SKIN;
   const tw = P.twist;
   const { ub, hip, pitch, U, handAt } = skeleton(P);
   const parts = [];
@@ -669,7 +675,7 @@ export function nomuParts(P) {
       tex: (p) => (Math.abs(p.ex) < 0.5 && p.t < 0.5 && p.shade > 0 ? p.shade - 1 : p.shade) }); // couture
     parts.push({ a: knee, r1: 4, ramp: PANTS, group: g,
       tex: (p) => (p.ey > p.r * 0.45 && hash(p.x, p.y, side) < 0.5 ? null : p.shade) }); // revers déchiré
-    parts.push({ a: knee, b: ankle, r1: 3.1, r2: 2.6, ramp: SKIN, group: g });
+    parts.push({ a: knee, b: ankle, r1: M.legs ? 3.6 : 3.1, r2: 2.6, ramp: SK, group: g, tex: M.legs ? stripes(0.12, 0.88) : undefined }); // pattes de coureur : mollets rayés
     const b0 = lerpV(knee, ankle, 0.22 + (side > 0 ? 0.18 : 0)), b1 = lerpV(knee, ankle, 0.45 + (side > 0 ? 0.18 : 0));
     parts.push({
       a: b0, b: b1, r1: 3.6, ramp: BONE, group: 16 + side,
@@ -682,9 +688,10 @@ export function nomuParts(P) {
       },
     });
     const toe = add(ankle, [side * 0.6, 4.6, -2]);
-    parts.push({ a: ankle, b: toe, r1: 2.9, r2: 2.5, ramp: SKIN, group: g });
+    parts.push({ a: ankle, b: toe, r1: 2.9, r2: 2.5, ramp: SK, group: g });
     for (const k of [-1, 0, 1]) {
-      parts.push({ a: add(toe, [k * 1.5, 0, 0]), b: add(toe, [k * 1.9, 2.4, -0.6]), r1: 1.05, r2: 0.8, ramp: SKIN, group: g });
+      parts.push({ a: add(toe, [k * 1.5, 0, 0]), b: add(toe, [k * 2.1, M.legs ? 4 : 2.4, M.legs ? -1 : -0.6]), r1: 1.05, r2: 0.7, ramp: SK, group: g,
+        tex: M.legs ? (p) => (p.t > 0.55 ? CLAW[Math.min(3, p.shade + 1)] : p.shade) : undefined });
     }
   }
   parts.push({ a: hip, r1: 5.9, ramp: PANTS, group: 10,
@@ -692,13 +699,34 @@ export function nomuParts(P) {
 
   // --- torse : taille fine, épaules et trapèzes énormes, rayures rouges ---
   const br = P.breathe * 0.3;
-  parts.push({ a: pitch(add(hip, [0, 1.2, 3])), b: U([0, 0.5, 29]), r1: 5.6, r2: 7.2, ramp: SKIN, group: 1 });
-  parts.push({ a: U([-5.6, -0.5, 32.5]), b: U([5.6, -0.5, 32.5]), r1: 5.3, ramp: SKIN, group: 1 });
-  parts.push({ a: U([0, -5, 32.5 + br]), r1: 5.6, ramp: SKIN, group: 1, tex: slash(0.35) }); // dos voûté, derrière le cerveau
-  parts.push({ a: U([-4, 3.4, 30 + br]), r1: 4.6, ramp: SKIN, group: 11 });
-  parts.push({ a: U([4, 3.4, 30 + br]), r1: 4.6, ramp: SKIN, group: 12 });
+  parts.push({ a: pitch(add(hip, [0, 1.2, 3])), b: U([0, 0.5, 29]), r1: 5.6, r2: 7.2, ramp: SK, group: 1 });
+  parts.push({ a: U([-5.6, -0.5, 32.5]), b: U([5.6, -0.5, 32.5]), r1: 5.3, ramp: SK, group: 1 });
+  parts.push({ a: U([0, -5, 32.5 + br]), r1: 5.6, ramp: SK, group: 1, tex: slash(0.35) }); // dos voûté, derrière le cerveau
+  parts.push({ a: U([-4, 3.4, 30 + br]), r1: 4.6, ramp: SK, group: 11 });
+  parts.push({ a: U([4, 3.4, 30 + br]), r1: 4.6, ramp: SK, group: 12 });
   for (const x of [-1.8, 1.8]) {
-    parts.push({ a: pitch(add(hip, [x, 4.6, 6.5])), b: U([x, 4.3, 25]), r1: 2.1, ramp: SKIN, group: 13 });
+    parts.push({ a: pitch(add(hip, [x, 4.6, 6.5])), b: U([x, 4.3, 25]), r1: 2.1, ramp: SK, group: 13 });
+  }
+
+  // --- mutations du dos : épines, carapace ---
+  if (M.spikes) {
+    for (let k = 0; k < 5; k++) {
+      parts.push({ a: U([0, -6, 28 + k * 2.6]), b: U([(k & 1 ? 0.9 : -0.9), -14 + k * 0.5, 31 + k * 3.6]), r1: 2.3, r2: 0.3, ramp: BONE, group: 30 + k });
+    }
+  }
+  if (M.carapace) {
+    // plaques d'os sur les épaules et le dos, striées comme une écaille de tortue
+    const plate = (p) => (Math.abs(Math.sin((p.ex * 0.5 + p.ey) / p.r * 5)) < 0.22 ? Math.max(0, p.shade - 1) : p.shade);
+    for (const side of [-1, 1]) parts.push({ a: U([side * 8.7, -1.8, 37.4]), r1: 4.3, ramp: BONE, group: 40 + side, tex: plate });
+    parts.push({ a: U([0, -6.8, 33]), r1: 4.6, ramp: BONE, group: 42, tex: plate });
+  }
+  if (M.tail) {
+    // une longue queue rayée qui fouette derrière lui, terminée par un dard d'os
+    const sw = P.hipTwist * 7 + P.twist * 4;
+    const pts = [[0, -4.2, 0], [sw * 0.4, -10.5, -3.5], [sw * 0.9, -16.5, -4.5], [sw * 1.5, -22, -1.5]].map((q) => add(hip, q));
+    const rr = [3.8, 3, 2.2, 1.4];
+    for (let k = 0; k < 3; k++) parts.push({ a: pts[k], b: pts[k + 1], r1: rr[k], r2: rr[k + 1], ramp: SK, group: 50, tex: k === 1 ? stripes(0.5) : undefined });
+    parts.push({ a: pts[3], b: add(pts[3], [sw * 0.4, -4.4, 2.5]), r1: 1.6, r2: 0.2, ramp: BONE, group: 51 });
   }
 
   // --- bras très longs, grandes mains à doigts griffus ---
@@ -709,21 +737,25 @@ export function nomuParts(P) {
     const sh = U([side * 8.2, -1, 34.5 + P.breathe * 0.4]);
     const ed = P.elbowDown;
     const elbow = ik(sh, hand, 11, 10.5, [side * (0.7 - ed * 0.3), -0.7 + ed * 0.5, -0.2 - ed * 1.2]);
-    parts.push({ a: U([side * 8.2, -1.2, 35]), r1: 4.6, ramp: SKIN, group: g, tex: side > 0 ? slash(0.3) : slash(-0.2) });
-    parts.push({ a: sh, b: elbow, r1: 4.4, r2: 3.6, ramp: SKIN, group: g, tex: side < 0 ? stripes(0.6) : undefined });
-    parts.push({ a: elbow, b: hand, r1: 3.9, r2: 3.2, ramp: SKIN, group: g, tex: stripes(side < 0 ? 0.35 : 0.25) });
-    parts.push({ a: hand, r1: 3.7, ramp: SKIN, group: g });
+    parts.push({ a: U([side * 8.2, -1.2, 35]), r1: 4.6, ramp: SK, group: g, tex: side > 0 ? slash(0.3) : slash(-0.2) });
+    const big = M.arms ? 1 : 0; // bras de titan : avant-bras et mains énormes
+    parts.push({ a: sh, b: elbow, r1: 4.4 + big * 1, r2: 3.6 + big * 1, ramp: SK, group: g, tex: side < 0 ? stripes(0.6) : undefined });
+    parts.push({ a: elbow, b: hand, r1: 3.9 + big * 2.4, r2: 3.2 + big * 2.2, ramp: SK, group: g, tex: stripes(side < 0 ? 0.35 : 0.25) });
+    parts.push({ a: hand, r1: 3.7 + big * 1.8, ramp: SK, group: g });
     // longs doigts recourbés
     let dx = hand[0] - elbow[0], dy = hand[1] - elbow[1], dz = hand[2] - elbow[2];
     const dl = Math.hypot(dx, dy, dz) || 1;
     dx /= dl; dy /= dl; dz /= dl;
+    const reach = 2.4 + big * 1.5, cl = M.claws ? 2.8 : 1; // griffes d'acier : longues lames argentées
+    if (M.fists) parts.push({ a: [hand[0] + dx * 2, hand[1] + dy * 2 + 0.6, hand[2] + dz * 2], r1: 3 + big, ramp: BONE, group: g + 60,
+      tex: (p) => ((p.x + p.y) % 3 === 0 && p.shade > 0 ? p.shade - 1 : p.shade) }); // poings-masses : jointures d'os
     for (const k of [-1.5, -0.5, 0.5, 1.5]) {
-      const base = [hand[0] + dx * 2.4 + k * 1.1, hand[1] + dy * 2.4 + 0.8, hand[2] + dz * 2.4];
+      const base = [hand[0] + dx * reach + k * 1.1, hand[1] + dy * reach + 0.8, hand[2] + dz * reach];
       const mid = [base[0] + dx * 2.2 + k * 0.4, base[1] + dy * 2.2 + 0.8, base[2] + dz * 2.2];
-      const tip = [mid[0] + dx * 1.2, mid[1] + dy * 1.2 + 1 + P.curl * 1.2, mid[2] + dz * 1.2 - 1 - P.curl * 0.4];
-      parts.push({ a: base, b: mid, r1: 1.2, r2: 1, ramp: SKIN, group: g });
-      parts.push({ a: mid, b: tip, r1: 1, r2: 0.55, ramp: SKIN, group: g,
-        tex: (p) => (p.t > 0.6 ? CLAW[Math.min(3, p.shade + 1)] : p.shade) });
+      const tip = [mid[0] + dx * 1.2 * cl, mid[1] + dy * 1.2 * cl + 1 + P.curl * 1.2, mid[2] + dz * 1.2 * cl - 1 - P.curl * 0.4];
+      parts.push({ a: base, b: mid, r1: 1.2, r2: 1, ramp: SK, group: g });
+      parts.push({ a: mid, b: tip, r1: 1, r2: M.claws ? 0.4 : 0.55, ramp: SK, group: g,
+        tex: M.claws ? (p) => (p.t > 0.3 ? STEEL[Math.min(3, p.shade + 1)] : p.shade) : (p) => (p.t > 0.6 ? CLAW[Math.min(3, p.shade + 1)] : p.shade) });
     }
   }
 
@@ -742,18 +774,18 @@ export function nomuParts(P) {
   // à quatre pattes, la tête sort devant les épaules au lieu de rester enfoncée
   const head = add(U([0, 4 + P.pitch * 6, 38.5 + P.nod * 0.4]), [0, P.lean * 0.35, P.headUp + P.pitch * 3]);
   const H = (p) => add(head, rotZ(p, tw));
-  const jaw = P.jaw;
-  parts.push({ a: head, r1: 3.9, ramp: SKIN, group: 2 });
+  const jaw = P.jaw + (M.jaw ? 0.4 : 0), bk = M.jaw ? 1.75 : 1; // mâchoire béante : bec plus long, toujours entrouvert
+  parts.push({ a: head, r1: 3.9, ramp: SK, group: 2 });
   // intérieur sombre du bec, qui s'ouvre avec la mâchoire
-  parts.push({ a: H([0, 3, -0.8]), b: H([0, 4.4, -4.6 - jaw]), r1: 2 + jaw * 0.4, r2: 0.8, ramp: [MOUTH_IN, MOUTH_IN, MOUTH_IN, MOUTH_IN], group: 5,
+  parts.push({ a: H([0, 3, -0.8]), b: H([0, 3 + 1.4 * bk, -0.8 - (3.8 + jaw) * bk]), r1: (2 + jaw * 0.4) * (M.jaw ? 1.25 : 1), r2: 0.8, ramp: [MOUTH_IN, MOUTH_IN, MOUTH_IN, MOUTH_IN], group: 5,
     tex: (p) => (p.t > 0.15 && p.t < 0.6 && Math.abs(p.ex) > p.r * 0.55 && (p.y & 1) ? [230, 225, 210] : MOUTH_IN) });
   for (const side of [-1, 1]) {
-    parts.push({ a: H([side * 2.9, 2.5, -0.2]), b: H([0, 4.9, -5.4 - jaw]), r1: 0.95, r2: 0.7, ramp: GOLD, group: 14 });
-    parts.push({ a: H([side * 2.6, 2.3, 1.2]), r1: 1.25, ramp: EYE, group: 4,
+    parts.push({ a: H([side * 2.9, 2.5, -0.2]), b: H([0, 2.5 + 2.4 * bk, -0.2 - (5.2 + jaw) * bk]), r1: 0.95 * (M.jaw ? 1.2 : 1), r2: 0.7, ramp: GOLD, group: 14 });
+    parts.push({ a: H([side * 2.6, 2.3, 1.2]), r1: M.eyes ? 1.5 : 1.25, ramp: M.eyes ? EYE_RED : EYE, group: 4,
       tex: (p) => (p.nx * p.fc[0] + p.ny * p.fc[1] + p.nz * p.fc[2] > 0.85 ? PUPIL : p.shade) });
   }
   parts.push({
-    a: H([0, 0.4, 3.6]), r1: 5.2, ramp: BRAIN, group: 3,
+    a: H([0, 0.4, M.brain ? 4.8 : 3.6]), r1: M.brain ? 6.6 : 5.2, ramp: BRAIN, group: 3, // cerveau hypertrophié
     tex: (p) => {
       const u = p.ex / p.r, v = p.ey / p.r;
       const fold = Math.sin(u * 9 + Math.sin(v * 7) * 1.6) * Math.cos(v * 6.5 - u * 2);
@@ -773,21 +805,26 @@ export function dirFacing(k) {
 // Point entre les deux mains (ou dans la main droite), à l'écran, par rapport à l'origine du sprite : c'est là qu'on dessine
 // ce qu'il porte. `z` = hauteur des mains dans le modèle, `depth` > 0 = devant son corps.
 // `one` : il tient d'une seule main (la droite).
-export function holdPoint(anim, t, dir, one = false) {
+// `k` : facteur de taille (mutation MASSE).
+export function holdPoint(anim, t, dir, one = false, k = 1) {
   const P = poseFor(anim, t);
   const { handAt } = skeleton(P);
   const m = one ? handAt(P.hR) : lerpV(handAt(P.hL), handAt(P.hR), 0.5);
-  const [fx, ft] = dirFacing(dir), s = SCALE * (1 + P.swell);
+  const [fx, ft] = dirFacing(dir), s = SCALE * k * (1 + P.swell);
   const mx = m[0] * s, mf = (m[1] + 3) * s, mz = m[2] * s; // +3 : au creux des doigts, pas au poignet
   const cx = mx * -ft + mf * fx, ct = mx * fx + mf * ft;
   return { x: cx, y: -mz * COS_A + ct * SIN_A, z: m[2], depth: ct };
 }
 
+// Taille selon les mutations (MASSE : il grandit).
+export const sizeOf = (M = {}) => (M.mass ? 1.13 : 1);
+
+// extra.muts : mutations visibles.
 export function renderNomu(anim, t, dir, extra = {}) {
-  const P = poseFor(anim, t);
-  return renderModel(nomuParts(P), {
+  const P = poseFor(anim, t), M = extra.muts || {};
+  return renderModel(nomuParts(P, M), {
     w: extra.w || SPRITE_W, h: extra.h || SPRITE_H,
     ox: extra.ox ?? ORIGIN_X, oy: extra.oy ?? ORIGIN_Y,
-    facing: dirFacing(dir), scale: (extra.scale || SCALE) * (1 + P.swell),
+    facing: dirFacing(dir), scale: (extra.scale || SCALE) * sizeOf(M) * (1 + P.swell),
   });
 }
