@@ -825,10 +825,23 @@ function doRushHit() {
     hitNpc(n, strength(), rx / d, ry / d, 0.12);
     hit = true;
   }
+  const houses = new Set(); // un bâtiment couvre 4 tuiles : un seul coup par salve
   for (let ty = Math.floor(player.y) - 2; ty <= Math.floor(player.y) + 2; ty++) {
     for (let tx = Math.floor(player.x) - 2; tx <= Math.floor(player.x) + 2; tx++) {
       const info = OBJ_INFO[world.objAt(tx, ty)];
-      if (!info || info.part || info.building || !inFan(tx + 0.5, ty + 0.5)) continue;
+      if (!info) continue;
+      if (info.part || info.building) {
+        const a = world.anchorOf(tx, ty), k = a[0] + ',' + a[1], ai = OBJ_INFO[world.objAt(a[0], a[1])];
+        if (houses.has(k) || !ai || !ai.box) continue;
+        // on vise le point du mur le plus proche de lui
+        const px = Math.max(a[0] - ai.box, Math.min(a[0] + ai.box, player.x)), py = Math.max(a[1] - ai.box, Math.min(a[1] + ai.box, player.y));
+        if (!inFan(px, py)) continue;
+        houses.add(k);
+        damage(a[0], a[1], Math.max(1, Math.round(strength())));
+        hit = true;
+        continue;
+      }
+      if (!inFan(tx + 0.5, ty + 0.5)) continue;
       damage(tx, ty, info.small ? 1 : Math.max(1, Math.round(strength())));
       if (!info.small) hit = true;
     }
