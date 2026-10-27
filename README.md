@@ -11,8 +11,8 @@ s'installe sur l'écran d'accueil (PWA, marche hors-ligne).
 - **Faune** : lapins, cerfs, sangliers (qui chargent), loups en meute la nuit.
 - **Météo** : pluie, neige en montagne, brouillard, orages avec la foudre qui frappe.
 - **iPhone** : ouvrir l'URL GitHub Pages dans Safari → Partager → *Sur l'écran d'accueil*.
-- Pouce gauche : joystick pour marcher (debout).
-- **>> SPRINT** (maintenir) : galop de bête à quatre pattes qui pulvérise arbres et rochers, fait trembler l'écran et vide la barre de sprint.
+- Pouce gauche : joystick. Un peu incliné, il marche ; à fond, il court debout (il accélère et ralentit en douceur, en changeant d'allure). Au clavier, les flèches le font courir et C maintenu le fait marcher.
+- **>> SPRINT** (maintenir) : il plonge sur les mains et part au galop de bête à quatre pattes (lâcher le sprint en courant : il se redresse) qui pulvérise arbres et rochers, fait trembler l'écran et vide la barre de sprint.
 - **A COUP** : tapoter = trois frappes en diagonale (gauche, droite, montante) ; continuer à spammer = **rafale**, une nuée de poings qui balaie tout devant et sur les côtés. Maintenir = il se met en position et arme un gros coup qui souffle tout devant lui au relâchement ; pendant la charge, le joystick le fait pivoter sur place pour viser (un cône en pointillés montre la zone touchée). **^ SAUT** : saut (permet de grimper une marche de plus).
 - **B CHARGE** (maintenir) : il se met sur les coudes et gonfle ; au relâchement il lève les bras et frappe le sol. Plus la charge est longue, plus la zone détruite est grande.
 - Les boutons se combinent en glissant : pars de SPRINT et glisse sur SAUT ou COUP, il saute ou frappe sans arrêter de sprinter.

@@ -207,7 +207,7 @@ let mode = 'menu'; // 'menu' : écran d'accueil, le monde défile en fond ; 'pla
 const stats = { trees: 0, rocks: 0, smash: 0, houses: 0, knights: 0, victims: 0, play: 0 };
 let tod = 0.3;
 let time = 0;
-const player = { x: 0, y: 0, z: 0, dir: 2, anim: 'idle', t: 0, action: null, actionT: 0, hitDone: false, dustT: 0, stamina: 1, tired: false, sprinting: false,
+const player = { x: 0, y: 0, z: 0, dir: 2, anim: 'idle', t: 0, spd: 0, phase: 0, quad: false, trans: null, lastV: null, action: null, actionT: 0, hitDone: false, dustT: 0, stamina: 1, tired: false, sprinting: false,
   jz: 0, vz: 0, air: false, charging: false, charge: 0, slamPower: 0, runFrame: -1,
   slide: null, mv: null, idleT: 0, water: 0, rippleT: 0,
   chargeKind: null, punchHoldT: 0, punchPower: 0, combo: 0, lastPunch: -1, punchBuf: false,
@@ -1060,6 +1060,25 @@ function land() {
 
 const JUMP_V = 140, GRAVITY = 420;
 
+// Allures debout : la vitesse suit l'inclinaison du joystick (un peu = marche lente, à moitié =
+// marche, à fond = course debout). La vitesse réelle rattrape la vitesse voulue en douceur, et
+// l'animation est choisie d'après la vitesse réelle : il accélère et ralentit en changeant d'allure.
+const WALK_V = 2.2, JOG_V = 4, SPRINT_V = 5.8;
+const GAITS = ['walk', 'stride', 'jog'];
+function stickSpeed(mag) {
+  if (mag < 0.15) return 0;
+  if (mag < 0.8) return 0.8 + (mag - 0.15) / 0.65 * (WALK_V - 0.8);
+  return WALK_V + Math.min(1, (mag - 0.8) / 0.15) * (JOG_V - WALK_V);
+}
+// Fait avancer le cycle de pas au rythme de la vitesse (les pieds ne glissent pas) et choisit l'allure.
+function gaitStep(dt) {
+  const g = Math.max(0, Math.min(1, (player.spd - 2) / 1.4)); // 0 = marche, 1 = course
+  player.phase = (player.phase + dt * Math.max(0.7, player.spd / (1.6 + g * 0.9))) % 1;
+  player.anim = GAITS[g < 0.3 ? 0 : g < 0.7 ? 1 : 2];
+  player.t = player.phase * ANIMS.walk.frames;
+}
+const TRANS_DUR = ANIMS.drop.frames / ANIMS.drop.fps;
+
 // ---------------------------------------------------------------- mise à jour
 function update(dt) {
   time += dt;
@@ -1075,7 +1094,7 @@ function update(dt) {
 
   let ix = input.x, iy = input.y;
   const kb = keyboardVector();
-  if (kb) [ix, iy] = kb;
+  if (kb) [ix, iy] = kb.map((v) => (keys.has('KeyC') ? v * 0.6 : v)); // C maintenu : il marche au lieu de courir
   const pv = readPad();
   if (pv) [ix, iy] = pv;
   const mag = Math.min(1, Math.hypot(ix, iy));
@@ -1206,6 +1225,16 @@ function update(dt) {
       const run = sprintHeld() && !player.tired && (mag > 0.15 || coasting);
       if (!player.air) player.sprinting = run;
       player.moving = mag > 0.15;
+      // vitesse réelle : rattrape en douceur la vitesse voulue (sprint, ou selon le joystick)
+      const target = player.water === 2 ? 0 : player.sprinting ? SPRINT_V * (has('engine') ? 1.35 : 1) : stickSpeed(mag) * (player.water ? 0.62 : 1);
+      player.spd += Math.max(-dt * 9, Math.min(dt * (player.sprinting ? 12 : 6), target - player.spd));
+      // passage debout <-> quatre pattes : il plonge sur les mains, ou se redresse en courant
+      if (player.sprinting && !player.quad && !player.air && !player.water) { player.quad = true; player.trans = { a: 'drop', t: 0 }; }
+      if (!player.sprinting && player.quad && !player.air) {
+        player.quad = false;
+        player.trans = mag > 0.15 && !player.water ? { a: 'rise', t: 0 } : null;
+      }
+      if (player.trans && (player.trans.t += dt) >= TRANS_DUR) player.trans = null;
       if (mag > 0.15) {
         const cx = ix / mag, ct = iy / mag;
         const vx = (cx + ct) / Math.SQRT2, vy = (ct - cx) / Math.SQRT2;
@@ -1213,34 +1242,45 @@ function update(dt) {
         if (player.sprinting && !player.air && !player.water && player.mv && vx * player.mv[0] + vy * player.mv[1] < -0.35) {
           startSlide('skid', newDir); // demi-tour violent
         } else {
-          const speed = player.water === 2 ? (player.sprinting ? 4.6 : 1.9) : (player.sprinting ? 5.8 * (has('engine') ? 1.35 : 1) : 2.2) * (player.water ? 0.62 : 1);
-          if (player.sprinting && !player.air) trample(vx, vy);
+          const speed = player.water === 2 ? (player.sprinting ? 4.6 : 1.9) : player.spd;
+          if (player.sprinting && !player.air && !player.trans) trample(vx, vy);
           tryMove(vx * speed * dt, vy * speed * dt);
           player.dir = newDir;
+          player.lastV = [vx, vy];
           player.mv = player.sprinting ? [vx, vy] : null;
-          setAnim(player.water === 2 ? (player.sprinting ? 'swimfast' : 'swim') : player.sprinting ? 'run' : 'walk');
-          if (player.water === 2) swimStrokes(vx, vy);
-          else if (!player.sprinting && !player.air) walkSteps();
-          if (player.sprinting && !player.air && player.water !== 2) sprintImpacts(vx, vy);
+          if (player.water === 2) { setAnim(player.sprinting ? 'swimfast' : 'swim'); swimStrokes(vx, vy); }
+          else if (player.trans) { player.anim = player.trans.a; player.t = player.trans.t / TRANS_DUR * ANIMS.drop.frames; }
+          else if (player.sprinting) { setAnim('run'); if (!player.air) sprintImpacts(vx, vy); }
+          else { gaitStep(dt); if (!player.air) walkSteps(); }
         }
       } else if (coasting && run) {
         tryMove(player.mv[0] * 5.8 * dt, player.mv[1] * 5.8 * dt);
+      } else if (player.spd > 0.4 && player.lastV && player.water !== 2 && !player.sprinting && !wasSprinting) {
+        // joystick lâché : il ralentit sur quelques pas au lieu de s'arrêter net
+        tryMove(player.lastV[0] * player.spd * dt, player.lastV[1] * player.spd * dt);
+        gaitStep(dt);
+        if (!player.air) walkSteps();
       } else {
+        player.spd = 0;
         setAnim(player.water === 2 ? 'tread' : 'idle');
         if (player.water === 2) swimStrokes(0, 0);
         if (!player.air) player.sprinting = false;
       }
       // il lâche le sprint en pleine course : il freine
-      if (wasSprinting && !player.sprinting && !player.slide && !player.air && !player.water && prevMv) {
+      if (wasSprinting && !player.sprinting && !player.slide && !player.air && !player.water && prevMv && mag <= 0.15) {
         player.mv = prevMv;
+        player.spd = 0;
         startSlide('brake', player.dir);
       }
       if (!player.sprinting && !player.slide) player.mv = null;
     }
+    // un coup, une charge ou un freinage interrompt le galop : pas de « redressement » après coup
+    if (player.action || player.charging || (player.slide && player.slide.kind === 'brake')) { player.quad = false; player.trans = null; }
     if (player.sprinting && !player.air) player.stamina = Math.max(0, player.stamina - dt / 4.5 / (1 + 0.08 * (player.level - 1)) * (has('engine') ? 0.6 : 1));
     else if (!player.sprinting) player.stamina = Math.min(1, player.stamina + dt / (player.tired ? 3 : 5));
     const A = ANIMS[player.anim];
-    player.t += dt * A.fps * (player.charging ? 1 + player.charge * 1.8 : 1);
+    // les allures et les transitions règlent elles-mêmes leur image
+    if (!GAITS.includes(player.anim) && !player.trans) player.t += dt * A.fps * (player.charging ? 1 + player.charge * 1.8 : 1);
   }
 
   const depth = waterDepth(player.x, player.y);
@@ -1405,6 +1445,7 @@ function playerDown() {
   player.action = null; player.charging = false; player.chargeKind = null;
   chargeStop();
   player.slide = null; player.sprinting = false; player.air = false; player.jz = 0; player.vz = 0; player.mv = null; player.kb = null;
+  player.spd = 0; player.quad = false; player.trans = null;
   sfx.down();
   shake = Math.max(shake, 5);
 }
@@ -2348,6 +2389,9 @@ const decals = []; // traces au sol
 
 function startSlide(kind, newDir) {
   const [vx, vy] = player.mv;
+  player.spd = kind === 'skid' ? 2 : 0;
+  player.trans = null;
+  player.quad = kind === 'skid'; // demi-tour : il reste à quatre pattes
   player.slide = { kind, t: 0, vx, vy, dustT: 0, newDir, lx: player.x, ly: player.y, ...SLIDE[kind] };
   player.sprinting = false;
   player.mv = null;
@@ -3147,9 +3191,9 @@ function drawMuteButton() {
 }
 
 const HINTS = {
-  touch: ['MAINTIENS B POUR CHARGER', 'SPRINT: MAINTIENS >> EN MARCHANT', 'N: FLAIRER LA VIANDE FRAICHE'],
-  keys: ['ZQSD: BOUGER  MAJ: SPRINT  ESPACE: SAUT', 'J/CLIC: COUP (MAINTENIR = CHARGE)', 'K/CLIC DROIT: FRAPPE AU SOL  R: FLAIRER', 'F: PLEIN ECRAN'],
-  pad: ['STICK: BOUGER  B/R2: SPRINT  A: SAUT', 'X: COUP (MAINTENIR = CHARGE)', 'Y: FRAPPE AU SOL  L1: FLAIRER', 'SELECT: SON'],
+  touch: ['JOYSTICK A FOND: IL COURT', 'MAINTIENS B POUR CHARGER', 'SPRINT: MAINTIENS >> EN MARCHANT', 'N: FLAIRER LA VIANDE FRAICHE'],
+  keys: ['ZQSD: COURIR  C: MARCHER  MAJ: SPRINT  ESPACE: SAUT', 'J/CLIC: COUP (MAINTENIR = CHARGE)', 'K/CLIC DROIT: FRAPPE AU SOL  R: FLAIRER', 'F: PLEIN ECRAN'],
+  pad: ['STICK: MARCHER, A FOND: COURIR  B/R2: SPRINT  A: SAUT', 'X: COUP (MAINTENIR = CHARGE)', 'Y: FRAPPE AU SOL  L1: FLAIRER', 'SELECT: SON'],
 };
 
 function drawHUD() {

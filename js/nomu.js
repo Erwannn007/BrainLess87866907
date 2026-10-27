@@ -26,6 +26,10 @@ export const SCALE = 0.75;
 export const ANIMS = {
   idle: { frames: 6, fps: 6, loop: true },
   walk: { frames: 8, fps: 11, loop: true },
+  stride: { frames: 8, fps: 12, loop: true }, // entre la marche et la course : grand pas pressé
+  jog: { frames: 8, fps: 13, loop: true }, // course debout (joystick à fond)
+  drop: { frames: 4, fps: 18, loop: false }, // il se jette à quatre pattes pour sprinter
+  rise: { frames: 4, fps: 18, loop: false }, // il se redresse en sortant du sprint
   run: { frames: 10, fps: 17, loop: true }, // galop de bête à quatre pattes
   punch: { frames: 8, fps: 18, loop: false },
   jabL: { frames: 8, fps: 26, loop: false }, // gauche en diagonale : de haut-dehors à bas-dedans
@@ -58,6 +62,7 @@ function basePose() {
     hL: [-11, 2.5, 16], hR: [11, 2.5, 16],
     bob: 0, lean: 0, twist: 0, crouch: 0, lift: 0, breathe: 0, jaw: 0, nod: 0,
     pitch: 0, headUp: 0, handsAbs: 0, elbowDown: 0, swell: 0, curl: 0, hipTwist: 0,
+    absMix: 0, // transitions debout <-> quatre pattes : mains relatives (0) -> au sol (1) en continu
   };
 }
 
@@ -103,6 +108,36 @@ export function poseFor(anim, t) {
     p.twist = s * 0.1;
     p.lean = 1.5;
     p.nod = c * 0.5;
+    return p;
+  }
+  if (anim === 'jog') {
+    // Course debout : buste penché, grandes foulées, genoux hauts, temps de suspension ;
+    // les longs bras pompent loin devant et derrière, la gueule entrouverte.
+    const ph = t * TAU, s = Math.sin(ph), c = Math.cos(ph);
+    const p = basePose();
+    // le pied se lève juste après la poussée (talon qui remonte derrière), puis le genou passe devant
+    const lift = (o) => Math.max(0, Math.cos(ph + o - 0.7)) * 6.5;
+    p.fL = [-4.3, s * 9, lift(0)];
+    p.fR = [4.3, -s * 9, lift(Math.PI)];
+    p.hL = [-10.5, 3 - s * 11, 18 + Math.max(0, -s) * 8];
+    p.hR = [10.5, 3 + s * 11, 18 + Math.max(0, s) * 8];
+    p.bob = Math.abs(s) * 1.6 - 0.6; // plus haut entre deux appuis
+    p.crouch = 1.8;
+    p.lean = 4.5;
+    p.twist = s * 0.18;
+    p.hipTwist = -s * 0.12;
+    p.nod = c * 0.6;
+    p.jaw = 0.6;
+    return p;
+  }
+  if (anim === 'stride') return blend(poseFor('walk', t), poseFor('jog', t), 0.5);
+  if (anim === 'drop' || anim === 'rise') {
+    // De la course debout au galop : le buste plonge, les mains vont chercher le sol (et l'inverse).
+    const u = smooth(anim === 'drop' ? t : 1 - t);
+    const p = blend(poseFor('jog', 0.25), poseFor('run', 0), u);
+    p.handsAbs = 0;
+    p.absMix = u;
+    p.jaw = 0.6 + u * 0.8;
     return p;
   }
   if (anim === 'run') {
@@ -473,7 +508,7 @@ export function nomuParts(P) {
   // --- bras très longs, grandes mains à doigts griffus ---
   for (const side of [-1, 1]) {
     const h = side < 0 ? P.hL : P.hR;
-    const hand = P.handsAbs ? h : pitch(add(h, ub));
+    const hand = P.handsAbs ? h : P.absMix ? lerpV(pitch(add(h, ub)), h, P.absMix) : pitch(add(h, ub));
     const g = side < 0 ? 6 : 7;
     const sh = U([side * 8.2, -1, 34.5 + P.breathe * 0.4]);
     const ed = P.elbowDown;

@@ -107,7 +107,12 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
     de l'épaule, image rémanente en jeu, coup dans un éventail de ±110° (`doRushHit`). Effets :
     arcs de choc, éclairs d'impact (`spark`), poussière, vent — mais le sol n'est jamais abîmé.
   - Gueule qui s'ouvre (`jaw`) à l'effort.
-  - Marche debout ; sprint à quatre pattes.
+  - Allures debout selon le joystick (`stickSpeed`) : marche lente, marche (`walk`), grand pas
+    (`stride`, mélange marche/course), course debout à fond (`jog`). La vitesse réelle (`player.spd`)
+    rattrape la vitesse voulue en douceur et l'allure suit la vitesse réelle (`gaitStep`, cycle de
+    pas `player.phase` partagé : changer d'allure ne fait pas sauter les jambes). Il ralentit sur
+    quelques pas quand on lâche. Sprint à quatre pattes, avec transitions `drop` (il plonge sur les
+    mains) et `rise` (il se redresse en courant). Clavier : C maintenu = marcher.
 
 ## 5. Le décor (`js/sprites.js`, `js/world.js`)
 
