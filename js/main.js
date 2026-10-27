@@ -1,13 +1,13 @@
 import { World, T, O, OBJ_INFO, VG } from './world.js';
 import { buildVillageSprites } from './buildings.js';
 import { renderPerson, PEOPLE, PEOPLE_ANIMS, CIVILIANS, HEROES } from './people.js';
-import { renderNomu, ANIMS } from './nomu.js';
+import { renderNomu, ANIMS, holdPoint } from './nomu.js';
 import { renderBeast, BEASTS, BEAST_ANIMS, BEAST_MEAL } from './beasts.js';
 import { valueNoise } from './noise.js';
 import * as SP from './sprites.js';
 import { hash, makeBuffer } from './raster.js';
 import { drawText, textWidth } from './font.js';
-import { sfx, unlockAudio, toggleMute, isMuted, audioRunning, chargeStart, chargeUpdate, chargeStop, updateAmbience } from './audio.js';
+import { sfx, unlockAudio, toggleMute, isMuted, audioRunning, chargeStart, chargeUpdate, chargeStop, updateAmbience, updateMusic, musicMode, cycleMusic } from './audio.js';
 import { pad, pollPad, rumble } from './pad.js';
 import { listWorlds, loadWorldData, saveWorldData, touchWorld, createWorld } from './saves.js';
 import { initMenu, showMenu, hideMenu, menuVisible, menuPad } from './menu.js';
@@ -93,8 +93,27 @@ function draw(s, x, y) {
   if (s.page) ctx.drawImage(s.page, s.sx, s.sy, s.w, s.h, x, y, s.w, s.h);
 }
 
+// Le centre du dessin en (cx, cy), tourné de `rot` quarts de tour : des rotations exactes, les
+// pixels restent nets (ce qu'il porte en travers, ce qui tournoie en vol).
+function drawCentered(s, cx, cy, rot = 0) {
+  if (!s.page) return;
+  ctx.save();
+  ctx.translate(Math.round(cx), Math.round(cy));
+  ctx.rotate((rot & 3) * Math.PI / 2);
+  draw(s, -(s.w >> 1), -(s.h >> 1));
+  ctx.restore();
+}
+// Comme `draw` par le point d'ancrage (ax, ay), mais tourné autour du centre du dessin.
+function drawTurned(s, ax, ay, rot) {
+  if (!(rot & 3)) draw(s, ax - s.ox, ay - s.oy);
+  else drawCentered(s, ax - s.ox + (s.w >> 1), ay - s.oy + (s.h >> 1), rot);
+}
+
 // ---------------------------------------------------------------- assets
 const nomu = {}; // nomu[anim][dir][frame]
+// point entre ses mains pour chaque image des anims où il porte quelque chose : holdPts[anim][dir][frame]
+const HOLD_ANIMS = ['grab', 'carry', 'carryWalk', 'carryJump', 'throwAim', 'throw', 'heave'];
+const holdPts = {};
 let objSprites, objGlow, crackImgs, peopleImgs, bloodImgs, fogImg, waterImgs, foamImgs, rimImgs, shadows, ui;
 const blockCache = new Map();
 
@@ -140,6 +159,10 @@ async function loadAssets() {
       }
     }
   }
+  for (const anim of HOLD_ANIMS) {
+    holdPts[anim] = [];
+    for (let d = 0; d < 8; d++) holdPts[anim][d] = Array.from({ length: ANIMS[anim].frames }, (_, f) => holdPoint(anim, f / ANIMS[anim].frames, d));
+  }
   fogImg = toCanvas(fogBuffer());
   const total = jobs.length + 5;
   let done = 0;
@@ -180,6 +203,7 @@ async function loadAssets() {
     j: toCanvas(circleBuf(12, true, [70, 170, 110], 200)),
     s: toCanvas(circleBuf(12, true, [230, 170, 50], 200)),
     n: toCanvas(circleBuf(10, true, [200, 90, 120], 200)),
+    g: toCanvas(circleBuf(11, true, [60, 165, 190], 200)),
   };
   done += 3; progress();
 }
@@ -214,7 +238,10 @@ const player = { x: 0, y: 0, z: 0, dir: 2, anim: 'idle', t: 0, spd: 0, phase: 0,
   aim: null, // pendant la charge du coup : direction visée (vecteur monde), plus fine que les 8 directions
   hp: 100, lastHurt: -99, invuln: 0, flash: 0, kb: null, dead: null, regen: false,
   // faim (100 = repu), évolution (points gagnés en dévorant), alters volés aux héros
-  hunger: 100, xp: 0, level: 1, alters: [], eating: null, nearCorpse: null, bigJump: false, starveMsg: false };
+  hunger: 100, xp: 0, level: 1, alters: [], eating: null, nearCorpse: null, bigJump: false, starveMsg: false,
+  // attraper / lancer : ce qu'il porte ({ o } objet du décor ou { n } habitant/animal, w = poids),
+  // visée du lancer (bouton maintenu) et force
+  held: null, grabTarget: null, grabArm: false, grabHoldT: 0, aiming: false, throwPow: 0, throwPower: 0 };
 const npcs = []; // villageois et chevaliers autour de Brainless
 const vstate = new Map(); // id du village -> { populated, anger, alarm }
 const bloods = []; // flaques de sang au sol
@@ -235,12 +262,12 @@ const PLAYER0 = JSON.parse(JSON.stringify(player));
 function resetState() {
   Object.assign(player, JSON.parse(JSON.stringify(PLAYER0)));
   for (const k in stats) stats[k] = 0;
-  npcs.length = particles.length = flyers.length = fx.length = decals.length = bloods.length = 0;
+  npcs.length = particles.length = flyers.length = fx.length = decals.length = bloods.length = thrown.length = 0;
   hits.clear(); vstate.clear(); bumpT.clear();
   scent = null; msg = null; shake = 0; windT = 0; tod = 0.3; curVillage = null;
   Object.assign(weather, { kind: 'clear', left: 40, rain: 0, cloud: 0, fog: 0, storm: 0, flash: 0, boltT: 6 });
   weather.drops.length = weather.flakes.length = thunders.length = 0;
-  input.punch = input.jump = input.sniff = false;
+  input.punch = input.jump = input.sniff = input.grab = false;
   chargeStop();
 }
 
@@ -291,11 +318,11 @@ function save() {
 document.addEventListener('visibilitychange', () => { if (document.hidden) save(); });
 
 // ---------------------------------------------------------------- contrôles
-const input = { x: 0, y: 0, punch: false, jump: false, sniff: false };
+const input = { x: 0, y: 0, punch: false, jump: false, sniff: false, grab: false };
 // Mode de contrôle affiché : 'touch' (boutons à l'écran), 'keys' (clavier/souris), 'pad' (manette)
 let inputMode = window.matchMedia && matchMedia('(pointer: coarse)').matches ? 'touch' : 'keys';
 function setMode(m) { if (m !== inputMode) { inputMode = m; hintT = 7; } }
-const mouse = { punch: false, charge: false };
+const mouse = { punch: false, charge: false, grab: false };
 const joy = { id: null, bx: 0, by: 0, kx: 0, ky: 0 };
 const keys = new Set();
 const buttons = {
@@ -304,6 +331,7 @@ const buttons = {
   j: { x: 0, y: 0, r: 12, label: '^', sub: 'SAUT' },
   s: { x: 0, y: 0, r: 12, label: '>>', sub: 'SPRINT' },
   n: { x: 0, y: 0, r: 10, label: 'N', sub: 'FLAIR' },
+  g: { x: 0, y: 0, r: 11, label: 'P', sub: 'PRENDRE' },
 };
 // Doigts posés sur les boutons : on peut glisser d'un bouton à l'autre.
 // Un doigt parti du SPRINT continue de sprinter même s'il glisse sur SAUT, COUP…
@@ -315,7 +343,8 @@ function layoutButtons() {
   buttons.b.x = a.x - 38; buttons.b.y = a.y + 4;
   buttons.j.x = a.x - 2; buttons.j.y = a.y - 44;
   buttons.s.x = a.x - 40; buttons.s.y = a.y - 44;
-  buttons.n.x = a.x - 72; buttons.n.y = a.y - 16;
+  buttons.n.x = a.x - 70; buttons.n.y = a.y - 22;
+  buttons.g.x = a.x - 76; buttons.g.y = a.y + 8;
 }
 
 function held(k) {
@@ -325,6 +354,7 @@ function held(k) {
 const sprintHeld = () => held('s') || keys.has('ShiftLeft') || keys.has('ShiftRight') || pad.sprint;
 const chargeHeld = () => held('b') || keys.has('KeyK') || keys.has('KeyE') || pad.charge || mouse.charge;
 const punchHeld = () => held('a') || keys.has('KeyJ') || pad.punch || mouse.punch;
+const grabHeld = () => held('g') || keys.has('KeyL') || keys.has('KeyG') || pad.grab || mouse.grab;
 
 function buttonAt(x, y, slack) {
   let best = null, bd = 1e9;
@@ -339,11 +369,13 @@ function pressButton(k) {
   if (k === 'a') input.punch = true;
   if (k === 'j') input.jump = true;
   if (k === 'n') input.sniff = true;
+  if (k === 'g') input.grab = true;
 }
 
 const toGame = (t) => [t.clientX / cssPerPx, t.clientY / cssPerPx];
 
 const muteBtn = { x: 0, y: 0, r: 7 };
+const musicBtn = { x: 0, y: 0, r: 7 }; // musique du jeu / ma musique (Spotify…) / aucune
 const homeBtn = { x: 0, y: 0, r: 7 }; // retour à l'accueil
 
 function onTouchStart(e) {
@@ -353,6 +385,7 @@ function onTouchStart(e) {
   for (const t of e.changedTouches) {
     const [x, y] = toGame(t);
     if (Math.hypot(x - muteBtn.x, y - muteBtn.y) < muteBtn.r + 6) { toggleMute(); sfx.ui(); continue; }
+    if (mode === 'play' && Math.hypot(x - musicBtn.x, y - musicBtn.y) < musicBtn.r + 4) { switchMusic(); continue; }
     if (mode === 'play' && Math.hypot(x - homeBtn.x, y - homeBtn.y) < homeBtn.r + 5) { sfx.ui(); quitToMenu(); return; }
     const k = buttonAt(x, y, 6);
     if (k) {
@@ -411,9 +444,11 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyJ') input.punch = true;
   if (e.code === 'Space') input.jump = true;
   if (e.code === 'KeyR') input.sniff = true;
+  if (e.code === 'KeyL' || e.code === 'KeyG') input.grab = true;
+  if (e.code === 'KeyN') switchMusic();
 });
 window.addEventListener('keyup', (e) => keys.delete(e.code));
-window.addEventListener('blur', () => { keys.clear(); mouse.punch = mouse.charge = false; });
+window.addEventListener('blur', () => { keys.clear(); mouse.punch = mouse.charge = mouse.grab = false; });
 
 // Souris (PC) : clic gauche = coup (maintenir = coup chargé), clic droit = frappe au sol.
 canvas.addEventListener('mousedown', (e) => {
@@ -421,14 +456,26 @@ canvas.addEventListener('mousedown', (e) => {
   setMode('keys');
   const x = e.clientX / cssPerPx, y = e.clientY / cssPerPx;
   if (Math.hypot(x - muteBtn.x, y - muteBtn.y) < muteBtn.r + 6) { toggleMute(); sfx.ui(); return; }
+  if (mode === 'play' && Math.hypot(x - musicBtn.x, y - musicBtn.y) < musicBtn.r + 4) { switchMusic(); return; }
   if (mode === 'play' && Math.hypot(x - homeBtn.x, y - homeBtn.y) < homeBtn.r + 5) { sfx.ui(); quitToMenu(); return; }
   if (e.button === 0) { mouse.punch = true; input.punch = true; }
+  if (e.button === 1) { e.preventDefault(); mouse.grab = true; input.grab = true; }
   if (e.button === 2) mouse.charge = true;
 });
 window.addEventListener('mouseup', (e) => {
   if (e.button === 0) mouse.punch = false;
+  if (e.button === 1) mouse.grab = false;
   if (e.button === 2) mouse.charge = false;
 });
+
+// Musique : celle du jeu, la mienne (Spotify, Apple Music… continue de jouer par-dessus le jeu), ou aucune.
+const MUSIC_MSG = { game: ['MUSIQUE DU JEU', ''], mine: ['MA MUSIQUE', 'LANCE TA MUSIQUE : LE JEU NE LA COUPE PLUS'], off: ['SANS MUSIQUE', ''] };
+function switchMusic() {
+  unlockAudio();
+  const m = cycleMusic();
+  sfx.ui();
+  showMsg(MUSIC_MSG[m][0], 3, MUSIC_MSG[m][1]);
+}
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
 function toggleFullscreen() {
@@ -449,6 +496,7 @@ function readPad() {
   if (pad.mutePressed) toggleMute();
   if (pad.startPressed && mode === 'play') quitToMenu();
   if (pad.sniffPressed) input.sniff = true;
+  if (pad.grabPressed) input.grab = true;
   return pad.x || pad.y ? [pad.x, pad.y] : null;
 }
 
@@ -769,7 +817,7 @@ function healGround(dt) {
 // Enchaînement : 3 frappes en diagonale (gauche, droite, montante), puis si on continue de
 // spammer, la rafale (`rush`) en boucle tant que les coups arrivent.
 const JABS = ['jabL', 'jabR', 'hook', 'rush'];
-const HIT_AT = { jabL: 0.44, jabR: 0.44, hook: 0.44, rush: 0.5, bigpunch: 0.22, slam: 0.44, sniff: 0.6, eat: 9, hurt: 9 };
+const HIT_AT = { jabL: 0.44, jabR: 0.44, hook: 0.44, rush: 0.5, bigpunch: 0.22, slam: 0.44, sniff: 0.6, eat: 9, hurt: 9, grab: 0.4, throw: 0.4, heave: 0.45 };
 let hitstop = 0; // arrêt sur image après un gros impact
 const CHOMPS = [0.22, 0.35, 0.48, 0.61, 0.74]; // bouchées pendant qu'il dévore
 
@@ -788,7 +836,7 @@ function doPunchHit(strong) {
   const hx = player.x + dx * 0.85, hy = player.y + dy * 0.85;
   let who = null, wd = 0.85;
   for (const n of npcs) {
-    if (n.inside || !alive(n)) continue;
+    if (n.inside || n.held || !alive(n)) continue;
     const d = Math.hypot(n.x - hx, n.y - hy);
     if (d < wd) { wd = d; who = n; }
   }
@@ -820,7 +868,7 @@ function doRushHit() {
   };
   let hit = false;
   for (const n of npcs) {
-    if (n.inside || !alive(n) || !inFan(n.x, n.y)) continue;
+    if (n.inside || n.held || !alive(n) || !inFan(n.x, n.y)) continue;
     const rx = n.x - player.x, ry = n.y - player.y, d = Math.hypot(rx, ry) || 1;
     hitNpc(n, strength(), rx / d, ry / d, 0.12);
     hit = true;
@@ -900,7 +948,7 @@ function trample(vx, vy) {
     }
   }
   for (const n of npcs) {
-    if (n.inside || !alive(n) || Math.hypot(n.x - fx0, n.y - fy0) > 0.7 || time - (n.tramT ?? -9) < 0.5) continue;
+    if (n.inside || n.held || !alive(n) || Math.hypot(n.x - fx0, n.y - fy0) > 0.7 || time - (n.tramT ?? -9) < 0.5) continue;
     n.tramT = time;
     hitNpc(n, 2, vx, vy, 0.45);
   }
@@ -939,7 +987,7 @@ function doBigPunch(power) {
   blast(R, inCone, dmgAt);
   for (const n of npcs) {
     const rx = n.x - player.x, ry = n.y - player.y, d = Math.hypot(rx, ry) || 0.01;
-    if (n.inside || !alive(n) || d > R || !inCone(rx, ry, d)) continue;
+    if (n.inside || n.held || !alive(n) || d > R || !inCone(rx, ry, d)) continue;
     hitNpc(n, dmgAt(d), dx * 0.7 + rx / d * 0.3, dy * 0.7 + ry / d * 0.3, power * (1 - d / R) + 0.3);
   }
   // le sol se fend dans le cône, et se creuse juste devant à pleine puissance
@@ -990,7 +1038,7 @@ function doSlam(power) {
   const crushR = Math.max(1.3, R * 0.5);
   for (const n of npcs) {
     const rx = n.x - player.x, ry = n.y - player.y, d = Math.hypot(rx, ry) || 0.01;
-    if (n.inside || !alive(n) || d > R) continue;
+    if (n.inside || n.held || !alive(n) || d > R) continue;
     // un héros résiste à l'écrasement tant qu'il n'est pas affaibli
     if (d <= crushR && power >= 0.2 && !(n.kind === 'hero' && n.hp > n.maxHp * 0.4)) killNpc(n, true);
     else if (d <= crushR && n.kind === 'hero') hitNpc(n, dmgAt(d) * 1.5, rx / d, ry / d, power);
@@ -1074,7 +1122,7 @@ function stickSpeed(mag) {
 function gaitStep(dt) {
   const g = Math.max(0, Math.min(1, (player.spd - 2) / 1.4)); // 0 = marche, 1 = course
   player.phase = (player.phase + dt * Math.max(0.7, player.spd / (1.6 + g * 0.9))) % 1;
-  player.anim = GAITS[g < 0.3 ? 0 : g < 0.7 ? 1 : 2];
+  player.anim = player.held ? 'carryWalk' : GAITS[g < 0.3 ? 0 : g < 0.7 ? 1 : 2];
   player.t = player.phase * ANIMS.walk.frames;
 }
 const TRANS_DUR = ANIMS.drop.frames / ANIMS.drop.fps;
@@ -1103,10 +1151,10 @@ function update(dt) {
 
   if (player.dead) {
     updateDead(dt);
-    input.punch = input.jump = input.sniff = false;
+    input.punch = input.jump = input.sniff = input.grab = false;
   } else {
     // --- saut
-    if (input.jump && !player.air && !player.action && !player.charging && !player.slide && player.water < 2) {
+    if (input.jump && !player.air && !player.action && !player.charging && !player.aiming && !player.slide && player.water < 2) {
       player.air = true;
       player.vz = JUMP_V * (player.sprinting ? 1.1 : 1) * (has('leap') ? 1.6 : 1);
       player.bigJump = has('leap');
@@ -1120,7 +1168,7 @@ function update(dt) {
     }
 
     // --- charge (maintenir B) puis frappe au sol au relâchement
-    if (!player.action && !player.air && !player.slide && player.water < 2) {
+    if (!player.action && !player.air && !player.slide && player.water < 2 && !player.held) {
       if (chargeHeld() && player.chargeKind !== 'punch') {
         if (!player.charging) { player.charging = true; player.chargeKind = 'slam'; player.charge = 0; player.sprinting = false; setAnim('charge'); chargeStart(); }
         player.charge = Math.min(1, player.charge + dt / 1.6);
@@ -1160,7 +1208,7 @@ function update(dt) {
           player.punchPower = player.charge;
           startAction('bigpunch');
         }
-      } else if (player.punchHoldT > 0.25 && !player.charging &&
+      } else if (player.punchHoldT > 0.25 && !player.charging && !player.held &&
         (!player.action || (JABS.includes(player.action) && player.actionT > 0.5))) {
         player.action = null;
         player.charging = true;
@@ -1170,19 +1218,53 @@ function update(dt) {
         player.sprinting = false;
         setAnim('pcharge');
         chargeStart();
+      } else if (input.punch && !player.charging && player.held) {
+        if (!player.action && !player.aiming) { player.grabArm = false; startAction('heave'); sfx.growl(); } // il fracasse sa charge au sol
       } else if (input.punch && !player.charging) {
         if (!player.action) startJab();
         else if (JABS.includes(player.action)) player.punchBuf = true; // le coup suivant part dès que possible
       }
     }
+    // --- attraper / lancer (bouton PRENDRE) : un appui = il empoigne ce qui est devant lui.
+    // Chargé : appui bref = il lance droit devant (visée aidée), maintenir = il vise au stick et
+    // dose la force, relâcher = il lance.
+    const canGrab = !player.air && !player.slide && player.water < 2 && !player.charging;
+    if (player.held) {
+      if (input.grab && !player.action && canGrab) { player.grabArm = true; player.grabHoldT = 0; }
+      if (player.grabArm && !player.action) {
+        if (grabHeld()) {
+          player.grabHoldT += dt;
+          if (player.grabHoldT > 0.18 && !player.aiming) {
+            player.aiming = true; player.throwPow = 0; player.aim = dirWorld(player.dir); player.spd = 0;
+            setAnim('throwAim'); sfx.growl();
+          }
+          if (player.aiming) {
+            player.throwPow = Math.min(1, player.throwPow + dt / 0.9);
+            if (mag > 0.3) {
+              const cx = ix / mag, ct = iy / mag;
+              player.aim = [(cx + ct) / Math.SQRT2, (ct - cx) / Math.SQRT2];
+              player.dir = ((Math.round(Math.atan2(ct, cx) / (Math.PI / 4)) % 8) + 8) % 8;
+            }
+            shake = Math.max(shake, 0.3 + player.throwPow * player.held.w * 0.4);
+          }
+        } else {
+          const aimed = player.aiming;
+          player.grabArm = false;
+          player.aiming = false;
+          if (!aimed) player.aim = tapAim(ix, iy, mag);
+          startThrow(aimed ? 0.3 + 0.7 * player.throwPow : 0.45, aimed);
+        }
+      }
+    } else if (input.grab && !player.action && canGrab) startGrab();
+
     // flairer : il s'arrête, lève la tête et renifle l'air
-    player.nearCorpse = player.action ? null : corpseNear();
-    if (input.sniff && !player.action && !player.charging && !player.air && !player.slide && player.water < 2) {
+    player.nearCorpse = player.action || player.held ? null : corpseNear();
+    if (input.sniff && !player.action && !player.charging && !player.held && !player.air && !player.slide && player.water < 2) {
       player.sprinting = false;
       if (player.nearCorpse) startEat(player.nearCorpse);
       else { startAction('sniff'); sfx.sniff(); }
     }
-    input.punch = input.jump = input.sniff = false;
+    input.punch = input.jump = input.sniff = input.grab = false;
 
     if (player.slide) {
       updateSlide(dt);
@@ -1196,6 +1278,9 @@ function update(dt) {
       if (act === 'eat') for (const c of CHOMPS) if (prev < c && player.actionT >= c) chomp();
       if (prev < hitAt && player.actionT >= hitAt) {
         if (act === 'rush') doRushHit();
+        else if (act === 'grab') seize();
+        else if (act === 'throw') doThrow();
+        else if (act === 'heave') doHeave();
         else if (JABS.includes(act)) doPunchHit(act === 'hook');
         else if (act === 'sniff') doSniff();
         else if (act === 'eat' || act === 'hurt') { /* rien à frapper */ }
@@ -1206,27 +1291,34 @@ function update(dt) {
       const [dx, dy] = dirWorld(player.dir);
       if (JABS.includes(act) && player.actionT > 0.1 && player.actionT < hitAt) tryMove(dx * dt * 1.6, dy * dt * 1.6);
       if (act === 'bigpunch' && player.actionT < 0.3) { const [ax, ay] = aimDir(); tryMove(ax * dt * 4.5, ay * dt * 4.5); }
+      // il fond sur sa prise ; il prend appui en lançant
+      if (act === 'grab' && player.actionT < hitAt && player.grabTarget) {
+        const g = player.grabTarget, gx = g.n ? g.n.x : g.tx + 0.5, gy = g.n ? g.n.y : g.ty + 0.5, d = Math.hypot(gx - player.x, gy - player.y);
+        if (d > 0.7) tryMove((gx - player.x) / d * dt * 3.5, (gy - player.y) / d * dt * 3.5);
+      }
+      if (act === 'throw' && player.actionT < hitAt) { const [ax, ay] = aimDir(); tryMove(ax * dt * 1.5, ay * dt * 1.5); }
       if (JABS.includes(act) && player.punchBuf && player.actionT >= 0.6) startJab();
       else if (player.actionT >= 1) {
         if (JABS.includes(act)) player.lastPunch = time;
-        if (act === 'bigpunch') player.aim = null;
+        if (act === 'bigpunch' || act === 'throw') player.aim = null;
         if (act === 'eat') finishEat();
         player.action = null;
         player.t = 0;
       }
       player.sprinting = false;
-    } else if (!player.charging) {
+    } else if (!player.charging && !player.aiming) {
       // Sprint à quatre pattes (bouton SPRINT) : vide la barre ; vide, il faut qu'elle remonte à 35 %.
       if (player.stamina <= 0 && !player.tired) { player.tired = true; sfx.tired(); }
       if (player.tired && player.stamina >= 0.35) player.tired = false;
       // Petite tolérance : un joystick qui repasse par le centre pendant un demi-tour ne coupe pas le sprint.
       player.idleT = mag > 0.15 ? 0 : player.idleT + dt;
       const coasting = wasSprinting && player.mv && player.idleT < 0.12 && sprintHeld();
-      const run = sprintHeld() && !player.tired && (mag > 0.15 || coasting);
+      const run = sprintHeld() && !player.tired && (mag > 0.15 || coasting) && !player.held; // les mains prises : pas de galop
       if (!player.air) player.sprinting = run;
       player.moving = mag > 0.15;
       // vitesse réelle : rattrape en douceur la vitesse voulue (sprint, ou selon le joystick)
-      const target = player.water === 2 ? 0 : player.sprinting ? SPRINT_V * (has('engine') ? 1.35 : 1) : stickSpeed(mag) * (player.water ? 0.62 : 1);
+      const target = player.water === 2 ? 0 : player.sprinting ? SPRINT_V * (has('engine') ? 1.35 : 1)
+        : stickSpeed(mag) * (player.water ? 0.62 : 1) * (player.held ? 1.1 - 0.15 * player.held.w : 1); // plus c'est lourd, plus il est lent
       player.spd += Math.max(-dt * 9, Math.min(dt * (player.sprinting ? 12 : 6), target - player.spd));
       // passage debout <-> quatre pattes : il plonge sur les mains, ou se redresse en courant
       if (player.sprinting && !player.quad && !player.air && !player.water) { player.quad = true; player.trans = { a: 'drop', t: 0 }; }
@@ -1262,7 +1354,7 @@ function update(dt) {
         if (!player.air) walkSteps();
       } else {
         player.spd = 0;
-        setAnim(player.water === 2 ? 'tread' : 'idle');
+        setAnim(player.water === 2 ? 'tread' : player.held ? 'carry' : 'idle');
         if (player.water === 2) swimStrokes(0, 0);
         if (!player.air) player.sprinting = false;
       }
@@ -1280,12 +1372,13 @@ function update(dt) {
     else if (!player.sprinting) player.stamina = Math.min(1, player.stamina + dt / (player.tired ? 3 : 5));
     const A = ANIMS[player.anim];
     // les allures et les transitions règlent elles-mêmes leur image
-    if (!GAITS.includes(player.anim) && !player.trans) player.t += dt * A.fps * (player.charging ? 1 + player.charge * 1.8 : 1);
+    if (!GAITS.includes(player.anim) && player.anim !== 'carryWalk' && !player.trans) player.t += dt * A.fps * (player.charging ? 1 + player.charge * 1.8 : 1);
   }
 
   const depth = waterDepth(player.x, player.y);
   if (depth && !player.water && !player.air) splash(depth === 2 || wasSprinting ? 1 : 0.5);
   player.water = player.air ? 0 : depth;
+  if (player.water === 2 && player.held) dropHeld(); // il nage : la charge tombe à l'eau
   const sink = depth === 2 ? (SINK_ANIM[player.anim] ?? SINK[2]) : SINK[depth];
   const gz = depth ? WATER_LINE - sink : groundZ(player.x, player.y);
   player.z += (gz - player.z) * Math.min(1, dt * (depth ? 8 : 14));
@@ -1306,8 +1399,10 @@ function update(dt) {
   updateScent(dt);
   healGround(dt);
 
+  updateThrown(dt);
   updateParticles(dt);
   for (let i = decals.length - 1; i >= 0; i--) if ((decals[i].age += dt) > 9) decals.splice(i, 1);
+  updateMusic(dt, { night: darkness(), danger: dangerLevel(), rain: weather.rain });
   updateAmbience(dt, { night: darkness() > 0.5, water: waterNearby(), height: world.hAt(Math.floor(player.x), Math.floor(player.y)),
     rain: weather.snow ? 0 : weather.rain, storm: weather.storm });
   updateFlyers(dt);
@@ -1334,7 +1429,14 @@ function walkSteps() {
   player.runFrame = fi;
   if (fi === 2 || fi === 6) {
     if (player.water) { sfx.splash(0.3); burst(player.x, player.y, WATER_LINE, WATER_COLS, 4, { up: 30, speed: 0.6, g: 120, life: 0.4, spread: 0 }); }
-    else sfx.step(surfaceAt(player.x, player.y));
+    else {
+      sfx.step(surfaceAt(player.x, player.y), player.held ? 1 + player.held.w * 0.25 : 1);
+      if (player.held && player.held.w >= 2.5) {
+        // sous un arbre ou un gros rocher, chaque pas fait trembler le sol
+        shake = Math.max(shake, 1.2);
+        burst(player.x, player.y, player.z, DUST_COLS, 3, { up: 12, speed: 1, g: 60, life: 0.4, spread: 0 });
+      }
+    }
   }
 }
 
@@ -1430,6 +1532,7 @@ function hurtPlayer(dmg, fx0, fy0, opts = {}) {
     player.slide = null; player.sprinting = false; player.mv = null;
     if (opts.lift && !player.air && !player.water) { player.air = true; player.vz = opts.lift; player.jz = 0.1; player.bigJump = false; }
     if (player.action === 'eat' && player.eating) { player.eating.eaten = false; player.eating = null; } // repas interrompu
+    dropHeld(); // le choc lui fait lâcher ce qu'il portait
     startAction('hurt');
     sfx.bodyHit(false, true);
   }
@@ -1440,6 +1543,7 @@ function hurtPlayer(dmg, fx0, fy0, opts = {}) {
 }
 
 function playerDown() {
+  dropHeld();
   player.hp = 0;
   player.dead = { t: 0, moved: false };
   player.action = null; player.charging = false; player.chargeKind = null;
@@ -1525,7 +1629,7 @@ function mealOf(n) {
 function corpseNear() {
   let best = null, bd = 1.3;
   for (const n of npcs) {
-    if (alive(n) || n.eaten) continue;
+    if (alive(n) || n.eaten || n.held || n.thrown) continue;
     const d = Math.hypot(n.x - player.x, n.y - player.y);
     if (d < bd) { bd = d; best = n; }
   }
@@ -1635,7 +1739,7 @@ function crime(amount, x, y) {
   if (time - st.alarm > 25) sfx.bell(); // la cloche sonne
   st.alarm = time;
   for (const n of npcs) {
-    if (n.v !== v.id || n.inside || !alive(n)) continue;
+    if (n.v !== v.id || n.inside || n.held || !alive(n)) continue;
     const dn = Math.hypot(n.x - x, n.y - y), dp = Math.hypot(n.x - player.x, n.y - player.y);
     if (n.kind === 'civ' && dn < 14) startFlee(n);
     if (fighter(n) && n.state === 'guard' && (dn < 16 || dp < 10)) { n.state = 'chase'; n.alertT = 1.2; }
@@ -1717,7 +1821,7 @@ function updateVillages(dt) {
     st.anger *= 0.9; // la colère retombe doucement
     if (v && Math.hypot(player.x - v.cx, player.y - v.cy) < v.R + 40) continue;
     st.populated = false;
-    for (let i = npcs.length - 1; i >= 0; i--) if (npcs[i].v === id) npcs.splice(i, 1);
+    for (let i = npcs.length - 1; i >= 0; i--) if (npcs[i].v === id && !npcs[i].held) npcs.splice(i, 1);
   }
   const inside = near.find((v) => Math.hypot(player.x - v.cx, player.y - v.cy) < v.R + 3);
   if (inside && inside !== curVillage && !player.dead) showMsg(inside.name, 2.5);
@@ -1754,7 +1858,7 @@ const animsOf = (n) => (n.kind === 'beast' ? BEAST_ANIMS : PEOPLE_ANIMS[n.kind])
 
 // `power` > 0.85 (gros coup chargé tout près) : il meurt en retombant.
 function hitNpc(n, dmg, kx, ky, power) {
-  if (n.inside || !alive(n)) return;
+  if (n.inside || n.held || !alive(n)) return;
   n.flash = 0.15;
   const knight = fighter(n);
   if (n.type === 'rempart') dmg *= 0.6; // il absorbe une partie des coups
@@ -2019,6 +2123,12 @@ function updateNpcs(dt) {
   const night = darkness() > 0.6;
   for (let i = npcs.length - 1; i >= 0; i--) {
     const n = npcs[i];
+    if (n.held) { updateHeldNpc(n, dt); continue; }
+    if (n.thrown) {
+      const r = flyNpc(n, dt);
+      if (r === 'gone') { npcs.splice(i, 1); continue; }
+      if (r === 'fly') continue;
+    }
     if (!alive(n)) {
       // le cadavre finit par disparaître (le sang reste un peu plus)
       if ((n.deadT += dt) > 150) npcs.splice(i, 1);
@@ -2155,10 +2265,10 @@ function updateNpcs(dt) {
   // ils ne se marchent pas dessus, et s'écartent du chemin de Brainless
   for (let i = 0; i < npcs.length; i++) {
     const a = npcs[i];
-    if (a.inside || a.air || !alive(a)) continue;
+    if (a.inside || a.air || a.held || !alive(a)) continue;
     for (let j = i + 1; j < npcs.length; j++) {
       const b = npcs[j];
-      if (b.inside || b.air || !alive(b)) continue;
+      if (b.inside || b.air || b.held || !alive(b)) continue;
       const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy);
       if (d > 0.45 || d === 0) continue;
       const k = (0.45 - d) / d * 0.5;
@@ -2383,6 +2493,391 @@ function drawWeather(dt) {
   }
 }
 
+// ---------------------------------------------------------------- attraper et lancer
+// Brainless empoigne ce qui est devant lui (tonneau, caisse, rocher, arbre qu'il déracine,
+// habitant, animal, cadavre), le porte au-dessus de sa tête, puis le lance (maintenir = viser et
+// doser) ou le fracasse au sol (COUP). Ce qu'il porte est dessiné entre ses mains (`holdPts`).
+// En vol, tout fauche ce qu'il croise : gens, arbres, maisons. Ce qui est lourd (arbre, gros
+// rocher) traverse la foule et écrase en retombant ; ce qui est léger éclate au premier choc.
+const THROW_G = 330; // gravité des projectiles (px/s²)
+const HOLD_Z = 36; // hauteur de ses mains au-dessus de ses pieds, charge levée (px)
+const thrown = []; // objets du décor en vol
+const npcWeight = (n) => (n.kind === 'beast' ? { rabbit: 0.6, deer: 1.5, boar: 1.6 }[n.type] || 1 : n.kind === 'knight' ? 1.3 : 1);
+// un héros en forme se dégage vite ; un chevalier se débat ; les autres ne s'en sortent pas
+const breakTime = (n) => (n.kind === 'hero' ? (n.hp > n.maxHp * 0.4 ? 1.3 : 3) : n.kind === 'knight' ? 3.5 : 1e9);
+const throwDmg = (th) => Math.max(1, Math.round((1 + th.w * 1.5) * (0.5 + th.power) * strength()));
+const tough = (n) => n.kind === 'hero' && n.hp > n.maxHp * 0.4; // un héros encore en forme
+
+// Vitesse de lancer : la force du bras, freinée par le poids.
+function throwSpeed(power, w) {
+  return { v: (3.5 + power * 8.5) / (0.75 + 0.25 * w), vz: 70 + power * 60 };
+}
+
+// Ce qu'il peut empoigner devant lui : une proie passe avant le décor.
+function grabTarget() {
+  const [dx, dy] = dirWorld(player.dir);
+  let best = null, bs = -1e9;
+  const score = (x, y, max) => {
+    const rx = x - player.x, ry = y - player.y, d = Math.hypot(rx, ry);
+    if (d > max) return null;
+    const dot = d < 0.35 ? 1 : (rx * dx + ry * dy) / d;
+    return dot < 0.3 ? null : dot * 1.2 - d;
+  };
+  for (const n of npcs) {
+    if (n.inside || n.held || n.thrown || n.air || n.eaten) continue;
+    const sc = score(n.x, n.y, 1.5);
+    if (sc !== null && sc + 0.4 > bs) { bs = sc + 0.4; best = { n }; }
+  }
+  const cx = Math.floor(player.x + dx * 0.7), cy = Math.floor(player.y + dy * 0.7);
+  for (let ty = cy - 1; ty <= cy + 1; ty++) for (let tx = cx - 1; tx <= cx + 1; tx++) {
+    const info = OBJ_INFO[world.objAt(tx, ty)];
+    if (!info || !info.lift) continue;
+    const sc = score(tx + 0.5, ty + 0.5, 1.6);
+    if (sc !== null && sc > bs) { bs = sc; best = { tx, ty }; }
+  }
+  return best;
+}
+
+function startGrab() {
+  const tg = grabTarget();
+  player.grabTarget = tg;
+  if (tg) player.dir = faceDir((tg.n ? tg.n.x : tg.tx + 0.5) - player.x, (tg.n ? tg.n.y : tg.ty + 0.5) - player.y);
+  player.sprinting = false;
+  player.spd = 0;
+  startAction('grab');
+  sfx.grabReach();
+}
+
+// Les griffes se referment (milieu de l'anim `grab`).
+function seize() {
+  const tg = player.grabTarget;
+  player.grabTarget = null;
+  if (tg && tg.n) {
+    const n = tg.n;
+    if (!npcs.includes(n) || n.held || n.inside || n.air || n.thrown || Math.hypot(n.x - player.x, n.y - player.y) > 1.7) { sfx.punchAir(); return; }
+    n.held = true; n.vx = n.vy = 0; n.jz = 0; n.flash = 0.1;
+    if (alive(n) && n.state !== 'ko') {
+      if (n.kind !== 'beast') n.state = 'held';
+      n.breakT = breakTime(n);
+      n.screamT = 0.6;
+      if (n.kind === 'beast') n.angry = true;
+      else { sfx.scream(PEOPLE[n.type].voice * 1.2); crime(n.kind === 'civ' ? 2.5 : 1, n.x, n.y); }
+    }
+    player.held = { n, w: npcWeight(n) };
+    sfx.grab(player.held.w);
+    burst(n.x, n.y, n.z + 2, DUST_COLS, 6, { up: 20, speed: 1.2, g: 60, life: 0.5, spread: 1 });
+    shake = Math.max(shake, 1.5);
+    return;
+  }
+  const o = tg ? world.objAt(tg.tx, tg.ty) : 0, info = OBJ_INFO[o];
+  if (!info || !info.lift) { sfx.punchAir(); return; }
+  const cx = tg.tx + 0.5, cy = tg.ty + 0.5, gz = world.hAt(tg.tx, tg.ty) * 8;
+  world.setObj(tg.tx, tg.ty, O.NONE);
+  hits.delete(tg.tx + ',' + tg.ty);
+  if (info.tree) {
+    // il arrache l'arbre avec ses racines : la terre saute, les feuilles volent
+    stats.trees++;
+    sfx.uproot();
+    shake = Math.max(shake, 5);
+    windT = Math.max(windT, 0.6);
+    crackTile(tg.tx, tg.ty, 2);
+    burst(cx, cy, gz, EARTH_COLS, 26, { up: 70, speed: 2.2, big: 0.6 });
+    burst(cx, cy, gz + 26, leafColsFor(o), 16, { leaf: true, up: 20, g: 25, drag: 2, life: 1.6, spread: 14 });
+  } else {
+    sfx.grab(info.lift);
+    shake = Math.max(shake, 1 + info.lift);
+    burst(cx, cy, gz, info.rock ? EARTH_COLS.concat(ROCK_COLS) : DUST_COLS, 10, { up: 35, speed: 1.4, life: 0.6 });
+    if (info.rock) crackTile(tg.tx, tg.ty, 1);
+  }
+  if (info.village) crime(info.crime || 0.2, cx, cy);
+  player.held = { o, w: info.lift, tree: !!info.tree };
+}
+
+// Un appui bref : droit devant, ou vers le stick ; visée aidée sur la proie la plus proche du tir.
+function tapAim(ix, iy, mag) {
+  let [ux, uy] = mag > 0.3 ? [((ix + iy) / mag) / Math.SQRT2, ((iy - ix) / mag) / Math.SQRT2] : dirWorld(player.dir);
+  let best = null, bd = 0.32;
+  for (const n of npcs) {
+    if (n.inside || n.held || !alive(n)) continue;
+    const rx = n.x - player.x, ry = n.y - player.y, d = Math.hypot(rx, ry);
+    if (d < 1.5 || d > 12) continue;
+    const a = Math.acos(Math.max(-1, Math.min(1, (rx * ux + ry * uy) / d)));
+    if (a < bd) { bd = a; best = [rx / d, ry / d]; }
+  }
+  if (best) [ux, uy] = best;
+  return [ux, uy];
+}
+
+function startThrow(power, aimed) {
+  player.throwPower = power;
+  player.dir = faceDir(player.aim[0], player.aim[1]);
+  startAction('throw');
+  if (aimed) player.actionT = 0.22; // déjà armé : il part directement
+  sfx.heave();
+}
+
+// La charge quitte ses mains (milieu de l'anim `throw`).
+function doThrow() {
+  if (!player.held) return;
+  const [ux, uy] = aimDir(), p = player.throwPower, w = player.held.w;
+  releaseHeld(ux, uy, p, false);
+  sfx.throwIt(p, w);
+  shake = Math.max(shake, 2 + p * 2 + w);
+  rumble(0.3 + p * 0.4, 100);
+  // le bras fend l'air : traînées de vent vers l'avant
+  for (let i = 0; i < 10 + p * 16; i++) {
+    const a = Math.atan2(uy, ux) + (Math.random() * 2 - 1) * 0.5, sp = 5 + Math.random() * 5;
+    particles.push({
+      x: player.x + ux * 0.4, y: player.y + uy * 0.4, z: player.z + 20 + Math.random() * 18,
+      vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, vz: (Math.random() - 0.5) * 8, g: 0, drag: 2,
+      life: 0.15 + Math.random() * 0.2, col: Math.random() < 0.7 ? '#ffffff' : '#d8ecff', size: 1, streak: true,
+    });
+  }
+}
+
+// Il lâche ce qu'il porte : lancé (`power`), ou simplement tombé (`gentle` : coup encaissé, il nage, il meurt).
+function releaseHeld(ux, uy, power, gentle) {
+  const h = player.held;
+  if (!h) return;
+  player.held = null; player.aiming = false; player.grabArm = false;
+  const { v, vz } = gentle ? { v: 1.2, vz: 25 } : throwSpeed(power, h.w);
+  const x = player.x + ux * 0.35, y = player.y + uy * 0.35, fz = player.z + HOLD_Z;
+  const th = { power: gentle ? 0 : power, w: h.w, hit: new Set(), t: 0 };
+  if (h.n) {
+    const n = h.n;
+    n.held = false;
+    n.thrown = th;
+    Object.assign(n, { x, y, fz, vx: ux * v, vy: uy * v, vz, air: true, rot: 0 });
+    if (alive(n)) {
+      if (n.kind === 'beast') { n.state = 'flee'; n.fleeT = 4; }
+      else { n.state = 'ko'; n.koT = n.kind === 'hero' ? 2 : 3 + power * 3; n.anim = 'ko'; }
+      // lancé fort, il ne s'en relève pas (sauf un héros encore en forme)
+      n.dying = !gentle && power > 0.6 && !tough(n);
+      if (n.kind !== 'beast' && !gentle) sfx.scream(PEOPLE[n.type].voice * 1.3);
+    }
+  } else thrown.push({ o: h.o, tree: h.tree, x, y, fz, vx: ux * v, vy: uy * v, vz, spin: 0, ...th });
+}
+
+function dropHeld() {
+  if (!player.held) return;
+  const [dx, dy] = dirWorld(player.dir);
+  releaseHeld(dx, dy, 0, true);
+}
+
+// Porté : il suit les mains de Brainless, se débat, crie ; un chevalier ou un héros finit par se dégager.
+function updateHeldNpc(n, dt) {
+  if (player.held?.n !== n) { n.held = false; return; }
+  const [dx, dy] = dirWorld(player.dir);
+  n.x = player.x + dx * 0.2; n.y = player.y + dy * 0.2; n.z = player.z; n.jz = 0; n.dir = player.dir;
+  n.flash = Math.max(0, n.flash - dt);
+  const living = alive(n) && n.state !== 'ko';
+  if (!living) return;
+  const A = animsOf(n)[n.kind === 'beast' ? 'run' : 'held'];
+  n.t += dt * A.fps;
+  if ((n.screamT -= dt) <= 0) {
+    n.screamT = 0.9 + Math.random() * 1.2;
+    if (n.kind === 'beast') sfx.growl(); else if (n.kind === 'civ') sfx.scream(PEOPLE[n.type].voice * 1.25);
+  }
+  if ((n.breakT -= dt) > 0) return;
+  // il se dégage d'un coup de pied et repart à l'attaque
+  player.held = null; player.aiming = false; player.grabArm = false;
+  if (['grab', 'throw', 'heave'].includes(player.action)) { player.action = null; player.t = 0; }
+  n.held = false;
+  Object.assign(n, { x: player.x + dx * 0.7, y: player.y + dy * 0.7, z: groundZ(player.x, player.y), air: true, jz: 18, vz: 60, vx: dx * 2.5, vy: dy * 2.5, state: 'hurt', hurtT: 0.6 });
+  if (n.kind === 'hero') showMsg(PEOPLE[n.type].name + ' SE DEGAGE', 1.5);
+  sfx.clank();
+  hurtPlayer(n.kind === 'hero' ? 9 : 5, n.x, n.y, { kb: n.kind === 'hero' ? 6 : 3 });
+}
+
+// Trajectoire d'un projectile (objet ou habitant lancé) sur une image, découpée en petits pas
+// pour ne rien traverser. Renvoie null tant qu'il vole, sinon ce qui l'a arrêté.
+function flight(e, th, dt) {
+  th.t += dt;
+  e.vz -= THROW_G * dt;
+  const steps = Math.max(1, Math.ceil(Math.hypot(e.vx, e.vy) * dt / 0.15)), h = dt / steps;
+  for (let k = 0; k < steps; k++) {
+    const nx = e.x + e.vx * h, ny = e.y + e.vy * h, nz = e.fz + e.vz * h;
+    // il fauche ceux qu'il croise
+    for (const o of npcs) {
+      if (o === e || o.held || o.inside || o.thrown || !alive(o) || th.hit.has(o)) continue;
+      if (Math.hypot(o.x - nx, o.y - ny) > 0.5 || nz - o.z - o.jz > 26 || nz < o.z - 4) continue;
+      th.hit.add(o);
+      const sp = Math.hypot(e.vx, e.vy) || 1;
+      hitNpc(o, throwDmg(th), e.vx / sp, e.vy / sp, Math.min(1, th.power * 0.8 + th.w * 0.12));
+      shake = Math.max(shake, 2 + th.w);
+      if (th.w < 2.5) return { npc: o };
+      e.vx *= 0.8; e.vy *= 0.8; // un arbre, un gros rocher : il continue sur sa lancée
+    }
+    const tx = Math.floor(nx), ty = Math.floor(ny), water = !world.walkable(tx, ty);
+    const gz = water ? WATER_LINE : world.hAt(tx, ty) * 8;
+    if (nz <= gz) {
+      if (!water && gz - e.fz > 4) return { wall: true, x: nx, y: ny }; // le flanc d'une marche
+      e.x = nx; e.y = ny; e.fz = gz;
+      return { land: true, water };
+    }
+    if (obstacleAt(nx, ny, nz, { x: e.x, y: e.y, air: true })) return { wall: true, x: nx, y: ny };
+    e.x = nx; e.y = ny; e.fz = nz;
+  }
+  return null;
+}
+
+// Ce qu'un projectile percute (arbre, rocher, mur, maison…) encaisse le coup.
+function hitObstacleAt(x, y, dmg) {
+  let best = null, bd = 1.3;
+  for (let ty = Math.floor(y) - 1; ty <= Math.floor(y) + 1; ty++) for (let tx = Math.floor(x) - 1; tx <= Math.floor(x) + 1; tx++) {
+    const info = OBJ_INFO[world.objAt(tx, ty)];
+    if (!info || info.small) continue;
+    let px = tx + 0.5, py = ty + 0.5;
+    const a = world.anchorOf(tx, ty);
+    if (a) {
+      // un bâtiment : le point de son mur le plus proche
+      const ai = OBJ_INFO[world.objAt(a[0], a[1])];
+      if (!ai || !ai.box) continue;
+      px = Math.max(a[0] - ai.box, Math.min(a[0] + ai.box, x)); py = Math.max(a[1] - ai.box, Math.min(a[1] + ai.box, y));
+    }
+    const d = Math.hypot(x - px, y - py);
+    if (d < bd) { bd = d; best = [tx, ty]; }
+  }
+  if (best) damage(best[0], best[1], dmg);
+  return !!best;
+}
+
+function updateThrown(dt) {
+  for (let i = thrown.length - 1; i >= 0; i--) {
+    const p = thrown[i];
+    const ev = flight(p, p, dt);
+    p.spin = Math.floor(p.t * 11 / p.w); // il tournoie, d'autant plus lentement qu'il est lourd
+    if (Math.random() < dt * 30 && p.power > 0.2) {
+      particles.push({ x: p.x, y: p.y, z: p.fz + 6, vx: -p.vx * 0.3, vy: -p.vy * 0.3, vz: 0, g: 0, drag: 3, life: 0.2, col: '#ffffff', size: 1, streak: true });
+    }
+    if (!ev) continue;
+    thrown.splice(i, 1);
+    if (ev.wall) hitObstacleAt(ev.x, ev.y, throwDmg(p));
+    shatter(p, ev);
+  }
+}
+
+// Fin de course d'un objet lancé (ou fracassé au sol) : il éclate, ou reste là où il tombe.
+function shatter(p, ev) {
+  const tx = Math.floor(p.x), ty = Math.floor(p.y), info = OBJ_INFO[p.o];
+  shake = Math.max(shake, 1.5 + p.w * 1.5);
+  if (ev.water) {
+    fx.push({ kind: 'ripple', x: p.x, y: p.y, t: 0 }, { kind: 'ripple', x: p.x, y: p.y, t: -0.2 });
+    burst(p.x, p.y, WATER_LINE, WATER_COLS, 10 + p.w * 8, { up: 60 + p.w * 15, speed: 1.2, g: 160, life: 0.7, spread: 0 });
+    sfx.splash(Math.min(1, 0.4 + p.w * 0.25));
+    return;
+  }
+  const z = ev.land ? world.hAt(tx, ty) * 8 : p.fz;
+  if (ev.land) {
+    // ce qui est dessous prend tout : un arbre ou un gros rocher écrase
+    for (const n of npcs) {
+      if (n.inside || n.held || n.thrown || !alive(n) || p.hit.has(n)) continue;
+      const d = Math.hypot(n.x - p.x, n.y - p.y);
+      if (d > 0.45 + p.w * 0.15) continue;
+      if (p.w >= 2.5 && !tough(n)) killNpc(n, true);
+      else hitNpc(n, throwDmg(p), (n.x - p.x) / (d || 1), (n.y - p.y) / (d || 1), 0.5);
+    }
+    crackTile(tx, ty, p.w >= 2.5 ? 2 : 1);
+    burst(p.x, p.y, z, DUST_COLS, 6 + p.w * 6, { up: 25, speed: 1.6 + p.w * 0.5, g: 60, life: 0.6, spread: 1 });
+    if (OBJ_INFO[world.objAt(tx, ty)]?.small) damage(tx, ty, 1); // l'herbe, les fleurs écrasées
+  }
+  const free = ev.land && world.objAt(tx, ty) === O.NONE;
+  if (p.tree) {
+    sfx.treeCrash();
+    windT = Math.max(windT, 1);
+    burst(p.x, p.y, z + 8, leafColsFor(p.o), 30, { leaf: true, up: 30, g: 30, life: 1.6, spread: 12 });
+    if (free) world.setObj(tx, ty, O.LOG); // il ne reste que le tronc
+  } else if (info.rock) {
+    sfx.rockBreak();
+    burst(p.x, p.y, z + 4, ROCK_COLS, 18 + p.w * 6, { up: 60, speed: 2.2, big: 0.6 });
+    if (free) world.setObj(tx, ty, p.o === O.ROCK_L ? O.ROCK : O.PEBBLES); // il se fend en retombant
+  } else if (p.o === O.LOG) {
+    if (free) { world.setObj(tx, ty, O.LOG); sfx.land(true); } else { sfx.rockBreak(); burst(p.x, p.y, z + 3, WOOD_COLS, 14, { up: 60, speed: 2 }); }
+  } else {
+    // tonneau, caisse, foin, lanterne : ça éclate
+    sfx.propBreak(info.prop);
+    burst(p.x, p.y, z + 6, PROP_COLS[info.prop], 18, { up: 55, speed: 2.2, big: 0.5 });
+    if (info.prop === 'barrel') burst(p.x, p.y, z + 4, ['#7a2232', '#5a1a26', '#a8433f'], 14, { up: 35, speed: 1.8 });
+    if (info.prop === 'lantern') burst(p.x, p.y, z + 8, ['#ffd77a', '#fff0b8', '#ffffff'], 10, { up: 30, speed: 1.4, life: 0.5 });
+    if (free && info.next) world.setObj(tx, ty, info.next);
+  }
+}
+
+// Habitant ou animal lancé. Renvoie 'fly' tant qu'il vole, 'land' à l'atterrissage, 'gone' s'il coule.
+function flyNpc(n, dt) {
+  const th = n.thrown;
+  const ev = flight(n, th, dt);
+  n.z = groundZ(n.x, n.y);
+  n.jz = Math.max(0, n.fz - n.z);
+  n.rot = Math.floor(th.t * 10 / th.w); // il vole cul par-dessus tête
+  if (!ev) return 'fly';
+  const dmg = throwDmg(th);
+  if (ev.npc || ev.wall) {
+    // il percute quelqu'un ou quelque chose et retombe là
+    if (ev.wall && !th.walled) { th.walled = true; hitObstacleAt(ev.x, ev.y, dmg); }
+    sfx.bodyHit(n.kind === 'knight', th.power > 0.5);
+    burst(n.x, n.y, n.fz, BLOOD_COLS, 5, { up: 30, speed: 1.2, life: 0.5 });
+    if (alive(n) && !tough(n) && th.power > 0.3) n.dying = true;
+    n.vx *= ev.wall ? -0.25 : 0.35; n.vy *= ev.wall ? -0.25 : 0.35;
+    return 'fly';
+  }
+  n.thrown = null; n.rot = 0; n.air = false; n.jz = 0; n.vz = 0; n.vx *= 0.2; n.vy *= 0.2;
+  if (ev.water) {
+    // à l'eau : il coule
+    fx.push({ kind: 'ripple', x: n.x, y: n.y, t: 0 });
+    burst(n.x, n.y, WATER_LINE, WATER_COLS, 14, { up: 70, speed: 1.2, g: 160, life: 0.7, spread: 0 });
+    sfx.splash(0.8);
+    if (alive(n)) { killNpc(n, false); bloods.pop(); } // pas de flaque sur l'eau
+    if (player.eating === n) player.eating = null;
+    return 'gone';
+  }
+  shake = Math.max(shake, 2 + th.power * 3);
+  burst(n.x, n.y, n.z, DUST_COLS, 10, { up: 25, speed: 1.8, g: 60, life: 0.6, spread: 1 });
+  if (n.kind === 'knight') sfx.knightDown(); else sfx.bodyHit(false, th.power > 0.5);
+  // il retombe sur quelqu'un : les deux encaissent
+  for (const o of npcs) {
+    if (o === n || o.inside || o.held || o.thrown || !alive(o) || th.hit.has(o) || Math.hypot(o.x - n.x, o.y - n.y) > 0.55) continue;
+    hitNpc(o, Math.ceil(dmg * 0.6), o.x - n.x, o.y - n.y, 0.35);
+  }
+  if (!alive(n)) burst(n.x, n.y, n.z + 2, BLOOD_COLS, 10, { up: 30, speed: 1.4 });
+  else if (n.dying) killNpc(n, false);
+  return 'land';
+}
+
+// Il soulève sa charge encore plus haut et la fracasse au sol juste devant lui.
+function doHeave() {
+  const h = player.held;
+  if (!h) return;
+  const [dx, dy] = dirWorld(player.dir);
+  let x = player.x + dx * 0.8, y = player.y + dy * 0.8;
+  if (overlapping(x, y)) { x = player.x + dx * 0.3; y = player.y + dy * 0.3; }
+  const gz = groundZ(x, y);
+  player.held = null;
+  sfx.slam(0.2 + h.w * 0.1);
+  shake = Math.max(shake, 4 + h.w * 2);
+  rumble(0.6, 150);
+  fx.push({ kind: 'ring', x, y, z: gz, t: 0, r: 1.1 + h.w * 0.3 });
+  burst(x, y, gz, DUST_COLS, 16 + h.w * 6, { up: 35, speed: 2.4, g: 70, life: 0.8, spread: 1 });
+  crackTile(Math.floor(x), Math.floor(y), 2);
+  if (h.n) {
+    const n = h.n;
+    Object.assign(n, { held: false, x, y, z: gz, jz: 0, air: false, rot: 0, vx: 0, vy: 0 });
+    if (alive(n)) {
+      if (tough(n)) { n.state = 'hurt'; hitNpc(n, 6 * strength(), dx, dy, 0.6); } // un héros en forme encaisse
+      else killNpc(n, false);
+    } else {
+      burst(x, y, gz + 2, BLOOD_COLS, 14, { up: 40, speed: 1.6 });
+      sfx.splat();
+    }
+  } else shatter({ o: h.o, tree: h.tree, w: h.w, x, y, fz: gz, power: 0.6, hit: new Set() }, { land: true, water: !world.walkable(Math.floor(x), Math.floor(y)) });
+  // l'onde bouscule ceux qui sont tout près
+  for (const n of npcs) {
+    const rx = n.x - x, ry = n.y - y, d = Math.hypot(rx, ry);
+    if (n === h.n || n.inside || n.held || !alive(n) || d > 1.3) continue;
+    hitNpc(n, 2 * strength(), rx / (d || 1), ry / (d || 1), 0.4);
+  }
+}
+
 // ---------------------------------------------------------------- dérapages
 const SLIDE = { skid: { dur: 0.62, v0: 6.2 }, brake: { dur: 0.5, v0: 5.8 } };
 const decals = []; // traces au sol
@@ -2498,6 +2993,19 @@ function updateParticles(dt) {
   if (particles.length > 400) particles.splice(0, particles.length - 400);
 }
 
+// Tension pour la musique : des chevaliers ou des héros à ses trousses, un village en alerte.
+function dangerLevel() {
+  let d = 0;
+  for (const n of npcs) {
+    if (!alive(n) || n.inside || Math.hypot(n.x - player.x, n.y - player.y) > 12) continue;
+    if (n.kind === 'hero' && n.state !== 'guard' && n.state !== 'wander') d += 0.6;
+    else if (n.kind === 'knight' && ['chase', 'attack', 'hurt'].includes(n.state)) d += 0.3;
+    else if (n.kind === 'beast' && n.state === 'charge') d += 0.25;
+  }
+  if (curVillage && alarmed(curVillage.id)) d += 0.35;
+  return Math.min(1, d);
+}
+
 function darkness() {
   // 0 en plein jour, 1 en pleine nuit
   const d = Math.cos((tod - 0.5) * Math.PI * 2); // 1 à midi, -1 à minuit
@@ -2561,11 +3069,17 @@ function render() {
   // habitants rangés par rangée, comme Brainless
   const npcRows = new Map();
   for (const n of npcs) {
-    if (n.inside) continue;
+    if (n.inside || n.held) continue;
     const r = Math.floor(n.x + 0.35) + Math.floor(n.y + 0.35);
     let l = npcRows.get(r);
     if (!l) npcRows.set(r, l = []);
     l.push(n);
+  }
+  for (const p of thrown) {
+    const r = Math.floor(p.x + 0.35) + Math.floor(p.y + 0.35);
+    let l = npcRows.get(r);
+    if (!l) npcRows.set(r, l = []);
+    l.push(p);
   }
   // traces de dérapage rangées par rangée pour être dessinées sur le sol, sous les objets
   const decalRows = new Map();
@@ -2625,7 +3139,7 @@ function render() {
     }
     if (d === pRow && mode === 'play') rowEnts.push({ player: true, mx: player.x, my: player.y, depth: player.x + player.y });
     const rn = npcRows.get(d);
-    if (rn) for (const n of rn) rowEnts.push({ npc: n, mx: n.x, my: n.y, depth: n.x + n.y });
+    if (rn) for (const n of rn) rowEnts.push(n.o ? { thrown: n, mx: n.x, my: n.y, depth: n.x + n.y } : { npc: n, mx: n.x, my: n.y, depth: n.x + n.y });
     if (rowEnts.length) {
       // devant ou derrière un bâtiment de la même rangée ?
       for (const b of rowEnts) {
@@ -2638,6 +3152,7 @@ function render() {
       rowEnts.sort((a, b) => a.depth - b.depth);
       for (const e of rowEnts) {
         if (e.player) { drawPlayer(ox, oy, 1); playerDrawn = true; } else if (e.npc) drawNpc(e.npc, ox, oy);
+        else if (e.thrown) drawThrown(e.thrown, ox, oy);
         else drawObject(e);
       }
     }
@@ -2661,6 +3176,7 @@ function render() {
   ctx.globalAlpha = 1;
   if (player.charging) drawChargeAura(ox, oy);
   if (player.charging && player.chargeKind === 'punch') drawAim(ox, oy);
+  if (player.aiming && player.held) drawThrowAim(ox, oy);
   // Brainless visible en transparence derrière les arbres
   if (mode === 'play') {
     ctx.globalAlpha = 0.28;
@@ -2721,7 +3237,8 @@ function drawNpc(n, ox, oy) {
   if (!alive(n)) {
     ctx.globalAlpha = Math.min(1, (150 - n.deadT) / 10);
     const im = peopleImgs[n.type][n.anim][n.dir][0];
-    draw(im, sx - im.ox, sy - im.oy);
+    if (jz > 2) ctx.drawImage(shadows.s, sx - shadows.s.ox, sy - shadows.s.oy); // cadavre lancé
+    drawTurned(im, sx, sy - jz, n.rot || 0);
     ctx.globalAlpha = 1;
     if (n === player.nearCorpse) {
       const l = { touch: 'N', keys: 'R', pad: 'L1' }[inputMode] + ': DEVORER';
@@ -2737,13 +3254,13 @@ function drawNpc(n, ox, oy) {
   const img = peopleImgs[n.type][n.anim][n.dir][f];
   n.fade = Math.min(1, (n.fade ?? 1) + 1 / 30);
   ctx.globalAlpha = n.fade;
-  draw(img, sx - img.ox, sy - jz - img.oy);
+  drawTurned(img, sx, sy - jz, n.rot || 0);
   ctx.globalAlpha = 1;
   if (n.flash > 0) {
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     ctx.globalAlpha = 0.7;
-    draw(img, sx - img.ox, sy - jz - img.oy);
+    drawTurned(img, sx, sy - jz, n.rot || 0);
     ctx.restore();
   }
   if (n.state === 'ko' && !n.air) {
@@ -2808,16 +3325,19 @@ function drawPlayer(ox, oy, withShadow) {
     const sh = player.jz > 12 ? shadows.m : shadows.p;
     ctx.drawImage(sh, sx - sh.ox, sy - gz - sh.oy);
   }
-  let img;
+  let img, an, fi;
   if (player.dead) {
     img = nomu.down[player.dir][Math.min(ANIMS.down.frames - 1, Math.floor(player.dead.t * ANIMS.down.fps))];
   } else if (player.air) {
     // image du saut choisie selon la vitesse verticale : décollage -> sommet -> réception
     const u = Math.max(0, Math.min(0.999, (1 - player.vz / JUMP_V) / 2));
-    img = nomu.jump[player.dir][Math.floor(u * ANIMS.jump.frames)];
+    an = player.held ? 'carryJump' : 'jump';
+    fi = Math.floor(u * ANIMS[an].frames);
+    img = nomu[an][player.dir][fi];
   } else if (player.action) {
     const A = ANIMS[player.action];
     const f = Math.min(A.frames - 1, Math.floor(player.actionT * A.frames));
+    an = player.action; fi = f;
     img = nomu[player.action][player.dir][f];
     if (player.action === 'rush' && withShadow && !player.water) {
       // image rémanente : la frame d'en face, en transparence, double la nuée de poings
@@ -2828,9 +3348,16 @@ function drawPlayer(ox, oy, withShadow) {
     }
   } else {
     const A = ANIMS[player.anim];
-    img = nomu[player.anim][player.dir][Math.floor(player.t) % A.frames];
+    an = player.anim; fi = Math.floor(player.t) % A.frames;
+    img = nomu[player.anim][player.dir][fi];
   }
   const px = sx - img.ox, py = sy - gz - jz - img.oy;
+  // ce qu'il porte : derrière lui si ses mains sont basses et dans son dos, devant sinon
+  let hp = null;
+  if (player.held) {
+    hp = (holdPts[an] || holdPts.carry)[player.dir][holdPts[an] ? fi : 0];
+    if (hp.depth < -1.5 && hp.z < 44) { drawHeld(sx + hp.x, sy - gz - jz + hp.y, hp); hp = null; }
+  }
   if (player.water) {
     // seule la partie au-dessus de la surface est nette ; dessous, on le devine à travers l'eau
     const wl = sy - WATER_LINE;
@@ -2844,6 +3371,7 @@ function drawPlayer(ox, oy, withShadow) {
     ctx.globalAlpha = a * 0.22;
     draw(img, px, py);
     ctx.restore();
+    if (hp) drawHeld(sx + hp.x, sy - gz - jz + hp.y, hp);
     if (withShadow) {
       // écume autour du corps, qui ondule
       ctx.fillStyle = '#eaf7ff';
@@ -2857,6 +3385,7 @@ function drawPlayer(ox, oy, withShadow) {
     return;
   }
   draw(img, px, py);
+  if (hp) drawHeld(sx + hp.x, sy - gz - jz + hp.y, hp);
   if (player.flash > 0 && withShadow) {
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
@@ -2873,6 +3402,66 @@ function drawPlayer(ox, oy, withShadow) {
     draw(img, px, py);
     ctx.restore();
   }
+}
+
+// Ce qu'il porte, dessiné au point (hx, hy) entre ses mains. `g` : 0 = mains basses (il vient de
+// l'empoigner, il le tient par le milieu), 1 = au-dessus de sa tête (posé sur ses paumes).
+// Un arbre, ou un habitant qui se débat, passe en travers au-dessus de sa tête.
+function drawHeld(hx, hy, hp) {
+  const h = player.held, g = Math.max(0, Math.min(1, (hp.z - 26) / 20));
+  const side = Math.cos(player.dir * Math.PI / 4) >= -0.01 ? 1 : 3; // la tête (ou la cime) du côté où il regarde
+  let img, rot = 0, grip = 0.4;
+  if (h.n) {
+    const n = h.n, struggling = alive(n) && n.state !== 'ko';
+    if (n.kind === 'beast') img = peopleImgs[n.type][struggling ? 'run' : n.anim === 'crushed' ? 'crushed' : 'dead'][n.dir][struggling ? Math.floor(n.t) % BEAST_ANIMS.run.frames : 0];
+    else if (struggling) { img = peopleImgs[n.type].held[n.dir][Math.floor(n.t) % 6]; if (g > 0.5) rot = side; }
+    else img = peopleImgs[n.type][n.anim === 'crushed' ? 'crushed' : n.anim === 'dead' ? 'dead' : 'ko'][n.dir][0];
+  } else {
+    img = objSprites[h.o][0];
+    if (h.tree) { if (g > 0.5) rot = side; else grip = 0.1; } // déraciné : il le tient par le pied du tronc
+  }
+  const hgt = rot & 1 ? img.w : img.h;
+  const cy = hy - (g * (hgt / 2 + 1) + (1 - g) * (0.5 - grip) * hgt); // levé : tout entier au-dessus de ses doigts
+  if (!h.n && h.tree && !rot) draw(img, Math.round(hx - img.ox), Math.round(hy + 4 - img.oy));
+  else drawCentered(img, hx, cy, rot);
+  if (h.n && h.n.flash > 0) { ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = 0.6; drawCentered(img, hx, cy, rot); ctx.restore(); }
+}
+
+// Objet en vol : son ombre au sol, et lui qui tournoie.
+function drawThrown(p, ox, oy) {
+  const sx = ox + Math.round(isoX(p.x, p.y)), sy = oy + Math.round(isoY(p.x, p.y));
+  const gz = groundZ(p.x, p.y), sh = p.w >= 2.5 ? shadows.m : shadows.s;
+  ctx.drawImage(sh, sx - sh.ox, sy - Math.round(gz) - sh.oy);
+  const img = objSprites[p.o][0];
+  drawCentered(img, sx, sy - Math.round(p.fz) - (img.h >> 1) * 0.6, (p.tree ? 1 : 0) + p.spin);
+}
+
+// Visée du lancer : la trajectoire en pointillés et le point de chute, qui s'allongent avec la force.
+const THROW_COLS = ['#fff3b0', '#ffb347', '#ff5a5a'];
+function drawThrowAim(ox, oy) {
+  const [ux, uy] = aimDir(), pow = 0.3 + 0.7 * player.throwPow;
+  const { v, vz: vz0 } = throwSpeed(pow, player.held.w);
+  let x = player.x + ux * 0.35, y = player.y + uy * 0.35, z = player.z + HOLD_Z, vz = vz0, gz = 0;
+  const st = 1 / 30, march = Math.floor(time * 12) % 3, col = THROW_COLS[Math.min(2, Math.floor(player.throwPow * 3))];
+  for (let i = 0; i < 120; i++) {
+    x += ux * v * st; y += uy * v * st; vz -= THROW_G * st; z += vz * st;
+    gz = groundZ(x, y);
+    if (z <= gz) break;
+    if (i % 3 !== march || i < 3) continue;
+    const px = Math.round(ox + isoX(x, y)), py = Math.round(oy + isoY(x, y) - z);
+    ctx.fillStyle = '#1a0e08'; ctx.fillRect(px - 1, py - 1, 4, 4);
+    ctx.fillStyle = col; ctx.fillRect(px, py, 2, 2);
+  }
+  // le point de chute : un losange en tirets qui pulse
+  const cx = Math.round(ox + isoX(x, y)), cy = Math.round(oy + isoY(x, y) - gz), r = 7 + Math.sin(time * 10) * 1.5;
+  for (let i = 0; i < 24; i++) {
+    if (i % 3 === 2) continue;
+    const a = i / 24 * Math.PI * 2 + time * 2;
+    const px = Math.round(cx + Math.cos(a) * r), py = Math.round(cy + Math.sin(a) * r * 0.5);
+    ctx.fillStyle = '#1a0e08'; ctx.fillRect(px, py + 1, 1, 1);
+    ctx.fillStyle = col; ctx.fillRect(px, py, 1, 1);
+  }
+  ctx.fillStyle = '#ff2e63'; ctx.fillRect(cx - 1, cy, 3, 1); ctx.fillRect(cx, cy - 1, 1, 3);
 }
 
 // Visée du gros coup : le cône qui sera balayé, en pointillés au sol, qui grandit avec la charge.
@@ -3159,6 +3748,25 @@ function drawScent() {
   ctx.globalAlpha = 1;
 }
 
+// Note de musique : blanche = musique du jeu, verte = ma musique (Spotify…), barrée = aucune.
+function drawMusicButton() {
+  musicBtn.x = VW - 52 - safe.r;
+  musicBtn.y = 11 + safe.t;
+  const x = musicBtn.x - 5, y = musicBtn.y - 4, m = musicMode();
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.fillRect(x - 3, y - 3, 17, 14);
+  ctx.fillStyle = m === 'mine' ? '#7ee08a' : '#ffffff';
+  // double croche pixel
+  ctx.fillRect(x + 3, y, 6, 1); ctx.fillRect(x + 3, y + 1, 6, 1);
+  ctx.fillRect(x + 3, y + 2, 1, 4); ctx.fillRect(x + 8, y + 2, 1, 4);
+  ctx.fillRect(x + 1, y + 5, 3, 2); ctx.fillRect(x + 6, y + 5, 3, 2);
+  if (m === 'mine') { ctx.fillRect(x + 10, y + 6, 1, 2); ctx.fillRect(x + 9, y + 7, 1, 1); } // petit « + » : sa musique à lui
+  if (m === 'off') {
+    ctx.fillStyle = '#ff5a5e';
+    for (let i = 0; i < 9; i++) ctx.fillRect(x + 1 + i, y + i - 1, 1, 1);
+  }
+}
+
 function drawHomeButton() {
   homeBtn.x = VW - 32 - safe.r;
   homeBtn.y = 11 + safe.t;
@@ -3191,9 +3799,9 @@ function drawMuteButton() {
 }
 
 const HINTS = {
-  touch: ['JOYSTICK A FOND: IL COURT', 'MAINTIENS B POUR CHARGER', 'SPRINT: MAINTIENS >> EN MARCHANT', 'N: FLAIRER LA VIANDE FRAICHE'],
-  keys: ['ZQSD: COURIR  C: MARCHER  MAJ: SPRINT  ESPACE: SAUT', 'J/CLIC: COUP (MAINTENIR = CHARGE)', 'K/CLIC DROIT: FRAPPE AU SOL  R: FLAIRER', 'F: PLEIN ECRAN'],
-  pad: ['STICK: MARCHER, A FOND: COURIR  B/R2: SPRINT  A: SAUT', 'X: COUP (MAINTENIR = CHARGE)', 'Y: FRAPPE AU SOL  L1: FLAIRER', 'SELECT: SON'],
+  touch: ['JOYSTICK A FOND: IL COURT', 'MAINTIENS B POUR CHARGER', 'SPRINT: MAINTIENS >> EN MARCHANT', 'N: FLAIRER LA VIANDE FRAICHE', 'P: PRENDRE, P: LANCER (MAINTENIR = VISER)'],
+  keys: ['ZQSD: COURIR  C: MARCHER  MAJ: SPRINT  ESPACE: SAUT', 'J/CLIC: COUP (MAINTENIR = CHARGE)', 'K/CLIC DROIT: FRAPPE AU SOL  R: FLAIRER', 'L/CLIC MOLETTE: PRENDRE, LANCER (MAINTENIR = VISER)', 'F: PLEIN ECRAN  N: MUSIQUE'],
+  pad: ['STICK: MARCHER, A FOND: COURIR  B/R2: SPRINT  A: SAUT', 'X: COUP (MAINTENIR = CHARGE)', 'Y: FRAPPE AU SOL  L1: FLAIRER', 'R1: PRENDRE, LANCER (MAINTENIR = VISER)', 'SELECT: SON'],
 };
 
 function drawHUD() {
@@ -3202,6 +3810,8 @@ function drawHUD() {
   drawText(ctx, 'BRAINLESS', x0, y0, '#f6a6bd');
   drawText(ctx, 'NIV ' + player.level, x0 + 40, y0, '#c9a0ff');
   buttons.n.sub = player.nearCorpse ? 'DEVORER' : 'FLAIR';
+  buttons.g.sub = player.held ? 'LANCER' : 'PRENDRE';
+  buttons.a.sub = player.held ? 'ECRASER' : 'COUP';
   const night = darkness() > 0.5;
   drawText(ctx, (night ? 'NUIT' : 'JOUR') + '  ARBRES ' + stats.trees + '  MAISONS ' + stats.houses + '  VICTIMES ' + (stats.victims + stats.knights), x0, y0 + 8, '#e8f0ff');
   drawSprintBar(x0, y0 + 17);
@@ -3210,6 +3820,7 @@ function drawHUD() {
   if (player.alters.length) drawText(ctx, 'ALTERS: ' + player.alters.map((a) => ALTERS[a].name).join(' '), x0, y0 + 44, '#c9a0ff');
   drawScent();
   drawMuteButton();
+  drawMusicButton();
   drawHomeButton();
   if (msg) {
     ctx.globalAlpha = Math.min(1, msg.t / 0.6);
@@ -3234,7 +3845,7 @@ function drawHUD() {
     ctx.drawImage(ui.ring, Math.round(joy.bx - ui.ring.ox), Math.round(joy.by - ui.ring.oy));
     ctx.drawImage(ui.knob, Math.round(joy.kx - ui.knob.ox), Math.round(joy.ky - ui.knob.oy));
   }
-  for (const k of ['a', 'b', 'j', 's', 'n']) {
+  for (const k of ['a', 'b', 'j', 's', 'n', 'g']) {
     const b = buttons[k];
     const img = ui[k];
     const press = held(k) ? 1 : 0;
@@ -3267,6 +3878,7 @@ function updateMenu(dt) {
   player.z += (groundZ(player.x, player.y) - player.z) * Math.min(1, dt * 2);
   updateParticles(dt);
   updateFlyers(dt);
+  updateMusic(dt, { night: darkness(), danger: 0, rain: 0 });
   for (let i = fx.length - 1; i >= 0; i--) if ((fx[i].t += dt) > 1.2) fx.splice(i, 1);
 }
 
@@ -3279,12 +3891,12 @@ function updateMenu(dt) {
     if (s && typeof s.x === 'number') { player.x = s.x; player.y = s.y; tod = s.tod ?? tod; }
   }
   if (!recent || !player.x) { const sp = world.findSpawn(); player.x = sp.x; player.y = sp.y; }
-  initMenu({ onPlay: startWorld });
+  initMenu({ onPlay: startWorld, music: { get: musicMode, cycle: () => { unlockAudio(); return cycleMusic(); } } });
   document.addEventListener('pointerdown', unlockAudio);
   if (location.hash === '#debug') {
     window.BRAINLESS = { get world() { return world; }, player, startWorld, createWorld, listWorlds, quitToMenu, get mode() { return mode; }, stats, O, T, decals, particles, npcs, damage, hurtPlayer,
       vstate, crime, killNpc, hitNpc, nearestPrey, get scent() { return scent; },
-      get tod() { return tod; }, set tod(v) { tod = v; }, weather, spawnBeast, gainEvo, has, pages, blockedFor, freeSpot, OBJ_INFO, overlapping, crackTile, craterTile, doSlam, doBigPunch, doRushHit };
+      get tod() { return tod; }, set tod(v) { tod = v; }, weather, spawnBeast, gainEvo, has, pages, blockedFor, freeSpot, OBJ_INFO, overlapping, crackTile, craterTile, doSlam, doBigPunch, doRushHit, thrown, startGrab, releaseHeld, grabTarget, holdPts };
   }
   await loadAssets();
   loading.style.display = 'none';

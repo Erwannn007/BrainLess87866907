@@ -1,9 +1,33 @@
 // Tous les sons sont synthétisés en direct (Web Audio) : aucun fichier à charger.
 const MUTE_KEY = 'brainless-mute';
+const MUSIC_KEY = 'brainless-music';
+const MUSIC_MODES = ['game', 'mine', 'off'];
 
-let ctx = null, master, sfxBus, ambBus, noiseBuf, verb;
+let ctx = null, master, sfxBus, ambBus, musicBus, melBus, noiseBuf, verb;
 let muted = false;
+// Musique : 'game' (la musique du jeu), 'mine' (on écoute la sienne : Spotify, Apple Music… le jeu
+// se mélange par-dessus au lieu de la couper), 'off' (bruitages seulement).
+let music = 'game';
 try { muted = localStorage.getItem(MUTE_KEY) === '1'; } catch (e) { /* stockage indisponible */ }
+try { music = MUSIC_MODES.includes(localStorage.getItem(MUSIC_KEY)) ? localStorage.getItem(MUSIC_KEY) : 'game'; } catch (e) { /* stockage indisponible */ }
+
+export function musicMode() { return music; }
+
+// Sur iPhone, la « session audio » décide si le jeu coupe les autres apps :
+//  - 'playback' : le jeu prend la main (coupe Spotify) mais sonne même avec le bouton silencieux ;
+//  - 'ambient'  : le jeu se mélange à la musique des autres apps (et se tait en mode silencieux).
+function applySession() {
+  try { if (navigator.audioSession) navigator.audioSession.type = music === 'mine' ? 'ambient' : 'playback'; } catch (e) { /* non supporté */ }
+}
+
+export function cycleMusic() {
+  music = MUSIC_MODES[(MUSIC_MODES.indexOf(music) + 1) % MUSIC_MODES.length];
+  try { localStorage.setItem(MUSIC_KEY, music); } catch (e) { /* stockage indisponible */ }
+  applySession();
+  // la nouvelle session ne prend effet qu'en réactivant le son
+  if (ctx) ctx.suspend().then(() => ctx.resume()).catch(() => {});
+  return music;
+}
 const last = {};
 
 export function isMuted() { return muted; }
@@ -20,8 +44,9 @@ export function unlockAudio() {
   if (!ctx) {
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
-    // Sur iPhone, joue le son même si le bouton silencieux est activé (il y a un bouton muet dans le jeu).
-    try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) { /* non supporté */ }
+    // Sur iPhone : joue même en mode silencieux (il y a un bouton muet dans le jeu), sauf en mode
+    // « ma musique » où le jeu se mélange à Spotify & co au lieu de les couper.
+    applySession();
     ctx = new AC();
     master = ctx.createGain();
     master.gain.value = muted ? 0 : 0.9;
@@ -43,6 +68,13 @@ export function unlockAudio() {
     verb.buffer = ir;
     const vg = ctx.createGain(); vg.gain.value = 0.35;
     verb.connect(vg).connect(master);
+    // musique : un bus à part, et un écho pour la mélodie
+    musicBus = ctx.createGain(); musicBus.gain.value = 0; musicBus.connect(master);
+    melBus = ctx.createGain(); melBus.connect(musicBus);
+    const echo = ctx.createDelay(1), fb = ctx.createGain(), eLp = ctx.createBiquadFilter();
+    echo.delayTime.value = 0.42; fb.gain.value = 0.38; eLp.type = 'lowpass'; eLp.frequency.value = 1800;
+    melBus.connect(echo); echo.connect(eLp).connect(fb).connect(echo); eLp.connect(musicBus);
+    const mv = ctx.createGain(); mv.gain.value = 0.5; melBus.connect(mv).connect(verb);
     startAmbience();
   }
   if (ctx.state !== 'running') ctx.resume();
@@ -403,6 +435,41 @@ export const sfx = {
     if (!ready()) return;
     tone({ f: 660, f2: 880, type: 'square', gain: 0.06, dec: 0.06 });
   },
+  // --- attraper / lancer
+  grabReach() {
+    if (!ready()) return;
+    noise({ f: 600, f2: 1800, q: 1.4, gain: 0.14, a: 0.04, dec: 0.12 });
+  },
+  // il empoigne : choc sourd (plus grave si c'est lourd) et grognement d'effort
+  grab(w = 1) {
+    if (!ready() || !gate('grab', 0.1)) return;
+    tone({ f: 120 - w * 15, f2: 45, gain: 0.45 + w * 0.12, dec: 0.18 });
+    noise({ type: 'lowpass', f: 900, gain: 0.25, dec: 0.12 });
+    tone({ f: 150, f2: 110, type: 'sawtooth', gain: 0.1 + w * 0.03, a: 0.03, dec: 0.25 + w * 0.08, lp: 700, delay: 0.05 });
+  },
+  // un arbre arraché : racines qui cèdent, terre qui se déchire, feuillage secoué
+  uproot() {
+    if (!ready()) return;
+    tone({ f: 85, f2: 50, type: 'sawtooth', gain: 0.2, a: 0.05, dec: 0.5, lp: 450 });
+    for (let i = 0; i < 9; i++) noise({ f: rnd(500, 1500), q: 2.5, gain: 0.2, dec: 0.04, delay: i * rnd(0.03, 0.06) });
+    noise({ type: 'lowpass', f: 1400, f2: 250, gain: 0.5, dec: 0.5, delay: 0.2, rev: 0.3 });
+    tone({ f: 65, f2: 30, gain: 0.7, dec: 0.4, delay: 0.25 });
+    noise({ type: 'highpass', f: 3000, gain: 0.2, a: 0.05, dec: 0.8, delay: 0.1 });
+    tone({ f: 140, f2: 95, type: 'sawtooth', gain: 0.14, a: 0.04, dec: 0.5, lp: 650, delay: 0.15 });
+  },
+  // il arme le lancer : souffle et grognement qui monte
+  heave() {
+    if (!ready() || !gate('heave', 0.2)) return;
+    tone({ f: 110, f2: 160, type: 'sawtooth', gain: 0.13, a: 0.06, dec: 0.25, lp: 700 });
+    noise({ f: 500, q: 2, gain: 0.08, a: 0.05, dec: 0.2 });
+  },
+  // la charge part : cri d'effort et gros souffle (plus sourd si c'est lourd)
+  throwIt(p, w) {
+    if (!ready()) return;
+    tone({ f: 170, f2: 100, type: 'sawtooth', gain: 0.16 + p * 0.06, a: 0.02, dec: 0.3, lp: 900 });
+    noise({ f: 400 - w * 60, f2: 2400 - w * 300, q: 1, gain: 0.3 + p * 0.2, a: 0.04, dec: 0.25 + w * 0.08 });
+    noise({ f: 1800, f2: 500, q: 0.8, gain: 0.12 + p * 0.12, a: 0.05, dec: 0.5 + p * 0.4, delay: 0.1 });
+  },
   tired() {
     if (!ready() || !gate('tired', 1)) return;
     for (let i = 0; i < 3; i++) noise({ f: 600, q: 3, gain: 0.12, a: 0.05, dec: 0.2, delay: i * 0.35 });
@@ -508,4 +575,63 @@ export function updateAmbience(dt, { night, water, height, rain = 0, storm = 0 }
       for (let i = 0; i < 3; i++) tone({ f, type: 'square', gain: 0.012, dec: 0.025, delay: i * 0.05, lp: 6000, bus: ambBus });
     }
   }
+}
+
+// ---------------------------------------------------------------- musique
+// Musique générée en direct, en ré dorien : nappes lentes et basse tenue sur 4 accords
+// (rém, si♭, fa, do), mélodie pentatonique au hasard qui chante dans l'écho. La nuit, elle
+// s'assombrit et se raréfie. Quand ça chauffe (chevaliers, héros, cloche), les tambours, une
+// basse qui martèle et des charlestons montent, et le tempo accélère.
+const ROOT = 146.83; // ré
+const semi = (n) => ROOT * Math.pow(2, n / 12);
+const PROG = [[0, 3, 7], [-4, 0, 3], [3, 7, 10], [-2, 2, 5]];
+const PENTA = [0, 3, 5, 7, 10, 12, 15, 17, 19, 22, 24, 27];
+const mus = { t: 0, step: 0, night: 0, danger: 0, mel: 5 };
+
+export function updateMusic(dt, { night = 0, danger = 0, rain = 0 }) {
+  if (!ready() || !musicBus) return;
+  const now = ctx.currentTime, on = music === 'game';
+  musicBus.gain.setTargetAtTime(on ? 0.55 : 0, now, on ? 1.5 : 0.3);
+  mus.night += (night - mus.night) * Math.min(1, dt * 0.3);
+  mus.danger += (danger - mus.danger) * Math.min(1, dt * (danger > mus.danger ? 1.2 : 0.2)); // monte vite, retombe lentement
+  if (!on) { mus.t = 0; return; }
+  if (mus.t < now - 0.3) mus.t = now + 0.05; // reprise après une pause
+  const step = 60 / (66 + mus.danger * 44) / 4; // double croche
+  while (mus.t < now + 0.2) {
+    playStep(mus.step, mus.t - now, step, rain);
+    mus.t += step;
+    mus.step++;
+  }
+}
+
+function playStep(s, delay, step, rain) {
+  const bar = Math.floor(s / 16), pos = s % 16, chord = PROG[Math.floor(bar / 2) % 4], r = chord[0];
+  const n = mus.night, d = mus.danger, bus = musicBus;
+  if (pos === 0 && bar % 2 === 0) {
+    // nappe : les trois notes de l'accord, doublées un peu désaccordées ; basse tenue dessous
+    const len = step * 32;
+    for (const k of chord) {
+      for (const det of [1, 1.006]) tone({ f: semi(k) * det, type: 'triangle', gain: 0.03 * (1 - d * 0.4), a: 1.4, dec: len, lp: 900 - n * 400, delay, bus });
+    }
+    tone({ f: semi(r - 12), gain: 0.1, a: 0.5, dec: len, delay, bus });
+  }
+  // mélodie : un « pluck » sur certaines croches, en marche aléatoire dans la gamme
+  const phraseEnd = bar % 4 === 3 && pos >= 8;
+  const pm = (0.3 - n * 0.14) * (1 - d * 0.5) * (rain > 0.5 ? 0.6 : 1);
+  if (pos % 2 === 0 && !phraseEnd && Math.random() < pm) {
+    mus.mel = Math.max(1, Math.min(10, mus.mel + Math.round((Math.random() * 2 - 1) * 2)));
+    const f = semi(PENTA[mus.mel] + (n > 0.5 ? 0 : 12));
+    tone({ f, type: 'triangle', gain: 0.045, a: 0.004, dec: 0.45 + n * 0.6, delay, bus: melBus });
+    tone({ f: f * 2, gain: 0.012, a: 0.004, dec: 0.2, delay, bus: melBus });
+  }
+  if (d < 0.05) return;
+  // tension : grosse caisse, toms, charlestons, basse qui martèle
+  if (pos === 0 || pos === 8 || (d > 0.6 && pos === 11)) tone({ f: 120, f2: 38, gain: 0.4 * d, dec: 0.28, delay, bus });
+  if (pos === 4 || pos === 12) {
+    tone({ f: 190, f2: 85, gain: 0.22 * d, dec: 0.2, delay, bus });
+    noise({ type: 'lowpass', f: 1100, gain: 0.12 * d, dec: 0.12, delay, bus });
+  }
+  if (pos % 2 === 1 && d > 0.25) noise({ type: 'highpass', f: 6500, gain: 0.045 * d, dec: 0.035, delay, bus });
+  if (pos % 2 === 0) tone({ f: semi(r - 12 + (pos % 8 === 6 ? 7 : 0)), type: 'sawtooth', gain: 0.05 * d, dec: step * 1.6, lp: 380 + d * 520, delay, bus });
+  if (pos === 0 && bar % 2 === 0 && d > 0.5) tone({ f: semi(r + 12), f2: semi(r), type: 'square', gain: 0.03 * d, a: 0.01, dec: 0.5, lp: 1200, delay, bus, rev: 0.3 });
 }

@@ -4,7 +4,8 @@
 //   stick gauche / croix : bouger        A (bas)    : sauter
 //   X (gauche)            : coup (maintenir = coup chargé)
 //   Y (haut)              : frappe au sol (maintenir pour charger)
-//   B (droite), R1, R2, L3 : sprint (maintenir)
+//   B (droite), R2, L3    : sprint (maintenir)
+//   R1                    : prendre / lancer (maintenir = viser)
 //   L1                    : flairer
 //   Select                : couper le son
 //   Start                 : retour à l'accueil
@@ -13,8 +14,8 @@ const prev = [];
 
 export const pad = {
   connected: false, x: 0, y: 0,
-  sprint: false, charge: false, punch: false,
-  jumpPressed: false, punchPressed: false, mutePressed: false, sniffPressed: false, any: false,
+  sprint: false, charge: false, punch: false, grab: false,
+  jumpPressed: false, punchPressed: false, mutePressed: false, sniffPressed: false, grabPressed: false, any: false,
 };
 
 let active = null; // la manette utilisée en dernier
@@ -22,7 +23,7 @@ let active = null; // la manette utilisée en dernier
 const down = (gp, i) => !!(gp.buttons[i] && (gp.buttons[i].pressed || gp.buttons[i].value > 0.5));
 
 export function pollPad() {
-  pad.jumpPressed = pad.punchPressed = pad.mutePressed = pad.sniffPressed = pad.startPressed = pad.any = false;
+  pad.jumpPressed = pad.punchPressed = pad.mutePressed = pad.sniffPressed = pad.startPressed = pad.grabPressed = pad.any = false;
   pad.pressed = [];
   const list = navigator.getGamepads ? navigator.getGamepads() : [];
   let gp = null;
@@ -33,7 +34,7 @@ export function pollPad() {
     if (g.buttons.some((b) => b.pressed) || Math.hypot(g.axes[0] || 0, g.axes[1] || 0) > DEAD) { gp = g; break; }
   }
   pad.connected = !!gp;
-  if (!gp) { pad.x = pad.y = 0; pad.sprint = pad.charge = pad.punch = false; return pad; }
+  if (!gp) { pad.x = pad.y = 0; pad.sprint = pad.charge = pad.punch = pad.grab = false; return pad; }
   active = gp;
 
   // stick avec zone morte radiale, croix en secours
@@ -50,7 +51,9 @@ export function pollPad() {
   const was = prev[gp.index] || [];
   const now = gp.buttons.map((_, i) => down(gp, i));
   const pressed = (i) => now[i] && !was[i];
-  pad.sprint = now[1] || now[5] || now[7] || now[10];
+  pad.sprint = now[1] || now[7] || now[10];
+  pad.grab = now[5];
+  pad.grabPressed = pressed(5);
   pad.charge = now[3] || now[6];
   pad.punch = now[2];
   pad.jumpPressed = pressed(0);

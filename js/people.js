@@ -60,11 +60,12 @@ export const PEOPLE_ANIMS = {
   civ: {
     idle: { frames: 4, fps: 4 }, walk: { frames: 6, fps: 9 }, flee: { frames: 6, fps: 13 },
     wave: { frames: 4, fps: 7 }, ko: { frames: 1, fps: 1 }, dead: { frames: 1, fps: 1 }, crushed: { frames: 1, fps: 1 },
+    held: { frames: 6, fps: 12 }, // soulevé par Brainless : il gigote
   },
   knight: {
     idle: { frames: 4, fps: 4 }, walk: { frames: 6, fps: 9 }, run: { frames: 6, fps: 12 },
     attack: { frames: 6, fps: 12 }, hurt: { frames: 2, fps: 8 }, ko: { frames: 1, fps: 1 },
-    dead: { frames: 1, fps: 1 }, crushed: { frames: 1, fps: 1 },
+    dead: { frames: 1, fps: 1 }, crushed: { frames: 1, fps: 1 }, held: { frames: 6, fps: 12 },
   },
   hero: {
     idle: { frames: 4, fps: 6 }, walk: { frames: 6, fps: 9 }, run: { frames: 6, fps: 13 },
@@ -72,7 +73,7 @@ export const PEOPLE_ANIMS = {
     // enchaînements de combat
     jab: { frames: 5, fps: 15 }, cross: { frames: 5, fps: 14 }, upper: { frames: 6, fps: 12 },
     kick: { frames: 6, fps: 12 }, block: { frames: 2, fps: 6 },
-    ko: { frames: 1, fps: 1 }, dead: { frames: 1, fps: 1 }, crushed: { frames: 1, fps: 1 },
+    ko: { frames: 1, fps: 1 }, dead: { frames: 1, fps: 1 }, crushed: { frames: 1, fps: 1 }, held: { frames: 6, fps: 12 },
   },
 };
 
@@ -107,7 +108,7 @@ export function personPose(D, anim, t) {
   const p = basePose();
   const ph = t * TAU, s = Math.sin(ph), c = Math.cos(ph);
   const knight = kind === 'knight';
-  if (kind === 'hero' && anim !== 'ko' && anim !== 'dead' && anim !== 'crushed' && anim !== 'hurt') return heroPose(D, anim, t);
+  if (kind === 'hero' && anim !== 'ko' && anim !== 'dead' && anim !== 'crushed' && anim !== 'hurt' && anim !== 'held') return heroPose(D, anim, t);
   const guard = () => { p.hR = [3.8, 3, 9.5]; p.hL = [-3.4, 3.4, 11]; };
   if (anim === 'idle') {
     p.bob = s * 0.25;
@@ -152,6 +153,15 @@ export function personPose(D, anim, t) {
       { t: 0.75, p: { hR: [2, 6, 10], hL: [-4, 1.5, 10], sword: [0.2, 0.8, -0.55], twist: 0.3, lean: 1.4, fL: [-1.9, 2.5, 0], fR: [1.9, -2, 0] } },
       { t: 1, p: g },
     ], t);
+  } else if (anim === 'held') {
+    // soulevé : il pédale dans le vide, bras qui battent, buste qui se tord pour se dégager
+    p.fL = [-2.1, s * 2.6, 2.2 + Math.max(0, c) * 2.6];
+    p.fR = [2.1, -s * 2.6, 2.2 + Math.max(0, -c) * 2.6];
+    p.hL = [-5.2 - c * 0.9, 1 + s * 1.6, 17 + s * 3];
+    p.hR = [5.2 + c * 0.9, 1 - s * 1.6, 17 - s * 3];
+    p.twist = s * 0.18; p.lean = -0.8; p.bob = 0.6 + Math.abs(c) * 0.4;
+    p.hem = s;
+    if (knight) p.sword = [0.5 + c * 0.3, 0.3, 0.8];
   } else if (anim === 'hurt') {
     p.lean = -1.6; p.bob = -0.4;
     p.hR = [5, -0.5, 14]; p.hL = [-4.6, 1, 13];

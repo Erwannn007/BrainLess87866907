@@ -1,7 +1,7 @@
 // BRAINLESS (le Nomu de l'USJ, saison 1) : modèle squelettique + animations.
 // Chaque frame est calculée à partir d'une pose puis rendue en pixel art.
 // Debout quand il marche, à quatre pattes quand il sprinte.
-import { renderModel, ramp, rotZ, add, ik, hash } from './raster.js';
+import { renderModel, ramp, rotZ, add, ik, hash, SIN_A, COS_A } from './raster.js';
 
 const SKIN = ramp('#090a20', '#151848', '#22276b', '#343b8e');
 const BRAIN = ramp('#5e2716', '#9a4a2c', '#c97249', '#e9a173');
@@ -50,6 +50,14 @@ export const ANIMS = {
   sniff: { frames: 12, fps: 8, loop: false }, // tête levée, il renifle l'air
   eat: { frames: 12, fps: 6, loop: false }, // penché sur sa proie, il dévore
   hurt: { frames: 6, fps: 12, loop: false }, // un gros coup : il encaisse et recule
+  // attraper et lancer : ce qu'il tient suit le point entre ses mains (`holdPoint`)
+  grab: { frames: 8, fps: 16, loop: false }, // il fond dessus, empoigne et soulève au-dessus de sa tête
+  carry: { frames: 4, fps: 5, loop: true }, // immobile, la charge à bout de bras au-dessus de la tête
+  carryWalk: { frames: 8, fps: 10, loop: true }, // marche lourde sous la charge (cycle piloté par la vitesse)
+  carryJump: { frames: 5, fps: 1, loop: false }, // saut chargé, piloté par la hauteur
+  throwAim: { frames: 4, fps: 10, loop: true }, // la charge tirée derrière la tête, il vise
+  throw: { frames: 8, fps: 18, loop: false }, // lancer à deux mains par-dessus la tête
+  heave: { frames: 10, fps: 15, loop: false }, // il soulève encore plus haut et fracasse la charge au sol
 };
 
 const smooth = (u) => u * u * (3 - 2 * u);
@@ -294,6 +302,92 @@ export function poseFor(anim, t) {
     p.twist = -0.12 + j * 0.04;
     return p;
   }
+  if (anim === 'carry' || anim === 'carryWalk') {
+    // La charge à bout de bras au-dessus de la tête, coudes ouverts, jambes écartées. En marchant,
+    // les pas sont courts et lourds : le corps s'écrase à chaque appui et les bras encaissent
+    // un peu plus tard (la charge a de l'inertie).
+    const ph = t * TAU, s = Math.sin(ph), c = Math.cos(ph);
+    const p = basePose();
+    if (anim === 'carry') {
+      p.fL = [-5.2, 0.5, 0]; p.fR = [5.2, -0.5, 0];
+      p.breathe = s; p.bob = s * 0.4 - 0.3;
+      p.hL = [-5.8, 3, 56 + s * 0.7]; p.hR = [5.8, 3, 56 + s * 0.7];
+      p.nod = Math.sin(ph + 1) * 0.3;
+    } else {
+      const press = 1 - Math.abs(s); // 1 quand un pied se pose
+      const lag = 1 - Math.abs(Math.sin(ph - 0.6));
+      p.fL = [-5, s * 4, Math.max(0, c) * 2.2];
+      p.fR = [5, -s * 4, Math.max(0, -c) * 2.2];
+      p.bob = 0.3 - press * 1.4;
+      p.hL = [-5.8 - s * 0.6, 3, 56 - lag * 1.6];
+      p.hR = [5.8 - s * 0.6, 3, 56 - lag * 1.6];
+      p.twist = s * 0.07;
+      p.hipTwist = -s * 0.1;
+      p.nod = -lag * 0.5;
+      p.breathe = press * 0.6;
+    }
+    p.crouch = 1.8;
+    p.lean = 0.6;
+    p.pitch = -0.06; // reins cambrés sous le poids
+    p.headUp = 0.6;
+    p.jaw = 0.35;
+    p.curl = 0.7;
+    return p;
+  }
+  if (anim === 'carryJump') {
+    // comme le saut, mais la charge reste au-dessus de la tête (elle pèse à la réception)
+    const H = (z) => ({ hL: [-5.8, 3, z], hR: [5.8, 3, z] });
+    return keyed([
+      { t: 0, p: { crouch: 4.5, lean: 1, pitch: -0.06, ...H(53), jaw: 0.6 } },
+      { t: 0.25, p: { lean: 0.5, pitch: -0.06, fL: [-4.5, -3, 2], fR: [4.5, -5, 3], ...H(58), jaw: 1 } },
+      { t: 0.55, p: { crouch: 2.5, lean: 1, pitch: -0.06, fL: [-4.5, 4, 7], fR: [4.5, 2, 6], ...H(57), jaw: 1 } },
+      { t: 0.85, p: { lean: 1, pitch: -0.06, fL: [-5, 3, 1], fR: [5, -2, 1], ...H(56) } },
+      { t: 1, p: { crouch: 5, lean: 1.5, pitch: -0.06, ...H(52), jaw: 1.2 } },
+    ], t);
+  }
+  if (anim === 'grab') {
+    // Il fond sur sa prise : buste plongé, bras tendus, griffes ouvertes ; il l'empoigne (t = 0.4),
+    // s'arc-boute, puis la hisse d'un coup de reins jusqu'au-dessus de sa tête.
+    // Mains au sol (absMix 1) pendant la prise, relatives au buste (absMix 0) une fois soulevée.
+    return keyed([
+      { t: 0, p: {} },
+      { t: 0.2, p: { absMix: 1, hL: [-7.5, 15, 11], hR: [7.5, 15, 11], crouch: 6, pitch: 0.5, lean: 3, fL: [-5, 5, 0], fR: [5, -3, 0], jaw: 1.3, headUp: 1.5, curl: 0 } },
+      { t: 0.4, p: { absMix: 1, hL: [-5, 14, 8], hR: [5, 14, 8], crouch: 7.5, pitch: 0.6, lean: 3.5, fL: [-5, 5, 0], fR: [5, -3, 0], jaw: 0.5, headUp: 0.5, curl: 1.4 } },
+      { t: 0.68, p: { hL: [-6.5, 7, 38], hR: [6.5, 7, 38], crouch: 3, pitch: 0.05, lean: 1, lift: 1, jaw: 1.4, swell: 0.05, fL: [-5, 2, 0], fR: [5, -2, 0], curl: 1 } },
+      { t: 1, p: { hL: [-5.8, 3, 56], hR: [5.8, 3, 56], crouch: 1.8, lean: 0.6, pitch: -0.06, headUp: 0.6, jaw: 0.35, curl: 0.7, fL: [-5.2, 0.5, 0], fR: [5.2, -0.5, 0] } },
+    ], t);
+  }
+  if (anim === 'throwAim' || anim === 'throw') {
+    // Lancer à deux mains par-dessus la tête : la charge tirée loin derrière la nuque, reins cambrés,
+    // pied avant planté ; puis tout le corps fouette vers l'avant et la lâche (t = 0.4).
+    const aim = { hL: [-5.5, -8, 49], hR: [5.5, -8, 49], fL: [-5, 6, 0], fR: [5, -5, 0], crouch: 3, lean: -1.5, pitch: -0.28, headUp: 1.5, jaw: 0.8, swell: 0.05, curl: 0.7 };
+    if (anim === 'throwAim') {
+      const s = Math.sin(t * TAU), j = Math.sin(t * TAU * 3);
+      const p = Object.assign(basePose(), aim);
+      p.hL = [-5.5, -8 + j * 0.4, 49 + s * 0.5]; p.hR = [5.5, -8 - j * 0.4, 49 + s * 0.5];
+      p.swell = 0.05 + s * 0.04; p.breathe = s * 1.2; p.jaw = 0.8 + s * 0.3;
+      return p;
+    }
+    return keyed([
+      { t: 0, p: { hL: [-5.8, 3, 56], hR: [5.8, 3, 56], crouch: 1.8, lean: 0.6, pitch: -0.06, fL: [-5.2, 0.5, 0], fR: [5.2, -0.5, 0], curl: 0.7 } },
+      { t: 0.22, p: aim },
+      { t: 0.4, p: { hL: [-5, 18, 37], hR: [5, 18, 37], fL: [-5, 8, 0], fR: [5, -6, 2], crouch: 2, lean: 5, pitch: 0.35, headUp: 1, jaw: 1.4, swell: 0.08, curl: 0 } },
+      { t: 0.65, p: { hL: [-7, 15, 16], hR: [7, 15, 16], fL: [-5, 8, 0], fR: [5, -5, 3], crouch: 4, lean: 6, pitch: 0.5, jaw: 1, curl: 0.4 } },
+      { t: 1, p: {} },
+    ], t);
+  }
+  if (anim === 'heave') {
+    // Il hisse la charge encore plus haut, sur la pointe des pieds, puis l'abat de tout son poids
+    // juste devant lui (t = 0.45) et reste un instant plié, bras au sol.
+    const smash = { absMix: 1, hL: [-5.5, 15, 4], hR: [5.5, 15, 4], crouch: 8, pitch: 0.85, lean: 4, jaw: 1.4, fL: [-6, 3, 0], fR: [6, -3, 0], curl: 1 };
+    return keyed([
+      { t: 0, p: { hL: [-5.8, 3, 56], hR: [5.8, 3, 56], crouch: 1.8, lean: 0.6, pitch: -0.06, fL: [-5.2, 0.5, 0], fR: [5.2, -0.5, 0], curl: 0.7 } },
+      { t: 0.28, p: { hL: [-5, -2, 58], hR: [5, -2, 58], lift: 3, lean: -1.5, pitch: -0.2, swell: 0.08, jaw: 1.4, fL: [-5, 1, 1], fR: [5, -1, 1], headUp: 2 } },
+      { t: 0.45, p: smash },
+      { t: 0.72, p: { ...smash, jaw: 0.7, swell: 0 } },
+      { t: 1, p: {} },
+    ], t);
+  }
   if (anim === 'hurt') {
     // projeté en arrière : buste rejeté, bras qui battent, il se rattrape
     return keyed([
@@ -468,8 +562,8 @@ const slash = (off) => (p) => {
   return p.shade;
 };
 
-export function nomuParts(P) {
-  const tw = P.twist;
+// Repères du corps pour une pose : haut du corps, bassin, bascule du buste.
+function skeleton(P) {
   const ub = [0, P.lean * 0.6, P.bob + P.lift - P.crouch * 0.8];
   const hip = [0, P.lean * 0.15, 20 - P.crouch + P.bob + P.lift];
   // Bascule du buste vers l'avant autour du bassin (galop à quatre pattes).
@@ -478,7 +572,15 @@ export function nomuParts(P) {
     const rf = p[1] - hip[1], rz = p[2] - hip[2];
     return [p[0], hip[1] + rf * cp + rz * sp, hip[2] - rf * sp + rz * cp];
   };
-  const U = (p) => pitch(add(rotZ(p, tw), ub)); // point du haut du corps
+  const U = (p) => pitch(add(rotZ(p, P.twist), ub)); // point du haut du corps
+  // position réelle d'une main (au sol, relative au buste, ou entre les deux)
+  const handAt = (h) => (P.handsAbs ? h : P.absMix ? lerpV(pitch(add(h, ub)), h, P.absMix) : pitch(add(h, ub)));
+  return { ub, hip, pitch, U, handAt };
+}
+
+export function nomuParts(P) {
+  const tw = P.twist;
+  const { ub, hip, pitch, U, handAt } = skeleton(P);
   const parts = [];
 
   // --- jambes : pantalon beige aux genoux, bandes-crânes grises sur les tibias, grands pieds ---
@@ -527,7 +629,7 @@ export function nomuParts(P) {
   // --- bras très longs, grandes mains à doigts griffus ---
   for (const side of [-1, 1]) {
     const h = side < 0 ? P.hL : P.hR;
-    const hand = P.handsAbs ? h : P.absMix ? lerpV(pitch(add(h, ub)), h, P.absMix) : pitch(add(h, ub));
+    const hand = handAt(h);
     const g = side < 0 ? 6 : 7;
     const sh = U([side * 8.2, -1, 34.5 + P.breathe * 0.4]);
     const ed = P.elbowDown;
@@ -591,6 +693,18 @@ export function nomuParts(P) {
 export function dirFacing(k) {
   const a = k * Math.PI / 4;
   return [Math.cos(a), Math.sin(a)];
+}
+
+// Point entre les deux mains, à l'écran, par rapport à l'origine du sprite : c'est là qu'on dessine
+// ce qu'il porte. `z` = hauteur des mains dans le modèle, `depth` > 0 = devant son corps.
+export function holdPoint(anim, t, dir) {
+  const P = poseFor(anim, t);
+  const { handAt } = skeleton(P);
+  const m = lerpV(handAt(P.hL), handAt(P.hR), 0.5);
+  const [fx, ft] = dirFacing(dir), s = SCALE * (1 + P.swell);
+  const mx = m[0] * s, mf = (m[1] + 3) * s, mz = m[2] * s; // +3 : au creux des doigts, pas au poignet
+  const cx = mx * -ft + mf * fx, ct = mx * fx + mf * ft;
+  return { x: cx, y: -mz * COS_A + ct * SIN_A, z: m[2], depth: ct };
 }
 
 export function renderNomu(anim, t, dir, extra = {}) {

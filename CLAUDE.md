@@ -61,8 +61,9 @@ du même jeu.
   (Brainless, habitants, animaux, bâtiments, objets, fissures, sang) est rogné au plus près de son
   dessin puis rangé dans une planche de 2048x2048. On le dessine avec `draw(sprite, x, y)` (coin
   haut-gauche = position du point d'ancrage moins `sprite.ox/oy`), jamais avec `ctx.drawImage`
-  directement. Tout tient aujourd'hui dans une seule planche (~17 Mo). Les tuiles, l'eau, les
-  ombres et les boutons restent de petits canvas à part.
+  directement. Tout tient aujourd'hui dans deux planches (~33 Mo). Les tuiles, l'eau, les
+  ombres et les boutons restent de petits canvas à part. `drawCentered` / `drawTurned` dessinent un
+  sprite tourné d'un quart de tour (rotation exacte, les pixels restent nets).
 - Les cadres de cuisson sont larges exprès (le rognage les rend gratuits) : un membre ne doit
   jamais toucher le bord du cadre, sinon il est coupé net. Vérifier avec un scan de toutes les
   frames avant d'ajouter un modèle.
@@ -113,6 +114,13 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
     pas `player.phase` partagé : changer d'allure ne fait pas sauter les jambes). Il ralentit sur
     quelques pas quand on lâche. Sprint à quatre pattes, avec transitions `drop` (il plonge sur les
     mains) et `rise` (il se redresse en courant). Clavier : C maintenu = marcher.
+  - **Attraper et lancer** (bouton PRENDRE) : `grab` (il fond dessus, empoigne à t = 0.4, hisse
+    au-dessus de sa tête), `carry` / `carryWalk` (marche lourde, plus lente selon le poids, pas de
+    galop) / `carryJump`, `throwAim` (charge tirée derrière la nuque, il vise au stick et dose la
+    force, trajectoire en pointillés et point de chute au sol), `throw` (lancer à deux mains, lâché à
+    t = 0.4), `heave` (COUP en portant : il fracasse sa charge au sol devant lui). Ce qu'il porte est
+    dessiné au point entre ses mains, `holdPoint(anim, t, dir)` (précalculé dans `holdPts`) ; un arbre
+    ou un habitant qui se débat passe en travers au-dessus de sa tête.
 
 ## 5. Le décor (`js/sprites.js`, `js/world.js`)
 
@@ -149,7 +157,7 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
 - Toute nouvelle matière de tuile doit fournir : dessus (4 tons), flanc (rampe dédiée),
   grain par `hash`.
 - Les objets ont des infos de gameplay dans `OBJ_INFO` (`solid`, `tall`, `hp`, `tree`, `rock`,
-  `leafy`, `small`…). Chaque nouvel objet y a sa ligne, et sa génération dans `genCell`.
+  `leafy`, `small`, `lift` = Brainless peut l'arracher et le lancer, avec son poids de 1 à 3…). Chaque nouvel objet y a sa ligne, et sa génération dans `genCell`.
 - `tall` = hauteur de l'obstacle en pixels (un peu sous le haut du sprite ; bâtiments : dans
   `BUILDINGS`). En l'air, on passe par-dessus quand les pieds sont plus hauts (`obstacleAt`) :
   saut normal ≈ 23 (rochers, clôtures, tonneaux), super saut BOND ≈ 60 (arbres, remparts,
@@ -244,6 +252,14 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
   (`LEVEL_AT`) donnent +15 de vie max et +12 % de force. Alters (`ALTERS`) : ABSORPTION (dégâts / 2),
   BOND (saut x1.6 + onde de choc), MOTEUR (sprint x1.35, endurance), FER (coups x1.5), FOUDRE
   (éclairs en chaîne sur les coups chargés, il se soigne avec la foudre de l'orage).
+- **Attraper, porter, lancer** (`grabTarget`, `seize`, `releaseHeld`, `flight`) : arbres (déracinés,
+  le tronc reste là où ils retombent), rochers (ils se fendent), tonneaux, caisses, foin, lanternes,
+  habitants, animaux, cadavres. Un habitant porté gigote (anim `held`) et crie ; un chevalier se
+  dégage au bout de 3,5 s, un héros en forme en 1,3 s (coup de pied, recul). Il lâche tout s'il
+  encaisse un gros coup, nage ou s'effondre. En vol (gravité `THROW_G`), un projectile fauche ceux
+  qu'il croise et percute arbres, rochers, murs et maisons (`hitObstacleAt`, dégâts `throwDmg` selon
+  poids et force) ; léger, il éclate au premier choc ; lourd (≥ 2.5), il traverse la foule et écrase
+  ceux sur qui il retombe. Lancé fort, un habitant meurt en retombant ; à l'eau, il coule.
 - **Flair** (N / R / L1) : il lève la tête et renifle (`sniff`), puis une flèche, la distance et
   des filets d'odeur rouges indiquent pendant 12 s le village le plus proche qui a encore des
   vivants (`nearestPrey`).
@@ -293,7 +309,10 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
   `pad` (manette, `js/pad.js`, ex. AYN Thor). Les boutons tactiles ne s'affichent qu'en `touch` ;
   l'aide (`HINTS`) s'adapte au mode. Toute nouvelle action doit être jouable dans les 3 modes.
 - Bouton N (rose) : FLAIR, ou DÉVORER près d'un cadavre (R au clavier, L1 à la manette).
-  Icône maison en haut à droite (Échap, Start) : retour à l'accueil.
+  Bouton P (bleu-vert `[60,165,190]`) : PRENDRE, puis LANCER (maintenir = viser) ; le libellé de
+  COUP devient ÉCRASER quand il porte (L / G / clic molette au clavier, R1 à la manette).
+  Icône maison en haut à droite (Échap, Start) : retour à l'accueil. Icône note à côté (N au
+  clavier, et sur l'accueil) : musique du jeu / ma musique / aucune.
 - **Écran d'accueil** (`js/menu.js`, en HTML pour le clavier de l'iPhone) : titre, liste des
   mondes, création d'un monde (nom, graine, 7 paramètres à 3 crans : villages, héros, faune,
   météo, relief, eau, difficulté). Le monde défile en fond. Utilisable au doigt, au clavier et à
@@ -307,6 +326,12 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
   `square`).
 - Chaque nouvelle action visible a son son. On utilise `gate()` pour éviter les doublons quand
   beaucoup de choses cassent en même temps.
+- **Musique** (`updateMusic`) : générée en direct en ré dorien, nappes et basse sur rém / si♭ / fa / do,
+  mélodie pentatonique au hasard dans un écho ; plus sombre et rare la nuit ; tambours, basse
+  martelée et tempo plus rapide selon `dangerLevel()` (chevaliers, héros, cloche).
+- **Ma musique** (`cycleMusic`, sauvé dans `localStorage`) : en mode `mine`, la session audio iOS
+  passe en `ambient` (le jeu se mélange à Spotify au lieu de le couper, et se tait avec le bouton
+  silencieux) et la musique du jeu se coupe ; sinon `playback`.
 
 ## 12. Comment ajouter un nouveau sprite (méthode)
 

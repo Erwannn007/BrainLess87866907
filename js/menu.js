@@ -5,10 +5,13 @@
 import { VERSION } from './version.js';
 import { listWorlds, createWorld, deleteWorld, seedFrom, PARAMS, DEFAULTS } from './saves.js';
 
-let root, onPlay, screen = 'title', selected = null, draft = null, focusIdx = 0;
+let root, onPlay, music, screen = 'title', selected = null, draft = null, focusIdx = 0;
+const MUSIC_LABEL = { game: 'DU JEU', mine: 'LA MIENNE', off: 'AUCUNE' };
+const MUSIC_NOTE = { game: '', mine: 'LANCE TA MUSIQUE (SPOTIFY...) : LE JEU NE LA COUPE PLUS. LE BOUTON SILENCIEUX COUPE LE JEU.', off: '' };
 
 export function initMenu(opts) {
   onPlay = opts.onPlay;
+  music = opts.music; // { get, cycle } : musique du jeu / la mienne / aucune
   root = document.getElementById('menu');
   root.addEventListener('click', onClick);
   root.addEventListener('input', (e) => {
@@ -43,6 +46,8 @@ function go(s) {
   if (s === 'title') {
     html = `<div class="m-title"><h1>BRAINLESS</h1><p>LE NOMU EN LIBERTE</p>
       <button class="btn red" data-nav data-act="play">JOUER</button>
+      <button class="btn grey m-music" data-nav data-act="music">MUSIQUE : ${MUSIC_LABEL[music.get()]}</button>
+      <small class="m-music-note">${MUSIC_NOTE[music.get()]}</small>
       <small class="m-version">VERSION ${VERSION}</small></div>`;
   } else if (s === 'worlds') {
     html = `<div class="m-panel"><h2>MES MONDES</h2><div class="m-list">` +
@@ -89,6 +94,11 @@ function focus(i) {
 
 function act(a, el) {
   if (a === 'play') go(listWorlds().length ? 'worlds' : 'create');
+  else if (a === 'music') {
+    const m = music.cycle();
+    el.textContent = 'MUSIQUE : ' + MUSIC_LABEL[m];
+    root.querySelector('.m-music-note').textContent = MUSIC_NOTE[m];
+  }
   else if (a === 'pick') { selected = el.dataset.id; root.querySelectorAll('.world').forEach((w) => w.classList.toggle('sel', w === el)); }
   else if (a === 'start') { const w = listWorlds().find((x) => x.id === selected); if (w) onPlay(w); }
   else if (a === 'new') { draft = null; go('create'); }
