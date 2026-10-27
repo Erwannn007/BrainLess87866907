@@ -84,6 +84,7 @@ function basePose() {
     hL: [-11, 2.5, 16], hR: [11, 2.5, 16],
     bob: 0, lean: 0, twist: 0, crouch: 0, lift: 0, breathe: 0, jaw: 0, nod: 0,
     pitch: 0, headUp: 0, handsAbs: 0, elbowDown: 0, swell: 0, curl: 0, hipTwist: 0,
+    tilt: 0, // la tête bascule en arrière (radians) : le bec se lève vers le ciel
     absMix: 0, // transitions debout <-> quatre pattes : mains relatives (0) -> au sol (1) en continu
   };
 }
@@ -494,10 +495,15 @@ export function poseFor(anim, t) {
     return p;
   }
   if (anim === 'sniff') {
-    // Il se redresse, lève le bec au ciel et renifle par petits coups.
-    const up = { lean: -2.2, pitch: -0.3, headUp: 7.5, jaw: 0.35, hL: [-10, 0, 13], hR: [10, 0, 13], crouch: 1, breathe: 1 };
+    // Il se redresse, bascule la tête en arrière, le bec pointé vers le ciel, et renifle l'air par
+    // petits coups secs (le bec monte et descend un peu, la gueule s'entrouvre à chaque bouffée).
+    const up = { lean: -2.6, pitch: -0.32, headUp: 4, tilt: 1.45, jaw: 0.25, hL: [-10, 0, 13], hR: [10, 0, 13], crouch: 1, breathe: 1 };
     const p = keyed([{ t: 0, p: {} }, { t: 0.22, p: up }, { t: 0.85, p: up }, { t: 1, p: {} }], t);
-    if (t > 0.22 && t < 0.85) { p.nod = Math.sin(t * Math.PI * 2 * 7) * 1.1; p.breathe = 1 + Math.sin(t * Math.PI * 2 * 3.5); }
+    if (t > 0.22 && t < 0.85) {
+      const sn = Math.sin(t * Math.PI * 2 * 7);
+      p.tilt += sn * 0.13; p.jaw += Math.max(0, sn) * 0.45;
+      p.breathe = 1 + Math.sin(t * Math.PI * 2 * 3.5);
+    }
     return p;
   }
   if (anim === 'down') {
@@ -773,7 +779,9 @@ export function nomuParts(P, M = {}) {
   // --- tête enfoncée entre les épaules : gros cerveau, petits yeux, bec doré en V ---
   // à quatre pattes, la tête sort devant les épaules au lieu de rester enfoncée
   const head = add(U([0, 4 + P.pitch * 6, 38.5 + P.nod * 0.4]), [0, P.lean * 0.35, P.headUp + P.pitch * 3]);
-  const H = (p) => add(head, rotZ(p, tw));
+  // un point de la tête : basculé en arrière (`tilt`, autour de l'axe des épaules), puis tourné avec le buste
+  const ct = Math.cos(P.tilt || 0), st = Math.sin(P.tilt || 0);
+  const H = (p) => add(head, rotZ([p[0], p[1] * ct - p[2] * st, p[1] * st + p[2] * ct], tw));
   const jaw = P.jaw + (M.jaw ? 0.4 : 0), bk = M.jaw ? 1.75 : 1; // mâchoire béante : bec plus long, toujours entrouvert
   parts.push({ a: head, r1: 3.9, ramp: SK, group: 2 });
   // intérieur sombre du bec, qui s'ouvre avec la mâchoire

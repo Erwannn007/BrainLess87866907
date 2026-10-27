@@ -94,9 +94,11 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
 - Sprite : 88×88, origine (44, 70), `SCALE = 0.75`, environ 40 px de haut debout.
 - Une animation = une fonction `poseFor(anim, t)` qui renvoie une pose. On l'écrit soit avec des
   sinus (cycles : marche, galop, nage), soit avec `keyed([{t, p}])` (actions : coups, frappe au
-  sol, saut). Paramètres d'une pose : `fL fR` (pieds), `hL hR` (mains), `bob lean twist hipTwist
+  sol, saut). Paramètres d’une pose : `fL fR` (pieds), `hL hR` (mains), `bob lean twist hipTwist
   crouch lift breathe jaw nod pitch headUp handsAbs elbowDown swell curl`.
   - `pitch` bascule le buste vers l'avant (≈ 1.1–1.3 : quatre pattes, négatif : se cabre).
+  - `tilt` bascule la tête en arrière autour de la nuque (bec, yeux, cerveau ensemble) : ≈ 1.45 = bec
+    pointé vers le ciel (flair `sniff`, qui renifle par petits coups de bec).
   - `handsAbs: 1` = mains en coordonnées absolues (au sol), sinon relatives au haut du corps.
   - `swell` gonfle tout le corps (charge).
 - Chaque animation est déclarée dans `ANIMS` (`frames`, `fps`) et cuite automatiquement dans
