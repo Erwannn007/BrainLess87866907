@@ -36,9 +36,9 @@ const BLOOD = ramp('#3e060c', '#6e0e18', '#a01824', '#d02c36');
 // Les habitants. `voice` = hauteur du cri (Hz).
 export const PEOPLE = {
   farmer: { kind: 'civ', skin: SKIN_A, hair: HAIR_BROWN, top: GREEN, legs: BROWN, hat: 'straw', voice: 230 },
-  woman: { kind: 'civ', skin: SKIN_A, hair: HAIR_BLOND, top: RED, legs: BROWN, dress: RED, apron: CREAM, scarf: CREAM, scale: 0.95, voice: 430 },
+  woman: { kind: 'civ', skin: SKIN_A, hair: HAIR_BLOND, top: CREAM, legs: BROWN, dress: RED, apron: CREAM, scarf: RED, scale: 0.95, voice: 430 },
   child: { kind: 'civ', skin: SKIN_A, hair: HAIR_RED, top: BLUE, legs: BROWN, scale: 0.68, head: 3.7, voice: 640 },
-  elder: { kind: 'civ', skin: SKIN_B, hair: HAIR_GREY, top: PURPLE, legs: PURPLE, dress: PURPLE, beard: HAIR_GREY, cane: true, scale: 0.94, bent: 1.6, voice: 180 },
+  elder: { kind: 'civ', skin: SKIN_B, hair: HAIR_GREY, top: BROWN, legs: PURPLE, dress: PURPLE, beard: HAIR_GREY, cane: true, scale: 0.94, bent: 1.6, voice: 180 },
   merchant: { kind: 'civ', skin: SKIN_B, hair: HAIR_BROWN, top: TEAL, legs: BROWN, apron: CREAM, beret: RED, beard: HAIR_BROWN, voice: 290 },
   knight: { kind: 'knight', skin: SKIN_A, hair: HAIR_BROWN, top: BLUE, legs: STEEL, scale: 1.05, voice: 200 },
   // Héros : chacun a un alter, que Brainless récupère en le dévorant.
@@ -121,6 +121,12 @@ export function personPose(D, anim, t) {
     p.bob = (1 - Math.abs(s)) * (run ? 1 : 0.6) - 0.3;
     p.twist = s * 0.12;
     p.lean = run ? 1.6 : 0.4;
+    p.hem = s; // la robe suit la jambe qui avance
+    if (D.dress && anim === 'walk') {
+      // en robe : mains bien dehors (sinon le cône les avale), pas plus marqué
+      p.hL = [-5, -s * 2.4, 9.4]; p.hR = [5, s * 2.4, 9.4];
+      p.bob = (1 - Math.abs(s)) * 0.9 - 0.45;
+    }
     if (anim === 'flee') {
       // il court en agitant les bras au-dessus de la tête
       p.hL = [-4.8 - c * 0.8, 1 + s, 20.5 + s * 1.5];
@@ -302,8 +308,10 @@ export function personParts(type, P) {
     for (const side of [-1, 1]) for (let i = 0; i < 3; i++) parts.push({ a: U([side * (3.2 + i * 0.6) * bk, -0.8 + i * 0.4, 18.6 + i * 0.5]), r1: 0.9, ramp: IRON, group: 2 + (side > 0 ? 1 : 0) });
   }
   if (D.dress) {
-    // robe : un cône du bassin jusqu'au sol
-    parts.push({ a: U([0, 0, 12.5]), b: [0, 0.3 + lean * 0.3, 1.6], r1: 3, r2: 4.4, ramp: D.dress, group: 1,
+    // robe : un cône du bassin jusqu'aux chevilles (les chaussures dépassent à chaque pas),
+    // l'ourlet balance avec la marche
+    const hem = P.hem || 0;
+    parts.push({ a: U([0, 0, 12.5]), b: [hem * 0.7, 0.3 + lean * 0.3 + Math.abs(hem) * 0.5, 3.4 + P.bob * 0.5], r1: 3, r2: 4, ramp: D.dress, group: 1,
       tex: (p) => (D.apron && front(p, 0.45) && Math.abs(p.ex) < p.r * 0.45 && p.t < 0.85 ? D.apron[Math.min(3, p.shade + 1)] : p.shade) });
   }
   if (knight) {

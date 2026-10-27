@@ -186,6 +186,8 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
 
 - Même moteur que Brainless (capsules + sphères, `renderModel`), environ 27 px de haut (enfant
   ~19 px), 64x62, origine (32, 50). Visage = partie avant de la tête (`dot(n, fc)`), cheveux au-dessus.
+  Robes (paysanne, ancien) : le cône s'arrête aux chevilles et son ourlet suit le pas (`hem`),
+  les mains passent dehors, et le haut est d'une autre couleur que la robe, sinon les bras s'y fondent.
 - Villageois : paysan (chapeau de paille), paysanne (robe, tablier, foulard), enfant, ancien
   (barbe, canne, dos voûté), marchand (béret, tablier). Anims : `idle walk flee wave ko dead crushed`.
 - Chevalier : armure `#353b48 #626b7c #9aa3b4 #dfe5ee`, tabard bleu à croix dorée, plumet rouge,
@@ -233,7 +235,9 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
 
 ## 8. Faune et météo
 
-- **Faune** (`js/beasts.js`) : quadrupèdes en capsules, 56x56, origine (28, 44). Lapin (fuit en
+- **Faune** (`js/beasts.js`) : quadrupèdes en capsules, 56x56, origine (28, 44). Vus pile de face ou de
+  dos (directions 2 et 6), on les tourne de ~25° (`beastFacing`) : sinon un quadrupède n'est
+  qu'un trait de 4 px. Pattes écartées, oreilles assez grandes pour dépasser de la tête. Lapin (fuit en
   zigzag), cerf (bois, fuit vite), sanglier (défenses, charge si on l'approche ou le frappe), loup
   (meute de 3, chasse la nuit, fuit blessé). Ils apparaissent hors écran selon le biome et
   repartent quand Brainless s'éloigne ; quantité réglée par le paramètre FAUNE.
@@ -304,6 +308,7 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
    - `node tools/preview.mjs people /tmp/x.png` (habitants à côté de Brainless)
    - `node tools/preview.mjs people-sheet /tmp/x.png knight attack` (une anim x 8 directions)
    - `node tools/preview.mjs beasts /tmp/x.png` (la faune)
+   - `node tools/preview.mjs beast-sheet /tmp/x.png wolf` (une espèce x 8 directions)
 
    Puis ouvrir le PNG avec Read et comparer aux planches `docs/ref-*.png`.
 5. Brancher le gameplay (`OBJ_INFO`, génération, sons, particules) et tester en jeu.

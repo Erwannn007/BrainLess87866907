@@ -6,6 +6,7 @@
 //   node tools/preview.mjs people out.png                                  villageois et chevalier (poses clés) à côté de Brainless
 //   node tools/preview.mjs people-sheet out.png knight attack              une anim d'un habitant x 8 directions
 //   node tools/preview.mjs beasts out.png                                  la faune (poses clés)
+//   node tools/preview.mjs beast-sheet out.png wolf                        une espèce (repos, marche, course, attaque) x 8 directions
 //   node tools/preview.mjs village out.png                                 bâtiments (3 états), objets de village, tuiles, fissures
 //
 // Variable K = facteur d'agrandissement (défaut 6). Ouvrir le PNG pour juger le rendu.
@@ -87,6 +88,15 @@ if (mode === 'beasts') {
   const types = Object.keys(BEASTS), W = BEAST_W * cols.length * k, H = BEAST_H * types.length * k;
   const img = canvas(W, H);
   types.forEach((t, r) => cols.forEach(([a, tt, d], c) => blit(img, W, renderBeast(t, a, tt, d), c * BEAST_W * k, r * BEAST_H * k, k)));
+  writeFileSync(out, encodePNG(W, H, img));
+}
+if (mode === 'beast-sheet') {
+  // une espèce : idle, marche et course x 8 directions
+  const type = arg || 'wolf', k = Math.min(K, 4);
+  const cols = [['idle', 0], ['walk', 0.25], ['run', 0.2], ['run', 0.6], ['attack', 0.5]];
+  const W = BEAST_W * cols.length * k, H = BEAST_H * 8 * k;
+  const img = canvas(W, H);
+  for (let d = 0; d < 8; d++) cols.forEach(([a, t], c) => blit(img, W, renderBeast(type, a, t, d), c * BEAST_W * k, d * BEAST_H * k, k));
   writeFileSync(out, encodePNG(W, H, img));
 }
 if (mode === 'village') {

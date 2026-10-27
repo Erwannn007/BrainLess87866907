@@ -45,7 +45,9 @@ function pose(type, anim, t) {
   const k = Math.min(1, BEASTS[type].legLen / 7);
   const p = { legs: [[0, 0], [0, 0], [0, 0], [0, 0]], headDown: 0, bob: 0, lunge: 0, dead: anim === 'dead' || anim === 'crushed' };
   // ordre des pattes : avant gauche, avant droite, arrière gauche, arrière droite
-  if (anim === 'idle') { p.headDown = type === 'wolf' ? 0 : 0.6 + 0.4 * Math.max(0, s); p.bob = s * 0.15; } // le loup ne broute pas
+  if (anim === 'idle') { // le loup ne broute pas, le lapin garde la tête haute (oreilles visibles)
+    p.headDown = type === 'wolf' ? 0 : type === 'rabbit' ? 0.25 * Math.max(0, s) : 0.6 + 0.4 * Math.max(0, s); p.bob = s * 0.15;
+  }
   else if (anim === 'walk') {
     const leg = (o) => [Math.sin(ph + o) * 1.6 * k, Math.max(0, Math.cos(ph + o)) * k];
     p.legs = [leg(0), leg(Math.PI), leg(Math.PI), leg(0)];
@@ -71,7 +73,8 @@ export function beastParts(type, P) {
   const belly = (p) => (p.ny > 0.55 && type !== 'boar' && type !== 'rabbit' ? WHITE[Math.min(3, p.shade + 1)] : ridge ? ridge(p) : p.shade);
   parts.push({ a: rear, b: front, r1: B.rr, r2: B.br, ramp: R, group: 1, tex: belly });
   // pattes : épaule/hanche -> pied, genou en cinématique inverse
-  const joints = [[-B.br * 0.55, L / 2 - 0.6], [B.br * 0.55, L / 2 - 0.6], [-B.rr * 0.55, -L / 2 + 0.6], [B.rr * 0.55, -L / 2 + 0.6]];
+  // pattes bien écartées : vu de face ou de dos, l'animal doit garder une silhouette de quadrupède
+  const joints = [[-B.br * 0.75, L / 2 - 0.6], [B.br * 0.75, L / 2 - 0.6], [-B.rr * 0.75, -L / 2 + 0.6], [B.rr * 0.75, -L / 2 + 0.6]];
   joints.forEach(([x, f], i) => {
     const [df, lift] = P.legs[i];
     const top = [x, f + f0, H - 1];
@@ -93,8 +96,9 @@ export function beastParts(type, P) {
   // oreilles
   for (const sd of [-1, 1]) {
     const base = add(head, [sd * B.hr * 0.5, -0.3, B.hr * 0.7]);
-    if (B.ears === 'long') parts.push({ a: base, b: add(base, [sd * 0.3, -1, 2.4]), r1: 0.85, r2: 0.65, ramp: R, group: 8 });
-    else if (B.ears === 'pointy') parts.push({ a: base, b: add(base, [sd * 0.3, -0.2, 1.8]), r1: 0.7, r2: 0.2, ramp: R, group: 8 });
+    // oreilles de lapin : longues, dressées, bout sombre (sinon elles se fondent dans le dos)
+    if (B.ears === 'long') parts.push({ a: base, b: add(base, [sd * 0.6, -0.7, 3.2]), r1: 0.8, r2: 0.6, ramp: R, group: 8, tex: (p) => (p.t > 0.8 ? 0 : p.shade) });
+    else if (B.ears === 'pointy') parts.push({ a: base, b: add(base, [sd * 0.7, -0.2, 2.4]), r1: 0.9, r2: 0.25, ramp: R, group: 8 });
     else if (B.ears === 'deer') parts.push({ a: base, b: add(base, [sd * 1.6, -0.5, 0.6]), r1: 0.55, r2: 0.35, ramp: R, group: 8 });
     else parts.push({ a: base, r1: 0.7, ramp: R, group: 8 });
   }
@@ -114,7 +118,8 @@ export function beastParts(type, P) {
   else parts.push({ a: tb, b: add(tb, [0, -2.8, -2.2]), r1: 1, r2: 0.6, ramp: R, group: 10, tex: (p) => (p.t > 0.75 ? WHITE[p.shade] : p.shade) });
 
   // un petit animal : pas de lignes internes entre ses parties (à cette taille, ça fait des traits parasites)
-  if (B.scale && B.L < 6) for (const part of parts) part.group = 1;
+  // (sauf les oreilles : un trait les détache de la tête, c'est ce qui fait lire « lapin »)
+  if (B.scale && B.L < 6) for (const part of parts) if (part.group !== 8) part.group = 1;
   if (P.dead) {
     // couché sur le flanc, taché de sang
     for (const part of parts) {
@@ -127,9 +132,17 @@ export function beastParts(type, P) {
   return parts;
 }
 
+// Vu pile de face ou de dos, un quadrupède n'est qu'un trait (pattes alignées, museau vers la
+// caméra) : on le tourne d'environ 25° pour garder un trois-quarts lisible.
+function beastFacing(dir) {
+  if (dir % 4 !== 2) return dirFacing(dir);
+  const a = dir * Math.PI / 4 + (dir === 2 ? 0.45 : -0.45);
+  return [Math.cos(a), Math.sin(a)];
+}
+
 export function renderBeast(type, anim, t, dir) {
   const buf = renderModel(beastParts(type, pose(type, anim, t)), {
-    w: BEAST_W, h: BEAST_H, ox: BEAST_OX, oy: BEAST_OY, facing: dirFacing(dir), scale: BEASTS[type].scale,
+    w: BEAST_W, h: BEAST_H, ox: BEAST_OX, oy: BEAST_OY, facing: beastFacing(dir), scale: BEASTS[type].scale,
   });
   if (anim !== 'crushed') return buf;
   // écrasé : aplati et éclaboussé
