@@ -185,9 +185,17 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
   bouclier, emblème), constructions. Ce qu'on casse lâche ses matériaux (`DROPS`, `RUIN_DROPS`,
   `lootOf` pour chevaliers et héros) : des objets qui sautent puis volent jusqu'à lui (`drops`).
   Repu, ce qu'il dévore en trop devient de la viande crue. Icônes 12x12 dessinées par code (`buildIcons`).
-- **Sac** (icône en haut à droite, I/Tab, croix bas) : onglets SAC (ou COFFRE), MUTATIONS (l'arbre),
-  ALTERS, FABRIQUER (`RECIPES`). Le jeu est en pause tant qu'il est ouvert (`overlayOpen`). Écrans
-  dessinés sur le canvas, zones touchables `uiHits`, navigation clavier/manette `overlayNav`.
+- **Sac** (icône en haut à droite, I/Tab, croix bas), **style Minecraft** : panneau gris 176x166 en
+  relief (`mcPanel`), cases creusées 18x18 (`mcSlot`), boutons (`mcButton`), infobulles sombres à
+  liseré violet (`drawTip`), onglets attachés au-dessus. Onglets SAC (Brainless qui tourne dans son
+  cadre, ses 3 alters équipés à gauche comme une armure, sa réserve d'alters ; ou COFFRE), MUTATIONS
+  (cases reliées comme l'écran des progrès), FABRIQUER (livre de recettes, ingrédients -> résultat).
+  Objets comme Minecraft (`slotClick`) : toucher/clic = prendre la pile, poser ailleurs = fusionner ou
+  échanger, glisser-déposer, appui long ou clic droit = la moitié (ou poser un seul), double-toucher
+  ou Maj+clic = de l'autre côté (`quickMove`), lâché hors du panneau = tombe par terre (`dropCursor`).
+  Le jeu est en pause tant qu'il est ouvert (`overlayOpen`) : l'interface a sa propre horloge `rt()`.
+  Clavier/manette : la direction vise la case voisine (`overlayNav`), X = clic droit, Maj+Entrée / Y =
+  de l'autre côté. Barre d'objets façon Minecraft (`drawHotbar`, gros cadre blanc, nom de l'objet).
 - **Constructions** (`O.WALL_WOOD … O.TORCH`, `built: true`, sprites dans `buildings.js`) : choisies
   dans la barre, un aperçu vert/rouge s'affiche sur la tuile devant lui (`placeTarget`), UTILISER les
   pose. Le bouton N devient OUVRIR (coffre, contenu dans `world.chests`, sauvé), DORMIR (nid : nuit

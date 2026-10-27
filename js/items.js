@@ -148,3 +148,43 @@ export function buildIcons() {
   for (const id in ITEMS) out[id] = icon(ICONS[id]);
   return out;
 }
+
+// ---------------------------------------------------------------- icônes des mutations et des alters
+const SKINC = ['#151848', '#22276b', '#343b8e', '#5058b0'];
+const BONEC = ['#55575e', '#8d9097', '#c4c6cb', '#eceef0'];
+const REDC = ['#4e0c18', '#9c1628', '#d22838', '#ff5a5e'];
+const BRAINC = ['#5e2716', '#9a4a2c', '#c97249', '#e9a173'];
+const MUT_ICONS = {
+  arms: (p) => { fillRect(p, 1, 6, 5, 3, SKINC[2]); disc(p, 7.5, 6.5, 3.6, SKINC); p(5, 4, REDC[2]); p(6, 4, REDC[2]); },
+  thrower: (p) => { disc(p, 8, 4, 2.8, STONEC); for (let i = 0; i < 5; i++) { p(1 + i, 9 - Math.floor(i / 2), '#ffffff'); p(i, 11 - Math.floor(i / 2), '#d8ecff'); } },
+  claws: (p) => { for (let k = 0; k < 3; k++) for (let i = 0; i < 8; i++) p(2 + k * 3 + Math.floor(i / 3), 1 + i, i < 2 ? SKINC[2] : IRONC[i < 5 ? 3 : 2]); },
+  fists: (p) => { disc(p, 6, 6.5, 4.6, SKINC); for (const x of [3, 5, 7, 9]) { p(x, 3, BONEC[3]); p(x, 4, BONEC[2]); } },
+  spikes: (p) => { fillRect(p, 1, 9, 10, 2, SKINC[2]); for (let k = 0; k < 4; k++) for (let i = 0; i < 6; i++) if (Math.abs((i % 6) - 0) >= 0) p(2 + k * 2.6 + (i > 3 ? 0 : 0), 8 - i, BONEC[i < 2 ? 1 : 3 - (i > 4 ? 1 : 0)]); },
+  legs: (p) => { fillRect(p, 4, 1, 4, 8, SKINC[2]); fillRect(p, 3, 9, 7, 2, SKINC[1]); for (const y of [3, 6]) fillRect(p, 4, y, 4, 1, REDC[2]); p(10, 10, BONEC[3]); },
+  lungs: (p) => { disc(p, 3.8, 6.5, 3, REDC); disc(p, 8.2, 6.5, 3, REDC); fillRect(p, 5.5, 1, 1, 5, BONEC[2]); },
+  jaw: (p) => { for (let i = 0; i < 5; i++) { p(2 + i, 2 + i, '#e0b23a'); p(2 + i, 10 - i, '#b0851e'); } fillRect(p, 2, 6, 3, 1, '#0a081a'); disc(p, 9, 6, 2.5, SKINC); },
+  eyes: (p) => { disc(p, 6, 6, 4.5, ['#2a0a0a', '#a8161a', '#ff3a2a', '#ffb4a4']); fillRect(p, 5, 5, 2, 2, '#0a0404'); p(7, 4, '#ffffff'); },
+  stomach: (p) => { disc(p, 6, 7, 4, ['#6e0e18', '#a01824', '#d26a6a', '#ffb0a0']); fillRect(p, 4, 1, 2, 3, '#d26a6a'); },
+  tail: (p) => { for (let i = 0; i < 9; i++) { const y = 9 - Math.round(Math.sin(i / 8 * Math.PI) * 5); p(1 + i, y, SKINC[2]); p(1 + i, y + 1, SKINC[1]); } p(10, 8, BONEC[3]); p(11, 7, BONEC[3]); p(5, 4, REDC[2]); },
+  carapace: (p) => { disc(p, 6, 7, 4.8, BONEC); for (let x = 2; x < 11; x += 3) fillRect(p, x, 4, 1, 6, BONEC[1]); fillRect(p, 2, 7, 9, 1, BONEC[1]); },
+  hams: (p) => { for (let i = 0; i < 4; i++) fillRect(p, 3, 10 - i * 2, 6, 1, IRONC[i & 1 ? 2 : 3]); for (let i = 0; i < 3; i++) { p(6, 2 - 0 + i, '#7ee08a'); } p(5, 3, '#7ee08a'); p(7, 3, '#7ee08a'); },
+  brain: (p) => { disc(p, 6, 6, 5, BRAINC); for (const [x, y] of [[4, 4], [6, 3], [8, 5], [5, 7], [7, 8], [3, 6]]) p(x, y, BRAINC[0]); },
+  fireproof: (p) => { disc(p, 6, 6.5, 4.6, ['#1e0814', '#46122a', '#701e3e', '#9a3254']); p(6, 3, '#ffd23f'); p(5, 4, '#ff9a3c'); p(6, 4, '#fff3b0'); p(7, 4, '#ff9a3c'); p(6, 5, '#ff5a2a'); },
+  grip: (p) => { disc(p, 6, 6, 4.2, SKINC); for (const x of [3, 5, 7]) fillRect(p, x, 8, 1, 3, SKINC[1]); fillRect(p, 2, 2, 8, 1, '#e0b23a'); },
+  mass: (p) => { fillRect(p, 3, 4, 6, 7, SKINC[2]); disc(p, 6, 3, 2, BRAINC); for (let i = 0; i < 3; i++) { p(10, 6 - i, '#7ee08a'); } p(9, 5, '#7ee08a'); p(11, 5, '#7ee08a'); },
+};
+const ALTER_ICONS = {
+  absorb: (p) => { disc(p, 6, 6, 5, ['#3a3010', '#b0851e', '#ffe28a', '#fff6d8']); disc(p, 6, 6, 2.6, SKINC); },
+  leap: (p) => { for (let i = 0; i < 4; i++) fillRect(p, 2, 10 - i * 2, 8, 1, '#7ee08a'); for (let i = 0; i < 3; i++) { p(6, 1 + i, '#ffffff'); } p(5, 2, '#ffffff'); p(7, 2, '#ffffff'); },
+  engine: (p) => { disc(p, 6, 6, 4.6, IRONC); disc(p, 6, 6, 1.8, ['#5a2a10', '#ff9a3c', '#ffd23f', '#fff3b0']); for (const [x, y] of [[6, 0], [0, 6], [11, 6], [6, 11]]) p(x, y, IRONC[2]); },
+  iron: (p) => { disc(p, 6, 6.5, 4.6, IRONC); for (const x of [3, 5, 7, 9]) p(x, 3, IRONC[3]); },
+  storm: (p) => { for (const [x, y] of [[7, 0], [6, 1], [5, 2], [4, 3], [5, 4], [6, 4], [7, 4], [6, 5], [5, 6], [4, 7], [3, 8], [4, 8], [3, 9], [2, 10]]) p(x, y, '#fff7a8'); p(8, 1, '#8fd8ff'); p(7, 5, '#8fd8ff'); },
+};
+
+// Icônes des mutations et des alters : { id: buffer 12x12 }.
+export function buildMutIcons() {
+  const out = {};
+  for (const id in MUT_ICONS) out['m:' + id] = icon(MUT_ICONS[id]);
+  for (const id in ALTER_ICONS) out['a:' + id] = icon(ALTER_ICONS[id]);
+  return out;
+}

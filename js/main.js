@@ -3,7 +3,7 @@ import { buildVillageSprites } from './buildings.js';
 import { renderPerson, PEOPLE, PEOPLE_ANIMS, CIVILIANS, HEROES } from './people.js';
 import { renderNomu, ANIMS, holdPoint, sizeOf } from './nomu.js';
 import { MUTATIONS, BRANCHES, draw3, looks } from './mutations.js';
-import { ITEMS, RECIPES, DROPS, STACK, buildIcons } from './items.js';
+import { ITEMS, RECIPES, DROPS, STACK, buildIcons, buildMutIcons } from './items.js';
 import { renderBeast, BEASTS, BEAST_ANIMS, BEAST_MEAL } from './beasts.js';
 import { valueNoise } from './noise.js';
 import * as SP from './sprites.js';
@@ -204,7 +204,7 @@ async function loadAssets() {
   }
   bakeHoldPts({});
   icons = {};
-  const ic = buildIcons();
+  const ic = Object.assign(buildIcons(), buildMutIcons());
   for (const id in ic) icons[id] = toCanvas(ic[id]);
   fogImg = toCanvas(fogBuffer());
   const total = jobs.length + 5;
@@ -440,7 +440,9 @@ function onTouchStart(e) {
   unlockAudio();
   setMode('touch');
   if (mode === 'play' && overlayOpen()) {
-    for (const t of e.changedTouches) overlayTap(...toGame(t));
+    // un seul doigt pilote l'écran (prendre, glisser, poser)
+    const t = e.changedTouches[0];
+    if (uiTouch === null) { uiTouch = t.identifier; overlayDown(...toGame(t)); }
     return;
   }
   for (const t of e.changedTouches) {
@@ -459,8 +461,13 @@ function onTouchStart(e) {
     }
   }
 }
+let uiTouch = null; // le doigt qui manipule le sac
 function onTouchMove(e) {
   e.preventDefault();
+  if (mode === 'play' && overlayOpen()) {
+    for (const t of e.changedTouches) if (t.identifier === uiTouch) overlayMove(...toGame(t));
+    return;
+  }
   for (const t of e.changedTouches) {
     const [x, y] = toGame(t);
     const bt = btnTouches.get(t.identifier);
@@ -483,6 +490,7 @@ function onTouchMove(e) {
 }
 function onTouchEnd(e) {
   e.preventDefault();
+  for (const t of e.changedTouches) if (t.identifier === uiTouch) { uiTouch = null; if (overlayOpen()) overlayUp(...toGame(t)); }
   for (const t of e.changedTouches) {
     if (t.identifier === joy.id) { joy.id = null; input.x = input.y = 0; }
     btnTouches.delete(t.identifier);
@@ -524,7 +532,7 @@ canvas.addEventListener('mousedown', (e) => {
   unlockAudio();
   setMode('keys');
   const x = e.clientX / cssPerPx, y = e.clientY / cssPerPx;
-  if (mode === 'play' && overlayOpen()) { overlayTap(x, y); return; }
+  if (mode === 'play' && overlayOpen()) { overlayDown(x, y, e.button === 2, e.shiftKey); return; }
   if (Math.hypot(x - muteBtn.x, y - muteBtn.y) < muteBtn.r + 6) { toggleMute(); sfx.ui(); return; }
   if (mode === 'play' && Math.hypot(x - bagBtn.x, y - bagBtn.y) < bagBtn.r + 4) { openInv(); return; }
   if (mode === 'play' && hotbarTap(x, y)) return;
@@ -534,7 +542,9 @@ canvas.addEventListener('mousedown', (e) => {
   if (e.button === 1) { e.preventDefault(); mouse.grab = true; input.grab = true; }
   if (e.button === 2) mouse.charge = true;
 });
+canvas.addEventListener('mousemove', (e) => { if (mode === 'play' && invUI) overlayMove(e.clientX / cssPerPx, e.clientY / cssPerPx); });
 window.addEventListener('mouseup', (e) => {
+  if (mode === 'play' && invUI && e.button === 0) overlayUp(e.clientX / cssPerPx, e.clientY / cssPerPx);
   if (e.button === 0) mouse.punch = false;
   if (e.button === 1) mouse.grab = false;
   if (e.button === 2) mouse.charge = false;
@@ -1789,8 +1799,8 @@ function finishEat() {
   } else if (alter && !player.alters.includes(alter)) {
     player.alters.push(alter);
     player.alterLv[alter] = 1;
-    const slot = player.equip.length < 3;
-    if (slot) player.equip.push(alter);
+    const slot = player.equip.filter(Boolean).length < 3;
+    if (slot) { const i = player.equip.indexOf(null); if (i >= 0) player.equip[i] = alter; else player.equip.push(alter); }
     showMsg('ALTER DEVORE : ' + ALTERS[alter].name, 4, slot ? ALTERS[alter].desc : 'EQUIPE-LE DANS LE SAC (ONGLET ALTERS)');
     sfx.roar(1);
     burst(player.x, player.y, player.z + 20, ['#c9a0ff', '#ffffff', '#8f9cff'], 40, { up: 60, speed: 2.5, life: 1 });
@@ -2899,11 +2909,20 @@ function updateSleep(dt) {
 }
 
 // ---------------------------------------------------------------- écrans (choix de mutation, sac)
+// Style Minecraft : panneau gris en relief, cases creusées, infobulles sombres à liseré violet.
+// Les objets se prennent et se posent comme dans Minecraft : toucher/clic = prendre la pile, toucher
+// ailleurs = la poser (fusionner ou échanger) ; glisser-déposer ; appui long ou clic droit = la
+// moitié (ou poser un seul objet) ; double-toucher ou Maj+clic = l'envoyer de l'autre côté ;
+// lâché hors du panneau, l'objet tombe par terre.
 let mutChoice = null; // { opts, sel } : 3 mutations au choix
-let invUI = null; // { tab, cur, pick, chest, slot } : le sac ouvert
-const uiHits = []; // zones touchables de l'écran affiché : { x, y, w, h, fn }
-const TABS = ['SAC', 'MUTATIONS', 'ALTERS', 'FABRIQUER'];
+let invUI = null; // le sac ouvert (voir openInv)
+const uiHits = []; // boutons de l'écran affiché : { x, y, w, h, fn }
+const uiItems = []; // ce qu'on peut viser au clavier ou à la manette : cases et boutons { x, y, w, h, slot?, fn? }
 const overlayOpen = () => !!(mutChoice || invUI || baking);
+const MC = { bg: '#c6c6c6', hi: '#ffffff', lo: '#555555', ink: '#3f3f3f', slot: '#8b8b8b', slotLo: '#373737', slotHi: '#ffffff' };
+const PW = 176, PH = 166; // le panneau, comme celui de Minecraft
+// l'horloge de l'interface : le jeu (et son `time`) est en pause tant qu'un écran est ouvert
+const rt = () => performance.now() / 1000;
 
 function openMutChoice() {
   const opts = draw3(player.muts);
@@ -2927,12 +2946,19 @@ function chooseMutation(i) {
   if (M.look) rebakeNomu();
 }
 
+// tab : 0 sac (ou coffre), 1 mutations, 2 fabriquer
 function openInv(tab = 0, chest = null) {
-  invUI = { tab, cur: 0, pick: -1, chest, slot: 0, col: 0, row: 0 };
+  invUI = { tab, chest, cursor: null, press: null, drag: false, px: VW / 2, py: VH / 2, pointer: false, sel: 0, recipe: 0, mut: 'arms', tip: null, tipT: 0, lastTap: null };
   releaseInputs();
   sfx.ui();
 }
-function closeInv() { invUI = null; sfx.ui(); }
+function closeInv() {
+  // ce qui reste en main retourne dans le sac (ou tombe s'il est plein)
+  const c = invUI && invUI.cursor;
+  if (c && c.id) giveOrDrop(c.id, c.n);
+  invUI = null;
+  sfx.ui();
+}
 
 function releaseInputs() {
   input.punch = input.jump = input.sniff = input.grab = false;
@@ -2942,15 +2968,10 @@ function releaseInputs() {
   player.aiming = false; player.grabArm = false;
 }
 
-// Petit cadre pixel : bord sombre, liseré, fond.
-function frame9(x, y, w, h, fill = 'rgba(11,13,20,0.94)', edge = '#2e3450') {
-  ctx.fillStyle = '#05060a'; ctx.fillRect(x - 1, y - 1, w + 2, h + 2);
-  ctx.fillStyle = edge; ctx.fillRect(x, y, w, h);
-  ctx.fillStyle = fill; ctx.fillRect(x + 1, y + 1, w - 2, h - 2);
-}
-function hit(x, y, w, h, fn) { uiHits.push({ x, y, w, h, fn }); }
-function textC(t, cx, y, col) { drawText(ctx, t, Math.round(cx - textWidth(t) / 2), y, col); }
-// Coupe un texte en lignes qui tiennent dans `w` pixels.
+// --- dessin
+function hit(x, y, w, h, fn) { uiHits.push({ x, y, w, h, fn }); uiItems.push({ x, y, w, h, fn }); }
+function textC(t, cx, y, col, sh) { drawText(ctx, t, Math.round(cx - textWidth(t) / 2), y, col, sh); }
+const ink = (t, x, y, col = MC.ink) => drawText(ctx, t, x, y, col, null); // texte sombre sans ombre, sur le gris
 function wrap(str, w) {
   const out = [];
   let line = '';
@@ -2961,266 +2982,381 @@ function wrap(str, w) {
   if (line) out.push(line);
   return out;
 }
+// Panneau Minecraft : contour noir aux coins arrondis, biseau clair en haut à gauche, sombre en bas à droite.
+function mcPanel(x, y, w, h, bg = MC.bg) {
+  ctx.fillStyle = '#000000';
+  ctx.fillRect(x + 1, y, w - 2, h); ctx.fillRect(x, y + 1, w, h - 2);
+  ctx.fillStyle = bg; ctx.fillRect(x + 1, y + 1, w - 2, h - 2);
+  ctx.fillStyle = MC.hi; ctx.fillRect(x + 1, y + 1, w - 3, 2); ctx.fillRect(x + 1, y + 1, 2, h - 3);
+  ctx.fillStyle = MC.lo; ctx.fillRect(x + 2, y + h - 3, w - 3, 2); ctx.fillRect(x + w - 3, y + 2, 2, h - 3);
+  ctx.fillStyle = bg; ctx.fillRect(x + 1, y + h - 3, 1, 2); ctx.fillRect(x + w - 3, y + 1, 2, 1);
+}
+// Case creusée (18x18) : ombre en haut à gauche, lumière en bas à droite.
+function mcSlot(x, y, s = 18, bg = MC.slot) {
+  ctx.fillStyle = bg; ctx.fillRect(x, y, s, s);
+  ctx.fillStyle = MC.slotLo; ctx.fillRect(x, y, s - 1, 1); ctx.fillRect(x, y, 1, s - 1);
+  ctx.fillStyle = MC.slotHi; ctx.fillRect(x + 1, y + s - 1, s - 1, 1); ctx.fillRect(x + s - 1, y + 1, 1, s - 1);
+}
+// Bouton Minecraft : gris en relief, texte blanc ; grisé s'il est inactif.
+function mcButton(x, y, w, h, label, on, fn) {
+  ctx.fillStyle = '#000000'; ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = on ? '#6f6f6f' : '#2c2c2c'; ctx.fillRect(x + 1, y + 1, w - 2, h - 2);
+  if (on) { ctx.fillStyle = '#a8a8a8'; ctx.fillRect(x + 1, y + 1, w - 2, 1); ctx.fillRect(x + 1, y + 1, 1, h - 2); ctx.fillStyle = '#4a4a4a'; ctx.fillRect(x + 1, y + h - 2, w - 2, 1); ctx.fillRect(x + w - 2, y + 1, 1, h - 2); }
+  textC(label, x + w / 2, y + Math.round(h / 2) - 2, on ? '#ffffff' : '#7a7a7a', on ? '#3f3f3f' : null);
+  hit(x, y, w, h, on ? fn : () => sfx.ui());
+}
+// Un objet dans une case : son icône, et le nombre en bas à droite (blanc, ombre grise).
+function drawStack(s, x, y) {
+  if (!s) return;
+  ctx.drawImage(icons[s.alter ? 'a:' + s.alter : s.id], x + 3, y + 3);
+  if (s.n > 1) { const t = String(s.n); drawText(ctx, t, x + 18 - textWidth(t), y + 12, '#ffffff', '#3f3f3f'); }
+  if (s.alter && player.alterLv[s.alter] > 1) drawText(ctx, String(player.alterLv[s.alter]), x + 14, y + 12, '#ffe28a', '#3f3f3f');
+}
 
 function drawOverlay() {
   uiHits.length = 0;
+  uiItems.length = 0;
   if (baking) drawBaking();
   else if (mutChoice) drawMutChoice();
   else if (invUI) drawInv();
 }
 
 function drawBaking() {
-  ctx.fillStyle = 'rgba(8,4,16,0.75)';
+  ctx.fillStyle = 'rgba(16,8,24,0.8)';
   ctx.fillRect(0, 0, VW, VH);
-  const w = 90, x = Math.round(VW / 2 - w / 2), y = Math.round(VH / 2);
+  const w = 100, x = Math.round(VW / 2 - w / 2), y = Math.round(VH / 2);
   textC('MUTATION...', VW / 2, y - 14, '#c9a0ff');
-  ctx.fillStyle = '#20243a'; ctx.fillRect(x, y, w, 5);
-  ctx.fillStyle = Math.floor(time * 8) % 2 ? '#c9a0ff' : '#ff6b7a'; ctx.fillRect(x, y, Math.round(w * baking.p), 5);
+  mcSlot(x - 2, y - 2, w + 4, '#2a2a2a');
+  ctx.fillStyle = '#5a2a8a'; ctx.fillRect(x, y, w, 6);
+  ctx.fillStyle = '#c9a0ff'; ctx.fillRect(x, y, Math.round(w * baking.p), 6);
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(x, y, Math.round(w * baking.p), 1);
 }
 
+// Choix de mutation : 3 cartes en relief, l'icône en grand, la branche en couleur.
 function drawMutChoice() {
   const C = mutChoice;
-  C.t += 1 / 60;
-  ctx.fillStyle = 'rgba(8,4,16,0.8)';
+  ctx.fillStyle = 'rgba(16,8,24,0.78)';
   ctx.fillRect(0, 0, VW, VH);
-  const top = 8 + safe.t;
+  const top = 6 + safe.t;
   textC('MUTATION !', VW / 2, top, '#ff6b7a');
   textC('NIVEAU ' + player.level + ' - CHOISIS UN POUVOIR', VW / 2, top + 8, '#e8f0ff');
-  const n = C.opts.length, gap = 5;
-  const cw = Math.min(82, Math.floor((VW - 12 - safe.l - safe.r - gap * (n - 1)) / n)), ch = Math.min(96, VH - top - 52);
-  const x0 = Math.round(VW / 2 - (cw * n + gap * (n - 1)) / 2), y0 = top + 20;
+  const n = C.opts.length, gap = 6;
+  const cw = Math.min(84, Math.floor((VW - 12 - safe.l - safe.r - gap * (n - 1)) / n)), ch = Math.min(104, VH - top - 50);
+  const x0 = Math.round(VW / 2 - (cw * n + gap * (n - 1)) / 2), y0 = top + 19;
+  ctx.imageSmoothingEnabled = false;
   C.opts.forEach((id, i) => {
     const M = MUTATIONS[id], B = BRANCHES[M.branch], sel = i === C.sel;
-    const x = x0 + i * (cw + gap), y = y0 - (sel ? 2 + Math.round(Math.sin(time * 6)) : 0);
-    frame9(x, y, cw, ch, sel ? 'rgba(30,22,48,0.97)' : 'rgba(14,14,24,0.95)', sel ? B.col : '#2e3450');
-    ctx.fillStyle = B.dark; ctx.fillRect(x + 1, y + 1, cw - 2, 9);
-    textC(B.name, x + cw / 2, y + 3, B.col);
-    let ty = y + 14;
-    for (const l of wrap(M.name, cw - 6)) { textC(l, x + cw / 2, ty, '#ffe28a'); ty += 7; }
-    ty += 3;
-    for (const d of M.desc) for (const l of wrap(d, cw - 6)) { textC(l, x + cw / 2, ty, '#e8f0ff'); ty += 7; }
-    textC(M.look ? 'SE VOIT SUR LUI' : 'INVISIBLE', x + cw / 2, y + ch - 9, M.look ? '#c9a0ff' : '#5a6288');
+    const x = x0 + i * (cw + gap), y = y0 - (sel ? 2 + Math.round(Math.sin(rt() * 6)) : 0);
+    mcPanel(x, y, cw, ch);
+    if (sel) { ctx.fillStyle = '#ffffff'; ctx.fillRect(x - 1, y - 1, cw + 2, 1); ctx.fillRect(x - 1, y + ch, cw + 2, 1); ctx.fillRect(x - 1, y, 1, ch); ctx.fillRect(x + cw, y, 1, ch); }
+    ctx.fillStyle = B.dark; ctx.fillRect(x + 3, y + 3, cw - 6, 9);
+    textC(B.name, x + cw / 2, y + 5, B.col);
+    mcSlot(Math.round(x + cw / 2 - 15), y + 15, 30);
+    ctx.drawImage(icons['m:' + id], Math.round(x + cw / 2 - 12), y + 18, 24, 24);
+    let ty = y + 50;
+    for (const l of wrap(M.name, cw - 8)) { textC(l, x + cw / 2, ty, MC.ink, null); ty += 7; }
+    ty += 2;
+    for (const d of M.desc) for (const l of wrap(d, cw - 8)) { textC(l, x + cw / 2, ty, '#5a5a5a', null); ty += 6; }
+    textC(M.look ? 'SE VOIT SUR LUI' : 'INVISIBLE', x + cw / 2, y + ch - 10, M.look ? '#7a3ab0' : '#7a7a7a', null);
     hit(x, y, cw, ch, () => { if (C.sel === i) chooseMutation(i); else { C.sel = i; sfx.ui(); } });
   });
-  // bouton de validation
-  const bw = 60, bx = Math.round(VW / 2 - bw / 2), by = y0 + ch + 6;
-  frame9(bx, by, bw, 13, '#e1465a', '#14101e');
-  textC('MUTER', VW / 2, by + 4, '#ffffff');
-  hit(bx, by, bw, 13, () => chooseMutation(C.sel));
-  textC(player.pendingLv > 1 ? 'ENCORE ' + (player.pendingLv - 1) + ' APRES' : '', VW / 2, by + 17, '#8a93b8');
+  const bw = 70, by = y0 + ch + 5;
+  mcButton(Math.round(VW / 2 - bw / 2), by, bw, 14, 'MUTER', true, () => chooseMutation(C.sel));
+  if (player.pendingLv > 1) textC('ENCORE ' + (player.pendingLv - 1) + ' APRES', VW / 2, by + 17, '#8a93b8');
 }
 
-// --- le sac
-function invGeom() {
-  const pw = Math.min(VW - 10 - safe.l - safe.r, 236), ph = Math.min(VH - 10 - safe.t - safe.b, 180);
-  return { pw, ph, px: Math.round(VW / 2 - pw / 2), py: Math.round(VH / 2 - ph / 2) };
+// --- le sac : conteneurs
+// 'inv' (36 cases : 0-8 la barre, 9-35 le sac), 'chest' (18), 'eq' (3 alters équipés), 'bank' (alters volés)
+const bankList = () => player.alters.filter((a) => !player.equip.includes(a) && !(invUI && invUI.cursor && invUI.cursor.alter === a));
+function cget(c, k) {
+  if (c === 'inv') return player.inv[k];
+  if (c === 'chest') return world.chests.get(invUI.chest)[k];
+  if (c === 'eq') return player.equip[k] ? { alter: player.equip[k] } : null;
+  if (c === 'bank') { const a = bankList()[k]; return a ? { alter: a } : null; }
+  return null;
+}
+function cset(c, k, v) {
+  if (c === 'inv') player.inv[k] = v;
+  else if (c === 'chest') world.chests.get(invUI.chest)[k] = v;
 }
 
-function drawSlot(x, y, s, sel, picked) {
-  frame9(x, y, 16, 16, picked ? '#3a2a10' : sel ? '#2a2440' : '#141826', sel ? '#ffe28a' : picked ? '#ffb347' : '#2e3450');
-  if (!s) return;
-  ctx.drawImage(icons[s.id], x + 2, y + 2);
-  if (s.n > 1) { const t = String(s.n); drawText(ctx, t, x + 16 - textWidth(t), y + 11, '#ffffff'); }
+// Un clic de Minecraft sur une case (right : clic droit / appui long).
+function slotClick(ref, right = false) {
+  const U = invUI, { c, k } = ref;
+  if (c === 'eq' || c === 'bank') { alterClick(ref); return; }
+  const s = cget(c, k), cur = U.cursor;
+  if (cur && cur.alter) return; // un alter ne va pas dans le sac
+  if (!cur) {
+    if (!s) return;
+    if (right && s.n > 1) { const h = Math.ceil(s.n / 2); U.cursor = { id: s.id, n: h }; s.n -= h; }
+    else { U.cursor = s; cset(c, k, null); }
+    sfx.ui();
+  } else if (!s) {
+    if (right) { cset(c, k, { id: cur.id, n: 1 }); cur.n--; } else { cset(c, k, cur); U.cursor = null; }
+    sfx.pickup();
+  } else if (s.id === cur.id) {
+    const m = Math.min(right ? 1 : cur.n, STACK - s.n);
+    s.n += m; cur.n -= m;
+    sfx.pickup();
+  } else if (!right) { cset(c, k, cur); U.cursor = s; sfx.pickup(); }
+  if (U.cursor && U.cursor.n <= 0) U.cursor = null;
+}
+// Les alters : on les prend dans la réserve et on les pose sur les 3 emplacements (comme une armure).
+function alterClick({ c, k }) {
+  const U = invUI, cur = U.cursor && U.cursor.alter ? U.cursor.alter : null;
+  if (U.cursor && !cur) return; // un objet ne va pas sur un emplacement d'alter
+  if (c === 'eq') {
+    const old = player.equip[k] || null;
+    if (!cur && !old) return;
+    while (player.equip.length < 3) player.equip.push(null);
+    player.equip[k] = cur;
+    U.cursor = old ? { alter: old } : null;
+  } else if (cur) U.cursor = null; // reposé dans la réserve
+  else { const a = bankList()[k]; if (a) U.cursor = { alter: a }; }
+  player.equip = player.equip.slice(0, 3);
+  sfx.ui();
+}
+// Double-toucher / Maj+clic : la pile part de l'autre côté (barre <-> sac, ou sac <-> coffre).
+function quickMove(ref) {
+  const { c, k } = ref, s = cget(c, k);
+  if (!s || s.alter) return;
+  let dest;
+  if (invUI.chest) dest = c === 'chest' ? player.inv : world.chests.get(invUI.chest);
+  else dest = k < 9 ? player.inv.slice(9) : player.inv.slice(0, 9);
+  const before = s.n, left = addItem(s.id, s.n, dest);
+  if (!invUI.chest) {
+    // addItem a rempli une copie : on la recopie à sa place
+    if (k < 9) for (let i = 0; i < 27; i++) player.inv[9 + i] = dest[i]; else for (let i = 0; i < 9; i++) player.inv[i] = dest[i];
+  }
+  if (left === before) return;
+  if (left) s.n = left; else cset(c, k, null);
+  sfx.pickup();
+}
+// Lâché hors du panneau : l'objet tombe devant Brainless (et ne revient pas tout de suite).
+function dropCursor() {
+  const c = invUI.cursor;
+  if (!c || c.alter) { invUI.cursor = null; return; }
+  const [dx, dy] = dirWorld(player.dir);
+  for (let i = 0; i < c.n; i++) drops.push({ id: c.id, x: player.x + dx * 0.6, y: player.y + dy * 0.6, z: player.z + 20, vx: dx * 2 + (Math.random() - 0.5), vy: dy * 2 + (Math.random() - 0.5), vz: 40, t: -2 });
+  invUI.cursor = null;
+  sfx.whoosh();
+}
+
+// Une case du sac à l'écran (pour toucher, viser, survoler).
+const uiSlots = [];
+function slotUI(c, k, x, y) {
+  mcSlot(x, y);
+  const s = cget(c, k);
+  drawStack(s, x, y);
+  const ref = { c, k, x, y };
+  uiSlots.push(ref);
+  uiItems.push({ x, y, w: 18, h: 18, slot: ref });
+  const U = invUI, cur = !U.pointer && uiItems.length - 1 === U.sel;
+  const hov = U.pointer && U.px >= x && U.px < x + 18 && U.py >= y && U.py < y + 18;
+  if (hov || cur) { ctx.globalAlpha = 0.45; ctx.fillStyle = '#ffffff'; ctx.fillRect(x + 1, y + 1, 16, 16); ctx.globalAlpha = 1; }
+  if (cur) { ctx.fillStyle = '#ffffff'; ctx.fillRect(x - 1, y - 1, 20, 1); ctx.fillRect(x - 1, y + 18, 20, 1); ctx.fillRect(x - 1, y, 1, 18); ctx.fillRect(x + 18, y, 1, 18); }
+  if ((hov || cur) && s && !U.cursor) U.tip = { s, x: x + 18, y };
+}
+const slotAtPoint = (x, y) => uiSlots.find((r) => x >= r.x && x < r.x + 18 && y >= r.y && y < r.y + 18);
+
+// L'inventaire du joueur en bas du panneau (sac 9x3 + barre), comme dans Minecraft.
+function drawPlayerInv(px, py, y) {
+  ink('INVENTAIRE', px + 8, y);
+  for (let r = 0; r < 3; r++) for (let c = 0; c < 9; c++) slotUI('inv', 9 + r * 9 + c, px + 7 + c * 18, y + 9 + r * 18);
+  for (let c = 0; c < 9; c++) slotUI('inv', c, px + 7 + c * 18, y + 67);
 }
 
 function drawInv() {
-  const U = invUI, { pw, ph, px, py } = invGeom();
-  ctx.fillStyle = 'rgba(4,4,10,0.55)';
-  ctx.fillRect(0, 0, VW, VH);
-  frame9(px, py, pw, ph);
-  // onglets
-  const tw = Math.floor((pw - 16) / 4);
-  TABS.forEach((t, i) => {
-    const x = px + 2 + i * tw, on = U.tab === i, label = i === 0 && U.chest ? 'COFFRE' : t;
-    frame9(x, py + 2, tw - 2, 11, on ? '#2a2440' : '#141826', on ? '#ffe28a' : '#2e3450');
-    textC(label, x + (tw - 2) / 2, py + 5, on ? '#ffe28a' : '#8a93b8');
-    hit(x, py + 2, tw - 2, 11, () => { U.tab = i; U.cur = 0; U.pick = -1; sfx.ui(); });
-  });
-  // fermer
-  const cx = px + pw - 13;
-  frame9(cx, py + 2, 11, 11, '#5e1a14', '#14101e');
-  textC('X', cx + 6, py + 5, '#ffffff');
-  hit(cx, py + 2, 11, 11, closeInv);
-  const body = { x: px + 4, y: py + 17, w: pw - 8, h: ph - 21 };
-  if (U.tab === 0) drawBag(body);
-  else if (U.tab === 1) drawTree(body);
-  else if (U.tab === 2) drawAlters(body);
-  else drawCraft(body);
-}
-
-// Sac (et coffre) : une grille de 9 colonnes ; la rangée du bas est la barre.
-function bagSlots() {
   const U = invUI;
-  const chest = U.chest ? world.chests.get(U.chest) : null;
-  return { chest, count: (chest ? CHEST_N : 0) + INV };
-}
-function slotAt(i) {
-  const { chest } = bagSlots();
-  if (chest) return i < CHEST_N ? [chest, i] : [player.inv, i - CHEST_N];
-  return [player.inv, i];
-}
-function drawBag(b) {
-  const U = invUI, { chest, count } = bagSlots();
-  const gx = Math.round(b.x + b.w / 2 - (9 * 17) / 2);
-  let y = b.y;
-  const cell = (i, x, yy) => {
-    const [arr, k] = slotAt(i);
-    drawSlot(x, yy, arr[k], U.cur === i, U.pick === i);
-    hit(x, yy, 16, 16, () => { U.cur = i; bagAction(i); });
-  };
-  if (chest) {
-    drawText(ctx, 'COFFRE', gx, y, '#ffb347'); y += 7;
-    for (let i = 0; i < CHEST_N; i++) cell(i, gx + (i % 9) * 17, y + Math.floor(i / 9) * 17);
-    y += 2 * 17 + 3;
+  uiSlots.length = 0;
+  U.tip = null;
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect(0, 0, VW, VH);
+  const px = Math.round(VW / 2 - PW / 2), py = Math.round(VH / 2 - PH / 2 + 7);
+  // onglets au-dessus du panneau (l'actif se raccorde au panneau)
+  const tabs = [U.chest ? 'COFFRE' : 'SAC', 'MUTATIONS', 'FABRIQUER'];
+  let tx = px + 2;
+  tabs.forEach((t, i) => {
+    const w = textWidth(t) + 12, on = U.tab === i;
+    mcPanel(tx, py - 13, w, on ? 17 : 14, on ? MC.bg : '#a0a0a0');
+    ink(t, tx + 6, py - 8, on ? MC.ink : '#5a5a5a');
+    hit(tx, py - 13, w, 13, () => { U.tab = i; U.sel = 0; U.tipT = 0; sfx.ui(); });
+    tx += w + 1;
+  });
+  if (player.pendingLv > 0 && Math.floor(rt() * 3) % 2) { ctx.fillStyle = '#ff6b7a'; ctx.fillRect(px + 2 + textWidth(tabs[0]) + 13 + textWidth('MUTATIONS') + 8, py - 12, 3, 3); }
+  // fermer (pour le tactile ; Échap / I / B ailleurs)
+  mcPanel(px + PW - 15, py - 13, 15, 14, '#a0a0a0');
+  ink('X', px + PW - 9, py - 8, '#8b1a1a');
+  hit(px + PW - 15, py - 13, 15, 13, closeInv);
+  mcPanel(px, py, PW, PH);
+  if (U.tab === 0) { if (U.chest) drawChestTab(px, py); else drawBagTab(px, py); }
+  else if (U.tab === 1) drawTreeTab(px, py);
+  else drawCraftTab(px, py);
+  // ce qu'on tient : sous le doigt / la souris, ou sur la case visée au clavier
+  if (U.cursor) {
+    let cx = U.px - 9, cy = U.py - 9;
+    if (!U.pointer) { const it = uiItems[U.sel]; if (it) { cx = it.x + 4; cy = it.y + 4; } }
+    drawStack(U.cursor, Math.round(cx), Math.round(cy));
   }
-  const off = chest ? CHEST_N : 0;
-  drawText(ctx, 'SAC', gx, y, '#8a93b8'); y += 7;
-  for (let r = 0; r < 3; r++) for (let c = 0; c < 9; c++) cell(off + 9 + r * 9 + c, gx + c * 17, y + r * 17);
-  y += 3 * 17 + 2;
-  drawText(ctx, 'BARRE', gx, y, '#ffe28a'); y += 7;
-  for (let c = 0; c < 9; c++) cell(off + c, gx + c * 17, y);
-  y += 19;
-  // ce qu'il y a sous le curseur
-  const [arr, k] = slotAt(Math.min(U.cur, count - 1)), s = arr[k];
-  if (s && y + 12 < b.y + b.h) {
-    const it = ITEMS[s.id];
-    drawText(ctx, it.name + (s.n > 1 ? ' X' + s.n : ''), gx, y, '#ffe28a');
-    const info = it.kind === 'food' ? '+' + it.food + ' FAIM' + (it.hp ? ' +' + it.hp + ' VIE' : '') + ' - DANS LA BARRE, UTILISER POUR MANGER'
-      : it.kind === 'place' ? 'DANS LA BARRE, UTILISER POUR LE POSER DEVANT LUI'
-      : it.kind === 'trophy' ? 'TROPHEE DE CHASSE' : 'MATERIAU - ONGLET FABRIQUER';
-    wrap(info, b.w - (gx - b.x) * 2).slice(0, 2).forEach((l, i) => drawText(ctx, l, gx, y + 7 + i * 7, '#8a93b8'));
+  // après un toucher, l'infobulle de la case reste un instant (seulement si cette case est à l'écran)
+  if ((U.tipT -= 1 / 60) > 0 && U.tipRef && !U.cursor && uiSlots.some((r) => r.c === U.tipRef.c && r.k === U.tipRef.k)) {
+    const s = cget(U.tipRef.c, U.tipRef.k);
+    if (s) U.tip = { s, x: U.tipRef.x + 18, y: U.tipRef.y };
   }
-  if (chest && y + 30 < b.y + b.h) drawText(ctx, 'TOUCHE UN OBJET POUR LE CHANGER DE COTE', gx, b.y + b.h - 6, '#5a6288');
-}
-// Toucher une case : avec un coffre ouvert, la pile passe de l'autre côté ; sinon on prend puis on échange.
-function bagAction(i) {
-  const U = invUI, { chest } = bagSlots();
-  const [arr, k] = slotAt(i);
-  if (chest) {
-    const s = arr[k];
-    if (!s) return;
-    const left = addItem(s.id, s.n, arr === chest ? player.inv : chest);
-    if (left === s.n) { sfx.ui(); return; }
-    if (left) s.n = left; else arr[k] = null;
-    sfx.pickup();
-    return;
-  }
-  if (U.pick < 0) { if (arr[k]) { U.pick = i; sfx.ui(); } return; }
-  const [pa, pk] = slotAt(U.pick);
-  const a = pa[pk], b = arr[k];
-  if (U.pick !== i) {
-    if (b && a && b.id === a.id && b.n < STACK) { const m = Math.min(a.n, STACK - b.n); b.n += m; a.n -= m; if (!a.n) pa[pk] = null; }
-    else { pa[pk] = b; arr[k] = a; }
-    sfx.pickup();
-  }
-  U.pick = -1;
+  if (U.tip) drawTip(U.tip.s, U.tip.x, U.tip.y);
+  if (U.sel >= uiItems.length) U.sel = Math.max(0, uiItems.length - 1);
 }
 
-// Arbre des mutations : 3 colonnes (branches), du haut (base) vers le bas (avancées).
-const treeCols = () => Object.keys(BRANCHES).map((b) => Object.keys(MUTATIONS).filter((id) => MUTATIONS[id].branch === b).sort((x, y) => MUTATIONS[x].row - MUTATIONS[y].row));
+// Infobulle Minecraft : fond presque noir, liseré violet, nom en blanc et détails en gris.
+function tipLines(s) {
+  if (s.alter) return [ALTERS[s.alter].name + ' - NIVEAU ' + (player.alterLv[s.alter] || 1), ...wrap(ALTERS[s.alter].desc, 110)];
+  const it = ITEMS[s.id];
+  const info = it.kind === 'food' ? ['+' + it.food + ' FAIM' + (it.hp ? ', +' + it.hp + ' VIE' : ''), 'DANS LA BARRE : MANGER']
+    : it.kind === 'place' ? ['CONSTRUCTION', 'DANS LA BARRE : POSER DEVANT LUI']
+    : it.kind === 'trophy' ? ['TROPHEE DE CHASSE'] : ['MATERIAU', 'SERT A FABRIQUER'];
+  return [it.name, ...info];
+}
+function drawTip(s, x, y) {
+  const lines = tipLines(s), w = Math.max(...lines.map((l) => textWidth(l))) + 8, h = lines.length * 8 + 4;
+  if (x + w > VW - 2) x = Math.max(2, x - w - 20);
+  if (y + h > VH - 2) y = VH - 2 - h;
+  ctx.fillStyle = 'rgba(16,0,16,0.94)'; ctx.fillRect(x + 1, y, w - 2, h); ctx.fillRect(x, y + 1, w, h - 2);
+  ctx.fillStyle = '#5000ff'; ctx.fillRect(x + 1, y + 1, w - 2, 1); ctx.fillRect(x + 1, y + 1, 1, h - 2); ctx.fillRect(x + w - 2, y + 1, 1, h - 2);
+  ctx.fillStyle = '#28007f'; ctx.fillRect(x + 1, y + h - 2, w - 2, 1);
+  lines.forEach((l, i) => drawText(ctx, l, x + 4, y + 3 + i * 8, i ? '#aaaaaa' : '#ffffff', '#3f3f3f'));
+}
+
+// Onglet SAC : Brainless dans son cadre, ses alters équipés comme une armure, sa réserve d'alters.
+function drawBagTab(px, py) {
+  for (let i = 0; i < 3; i++) slotUI('eq', i, px + 7, py + 7 + i * 18);
+  // Brainless qui tourne sur lui-même
+  ctx.fillStyle = '#000000'; ctx.fillRect(px + 26, py + 7, 50, 64);
+  ctx.fillStyle = '#1a1a24'; ctx.fillRect(px + 27, py + 8, 48, 62);
+  const A = ANIMS.idle, dir = Math.floor(rt() / 1.1) % 8, img = nomu.idle && nomu.idle[dir] && nomu.idle[dir][Math.floor(rt() * A.fps) % A.frames];
+  if (img && img.page) {
+    ctx.save(); ctx.beginPath(); ctx.rect(px + 27, py + 8, 48, 62); ctx.clip();
+    draw(img, px + 51 - img.ox, py + 64 - img.oy);
+    ctx.restore();
+  }
+  // ce qu'il vaut
+  const x = px + 82;
+  ink('BRAINLESS', x, py + 8, '#7a2a3a');
+  ink('NIVEAU ' + player.level, x, py + 16);
+  ink('VIE ' + Math.round(player.hp) + '/' + maxHp(), x, py + 23);
+  ink('FORCE X' + strength().toFixed(1), x, py + 30);
+  ink('MUTATIONS ' + player.muts.length + '/' + Object.keys(MUTATIONS).length, x, py + 37);
+  ink('ALTERS VOLES', x, py + 47);
+  for (let i = 0; i < 5; i++) slotUI('bank', i, x + i * 17 - 1, py + 54);
+  drawPlayerInv(px, py, py + 75);
+}
+
+// Onglet COFFRE : les 18 cases du coffre au-dessus du sac.
+function drawChestTab(px, py) {
+  ink('COFFRE', px + 8, py + 6);
+  for (let i = 0; i < CHEST_N; i++) slotUI('chest', i, px + 7 + (i % 9) * 18, py + 15 + Math.floor(i / 9) * 18);
+  drawPlayerInv(px, py, py + 55);
+  ink('DOUBLE-TOUCHE : VERS L\'AUTRE COTE', px + 8, py + PH - 13, '#6a6a6a');
+}
+
+// Onglet FABRIQUER : le livre de recettes (cases), le détail de celle choisie, et le sac dessous.
+function canCraft(r) { return Object.keys(r.need).every((id) => countItem(id) >= r.need[id]); }
+function craft(r, all = false) {
+  let n = 0;
+  while (canCraft(r) && (all || n === 0) && n < 64) {
+    for (const id in r.need) takeItem(id, r.need[id]);
+    giveOrDrop(r.out, r.n);
+    n++;
+  }
+  if (!n) { sfx.ui(); return; }
+  toastItem(r.out, r.n * n);
+  sfx.craft();
+}
+function drawCraftTab(px, py) {
+  const U = invUI;
+  ink('RECETTES', px + 8, py + 6);
+  RECIPES.forEach((r, i) => {
+    const x = px + 7 + (i % 4) * 18, y = py + 15 + Math.floor(i / 4) * 18, ok = canCraft(r), sel = U.recipe === i;
+    mcSlot(x, y, 18, sel ? '#b8b8b8' : ok ? MC.slot : '#7a5050');
+    ctx.drawImage(icons[r.out], x + 3, y + 3);
+    if (sel) { ctx.fillStyle = '#ffffff'; ctx.fillRect(x - 1, y - 1, 20, 1); ctx.fillRect(x - 1, y + 18, 20, 1); ctx.fillRect(x - 1, y, 1, 18); ctx.fillRect(x + 18, y, 1, 18); }
+    hit(x, y, 18, 18, () => { U.recipe = i; sfx.ui(); });
+  });
+  // le détail : ingrédients -> résultat
+  const r = RECIPES[U.recipe], ok = canCraft(r), x0 = px + 84;
+  ink(ITEMS[r.out].name, x0, py + 6, '#2a2a2a');
+  const ids = Object.keys(r.need);
+  ids.forEach((id, i) => {
+    const x = x0 + i * 20, y = py + 16;
+    mcSlot(x, y);
+    ctx.drawImage(icons[id], x + 3, y + 3);
+    const t = countItem(id) + '/' + r.need[id];
+    drawText(ctx, t, x + 9 - Math.round(textWidth(t) / 2), y + 20, countItem(id) >= r.need[id] ? '#2f6a2f' : '#a01818', null);
+  });
+  // flèche puis la case du résultat (plus grande, comme Minecraft)
+  const ax = x0 + ids.length * 20 + 2;
+  ctx.fillStyle = ok ? '#ffffff' : '#8b8b8b';
+  for (let i = 0; i < 4; i++) ctx.fillRect(ax + i, py + 25 - 3 + i, 1, 7 - 2 * i);
+  ctx.fillRect(ax - 6, py + 24, 6, 1);
+  const rx = px + PW - 33;
+  mcSlot(rx, py + 12, 26);
+  ctx.drawImage(icons[r.out], rx + 7, py + 19);
+  if (r.n > 1) drawText(ctx, String(r.n), rx + 21, py + 29, '#ffffff', '#3f3f3f');
+  ink(r.desc.length > 22 ? r.desc.slice(0, 22) : r.desc, x0, py + 43, '#5a5a5a');
+  mcButton(x0, py + 51, 40, 14, 'FABRIQUER', ok, () => craft(r));
+  mcButton(x0 + 43, py + 51, 42, 14, 'TOUT', ok, () => craft(r, true));
+  drawPlayerInv(px, py, py + 75);
+}
+
+// Onglet MUTATIONS : comme l'écran des progrès de Minecraft, des cases reliées entre elles.
 function mutState(id) {
   if (mut(id)) return 'own';
   const r = MUTATIONS[id].req;
   return !r || r.some((q) => mut(q)) ? 'open' : 'lock';
 }
-function drawTree(b) {
-  const U = invUI, cols = treeCols(), cw = Math.floor(b.w / 3);
-  U.col = Math.min(U.col, 2); U.row = Math.min(U.row, cols[U.col].length - 1);
-  cols.forEach((list, c) => {
-    const B = BRANCHES[Object.keys(BRANCHES)[c]], x = b.x + c * cw;
-    textC(B.name, x + cw / 2, b.y, B.col);
-    list.forEach((id, r) => {
-      const st = mutState(id), y = b.y + 8 + r * 13, sel = U.col === c && U.row === r;
-      frame9(x + 1, y, cw - 3, 11, st === 'own' ? B.dark : '#141826', sel ? '#ffe28a' : st === 'lock' ? '#20243a' : B.col);
-      const name = MUTATIONS[id].name, short = textWidth(name) > cw - 7 ? name.slice(0, Math.floor((cw - 9) / 4)) + '.' : name;
-      textC(short, x + cw / 2, y + 3, st === 'own' ? B.col : st === 'open' ? '#e8f0ff' : '#4a5070');
-      hit(x + 1, y, cw - 3, 11, () => { U.col = c; U.row = r; sfx.ui(); });
-    });
-  });
-  // la mutation sous le curseur
-  const id = cols[U.col][U.row], M = MUTATIONS[id], st = mutState(id);
-  let y = b.y + 8 + 6 * 13 + 3;
-  drawText(ctx, M.name, b.x + 2, y, '#ffe28a');
-  drawText(ctx, st === 'own' ? 'ACQUISE' : st === 'open' ? 'DISPONIBLE' : 'DEMANDE : ' + M.req.map((q) => MUTATIONS[q].name).join(' OU '), b.x + 2, y + 7, st === 'own' ? '#7ee08a' : st === 'open' ? '#8fb4ff' : '#ff7a7a');
-  drawText(ctx, M.desc.join(' - '), b.x + 2, y + 14, '#8a93b8');
-  if (player.pendingLv > 0) {
-    const bw = 120, bx = Math.round(b.x + b.w / 2 - bw / 2), by = b.y + b.h - 13;
-    frame9(bx, by, bw, 12, '#e1465a', '#14101e');
-    textC('CHOISIR UNE MUTATION (' + player.pendingLv + ')', bx + bw / 2, by + 4, '#ffffff');
-    hit(bx, by, bw, 12, () => { invUI = null; openMutChoice(); });
-  }
-}
-
-// Alters : 3 emplacements équipés, et la liste de ceux qui ont été dévorés.
-function drawAlters(b) {
-  const U = invUI, sw = Math.floor((b.w - 8) / 3);
-  for (let i = 0; i < 3; i++) {
-    const a = player.equip[i], x = b.x + i * (sw + 4), sel = U.slot === i;
-    frame9(x, b.y, sw, 22, a ? '#2a2440' : '#141826', sel ? '#ffe28a' : '#2e3450');
-    textC('EMPLACEMENT ' + (i + 1), x + sw / 2, b.y + 2, '#5a6288');
-    if (a) { textC(ALTERS[a].name, x + sw / 2, b.y + 9, '#c9a0ff'); textC('*'.repeat(player.alterLv[a] || 1), x + sw / 2, b.y + 15, '#ffe28a'); }
-    else textC('VIDE', x + sw / 2, b.y + 11, '#4a5070');
-    hit(x, b.y, sw, 22, () => { if (U.slot === i && player.equip[i]) { player.equip.splice(i, 1); sfx.ui(); } U.slot = i; });
-  }
-  let y = b.y + 28;
-  if (!player.alters.length) {
-    wrap("DEVORE UN HEROS POUR VOLER SON ALTER. UN DEUXIEME DU MEME TYPE LE FAIT MONTER DE NIVEAU.", b.w - 4).forEach((l, i) => drawText(ctx, l, b.x + 2, y + i * 7, '#8a93b8'));
-    return;
-  }
-  U.cur = Math.min(U.cur, player.alters.length - 1);
-  player.alters.forEach((a, i) => {
-    const on = player.equip.includes(a), sel = U.cur === i;
-    frame9(b.x, y, b.w, 11, sel ? '#2a2440' : '#141826', sel ? '#ffe28a' : '#2e3450');
-    drawText(ctx, ALTERS[a].name + ' NIV ' + (player.alterLv[a] || 1), b.x + 3, y + 3, on ? '#c9a0ff' : '#e8f0ff');
-    const t = on ? 'EQUIPE' : 'EQUIPER';
-    drawText(ctx, t, b.x + b.w - textWidth(t) - 3, y + 3, on ? '#7ee08a' : '#8a93b8');
-    hit(b.x, y, b.w, 11, () => { U.cur = i; toggleAlter(a); });
-    y += 13;
-  });
-  const a = player.alters[U.cur];
-  if (a && y + 7 < b.y + b.h) wrap(ALTERS[a].desc, b.w - 4).forEach((l, i) => drawText(ctx, l, b.x + 2, y + 2 + i * 7, '#8a93b8'));
-}
-function toggleAlter(a) {
-  const U = invUI, i = player.equip.indexOf(a);
-  if (i >= 0) player.equip.splice(i, 1);
-  else if (player.equip.length < 3) player.equip.push(a);
-  else player.equip[U.slot] = a; // les 3 emplacements sont pris : il remplace celui choisi
-  sfx.ui();
-}
-
-// Fabriquer : chaque recette, ce qu'elle coûte (rouge s'il en manque), toucher pour fabriquer.
-function canCraft(r) { return Object.keys(r.need).every((id) => countItem(id) >= r.need[id]); }
-function craft(r) {
-  if (!canCraft(r)) { showMsg('IL MANQUE DES MATERIAUX', 1.2); sfx.ui(); return; }
-  for (const id in r.need) takeItem(id, r.need[id]);
-  giveOrDrop(r.out, r.n);
-  toastItem(r.out, r.n);
-  sfx.craft();
-}
-function drawCraft(b) {
-  const U = invUI, rh = Math.min(15, Math.floor((b.h - 8) / RECIPES.length));
-  U.cur = Math.min(U.cur, RECIPES.length - 1);
-  RECIPES.forEach((r, i) => {
-    const y = b.y + i * rh, ok = canCraft(r), sel = U.cur === i;
-    frame9(b.x, y, b.w, rh - 2, sel ? '#2a2440' : '#141826', sel ? '#ffe28a' : ok ? '#3a6a46' : '#2e3450');
-    ctx.drawImage(icons[r.out], b.x + 1, y + Math.round((rh - 2) / 2) - 6);
-    drawText(ctx, ITEMS[r.out].name + (r.n > 1 ? ' X' + r.n : ''), b.x + 15, y + Math.round((rh - 2) / 2) - 2, ok ? '#e8f0ff' : '#8a93b8');
-    let x = b.x + b.w - 3;
-    for (const id of Object.keys(r.need).reverse()) {
-      const t = countItem(id) + '/' + r.need[id];
-      x -= textWidth(t);
-      drawText(ctx, t, x, y + Math.round((rh - 2) / 2) - 2, countItem(id) >= r.need[id] ? '#7ee08a' : '#ff7a7a');
-      x -= 13;
-      ctx.drawImage(icons[id], x, y + Math.round((rh - 2) / 2) - 6);
-      x -= 3;
+function mutPos(px, py) {
+  const pos = {}, cw = (PW - 10) / 3;
+  Object.keys(BRANCHES).forEach((b, c) => {
+    for (let row = 0; row < 3; row++) {
+      const list = Object.keys(MUTATIONS).filter((id) => MUTATIONS[id].branch === b && MUTATIONS[id].row === row);
+      list.forEach((id, i) => { pos[id] = [Math.round(px + 5 + cw * c + cw / 2 + (i - (list.length - 1) / 2) * 24 - 9), py + 16 + row * 28]; });
     }
-    hit(b.x, y, b.w, rh - 2, () => { if (U.cur === i || inputMode === 'touch') craft(r); U.cur = i; });
   });
-  const r = RECIPES[U.cur];
-  drawText(ctx, r.desc, b.x + 2, b.y + RECIPES.length * rh + 1, '#8a93b8');
+  return pos;
+}
+function drawTreeTab(px, py) {
+  const U = invUI, pos = mutPos(px, py), cw = (PW - 10) / 3;
+  Object.keys(BRANCHES).forEach((b, c) => { const B = BRANCHES[b]; textC(B.name, px + 5 + cw * c + cw / 2, py + 6, B.dark, null); });
+  // les liens : de chaque prérequis vers la mutation qu'il débloque
+  for (const id in MUTATIONS) for (const q of MUTATIONS[id].req || []) {
+    const [x1, y1] = pos[q], [x2, y2] = pos[id], on = mut(q);
+    ctx.fillStyle = on ? BRANCHES[MUTATIONS[id].branch].dark : '#8b8b8b';
+    const my = y1 + 22;
+    ctx.fillRect(x1 + 9, y1 + 18, 1, my - y1 - 18);
+    ctx.fillRect(Math.min(x1, x2) + 9, my, Math.abs(x2 - x1) + 1, 1);
+    ctx.fillRect(x2 + 9, my, 1, y2 - my);
+  }
+  ctx.imageSmoothingEnabled = false;
+  for (const id in MUTATIONS) {
+    const [x, y] = pos[id], st = mutState(id), B = BRANCHES[MUTATIONS[id].branch], sel = U.mut === id;
+    mcSlot(x, y, 18, st === 'own' ? B.col : st === 'open' ? '#b8b8b8' : '#6a6a6a');
+    ctx.globalAlpha = st === 'lock' ? 0.35 : 1;
+    ctx.drawImage(icons['m:' + id], x + 3, y + 3);
+    ctx.globalAlpha = 1;
+    if (sel) { ctx.fillStyle = '#ffffff'; ctx.fillRect(x - 1, y - 1, 20, 1); ctx.fillRect(x - 1, y + 18, 20, 1); ctx.fillRect(x - 1, y, 1, 18); ctx.fillRect(x + 18, y, 1, 18); }
+    hit(x, y, 18, 18, () => { U.mut = id; sfx.ui(); });
+  }
+  // la mutation choisie
+  const M = MUTATIONS[U.mut], st = mutState(U.mut), y = py + 100;
+  ctx.fillStyle = '#000000'; ctx.fillRect(px + 6, y - 2, PW - 12, PH - (y - py) - 4);
+  ctx.fillStyle = '#1a1a24'; ctx.fillRect(px + 7, y - 1, PW - 14, PH - (y - py) - 6);
+  drawText(ctx, M.name, px + 10, y + 2, BRANCHES[M.branch].col);
+  drawText(ctx, st === 'own' ? 'ACQUISE' : st === 'open' ? 'DISPONIBLE' : 'DEMANDE ' + M.req.map((q) => MUTATIONS[q].name).join(' OU '), px + 10, y + 10, st === 'own' ? '#7ee08a' : st === 'open' ? '#8fb4ff' : '#ff7a7a');
+  M.desc.forEach((d, i) => drawText(ctx, d, px + 10, y + 19 + i * 7, '#aaaaaa'));
+  drawText(ctx, M.look ? 'SE VOIT SUR LUI' : 'INVISIBLE', px + 10, y + 35, M.look ? '#c9a0ff' : '#6a6a6a');
+  if (player.pendingLv > 0) mcButton(px + PW - 76, y + 31, 68, 13, 'CHOISIR (' + player.pendingLv + ')', true, () => { invUI = null; openMutChoice(); });
 }
 
-// --- commandes des écrans : toucher, clavier, manette
+// --- commandes des écrans
 function overlayTap(x, y) {
   for (let i = uiHits.length - 1; i >= 0; i--) {
     const h = uiHits[i];
@@ -3228,8 +3364,61 @@ function overlayTap(x, y) {
   }
   return false;
 }
-// Une direction (dx, dy), « valider » (ok), « retour » (back), onglet (tab : -1 / +1).
-function overlayNav(dx, dy, ok, back, tab) {
+// Doigt ou souris posé. `right` : clic droit, `shift` : Maj enfoncée.
+function overlayDown(x, y, right = false, shift = false) {
+  const U = invUI;
+  if (!U) { overlayTap(x, y); return; }
+  U.pointer = true; U.px = x; U.py = y;
+  const ref = slotAtPoint(x, y);
+  if (!ref) {
+    if (overlayTap(x, y)) return;
+    const px = Math.round(VW / 2 - PW / 2), py = Math.round(VH / 2 - PH / 2 + 7);
+    if (U.cursor && (x < px || x > px + PW || y < py - 14 || y > py + PH)) dropCursor(); // hors du panneau : il tombe
+    return;
+  }
+  if (right) { slotClick(ref, true); return; }
+  if (shift) { quickMove(ref); return; }
+  U.press = { ref, x, y, t: rt(), moved: false };
+}
+function overlayMove(x, y) {
+  const U = invUI;
+  if (!U) return;
+  U.pointer = true; U.px = x; U.py = y;
+  const P = U.press;
+  if (P && !P.moved && Math.hypot(x - P.x, y - P.y) > 4) {
+    // ça glisse : il prend la pile (s'il n'a rien en main) et la promène sous le doigt
+    P.moved = true;
+    if (!U.cursor && cget(P.ref.c, P.ref.k)) { slotClick(P.ref); U.drag = P.ref; }
+  }
+}
+function overlayUp(x, y) {
+  const U = invUI;
+  if (!U || !U.press) return;
+  const P = U.press;
+  U.press = null;
+  if (U.drag) {
+    const from = U.drag;
+    U.drag = false;
+    const ref = slotAtPoint(x, y);
+    const px = Math.round(VW / 2 - PW / 2), py = Math.round(VH / 2 - PH / 2 + 7);
+    if (ref) {
+      slotClick(ref);
+      if (U.cursor && !cget(from.c, from.k)) slotClick(from); // échange : l'autre objet prend sa place
+    } else if (x < px || x > px + PW || y < py - 14 || y > py + PH) dropCursor();
+    else slotClick(from); // relâché à côté : il retourne à sa place
+    return;
+  }
+  if (P.moved) return;
+  // un simple toucher (appui long = la moitié ; double-toucher = de l'autre côté)
+  const L = U.lastTap, dbl = L && L.ref.c === P.ref.c && L.ref.k === P.ref.k && rt() - L.t < 0.35;
+  if (dbl && U.cursor && !cget(P.ref.c, P.ref.k)) { slotClick(P.ref); quickMove(P.ref); U.lastTap = null; return; }
+  slotClick(P.ref, rt() - P.t > 0.45);
+  U.lastTap = { ref: P.ref, t: rt() };
+  U.tipRef = P.ref; U.tipT = 2;
+}
+// Clavier / manette : direction (vise la case voisine la plus proche), valider, retour, onglet,
+// `alt` (clic droit), `move` (vers l'autre côté).
+function overlayNav(dx, dy, ok, back, tab, alt = false, move = false) {
   if (baking) return;
   if (mutChoice) {
     const n = mutChoice.opts.length;
@@ -3239,36 +3428,41 @@ function overlayNav(dx, dy, ok, back, tab) {
   }
   const U = invUI;
   if (!U) return;
+  if (dx || dy || ok || alt || move) U.pointer = false;
   if (back) { closeInv(); return; }
-  if (tab) { U.tab = (U.tab + tab + 4) % 4; U.cur = 0; U.pick = -1; sfx.ui(); return; }
-  if (U.tab === 0) {
-    const { count } = bagSlots();
-    if (dx || dy) { U.cur = (U.cur + dx + dy * 9 + count) % count; }
-    if (ok) bagAction(U.cur);
-  } else if (U.tab === 1) {
-    const cols = treeCols();
-    if (dx) { U.col = (U.col + dx + 3) % 3; U.row = Math.min(U.row, cols[U.col].length - 1); }
-    if (dy) U.row = (U.row + dy + cols[U.col].length) % cols[U.col].length;
-    if (ok && player.pendingLv > 0) { invUI = null; openMutChoice(); }
-  } else if (U.tab === 2) {
-    if (dx) U.slot = (U.slot + dx + 3) % 3;
-    if (dy && player.alters.length) U.cur = (U.cur + dy + player.alters.length) % player.alters.length;
-    if (ok && player.alters.length) toggleAlter(player.alters[U.cur]);
-  } else {
-    if (dy) U.cur = (U.cur + dy + RECIPES.length) % RECIPES.length;
-    if (ok) craft(RECIPES[U.cur]);
+  if (tab) { U.tab = (U.tab + tab + 3) % 3; U.sel = 0; U.tipT = 0; sfx.ui(); return; }
+  if (dx || dy) {
+    const cur = uiItems[U.sel];
+    if (!cur) { U.sel = 0; return; }
+    const cx = cur.x + cur.w / 2, cy = cur.y + cur.h / 2;
+    let best = -1, bd = 1e9;
+    uiItems.forEach((it, i) => {
+      const ix = it.x + it.w / 2 - cx, iy = it.y + it.h / 2 - cy;
+      const along = ix * dx + iy * dy, side = Math.abs(ix * dy - iy * dx);
+      if (along <= 2) return;
+      const d = along + side * 2.5;
+      if (d < bd) { bd = d; best = i; }
+    });
+    if (best >= 0) U.sel = best;
+    return;
   }
+  const it = uiItems[U.sel];
+  if (!it) return;
+  if (it.slot) { if (move) quickMove(it.slot); else if (ok || alt) slotClick(it.slot, alt); }
+  else if (ok) it.fn();
 }
 function overlayKey(e) {
   const c = e.code;
   const dx = c === 'ArrowLeft' || c === 'KeyA' || c === 'KeyQ' ? -1 : c === 'ArrowRight' || c === 'KeyD' ? 1 : 0;
   const dy = c === 'ArrowUp' || c === 'KeyW' || c === 'KeyZ' ? -1 : c === 'ArrowDown' || c === 'KeyS' ? 1 : 0;
-  const ok = c === 'Enter' || c === 'Space' || c === 'KeyJ';
+  const ok = (c === 'Enter' || c === 'Space' || c === 'KeyJ') && !e.shiftKey;
+  const move = (c === 'Enter' || c === 'Space') && e.shiftKey;
+  const alt = c === 'KeyX' || c === 'KeyK';
   const back = c === 'Escape' || c === 'KeyI';
   const tab = c === 'Tab' ? (e.shiftKey ? -1 : 1) : 0;
   if (mutChoice && /^Digit[1-3]$/.test(c) && +c[5] <= mutChoice.opts.length) { chooseMutation(+c[5] - 1); return; }
-  if (invUI && /^Digit[1-4]$/.test(c)) { invUI.tab = +c[5] - 1; invUI.cur = 0; invUI.pick = -1; sfx.ui(); return; }
-  overlayNav(dx, dy, ok, back, tab);
+  if (invUI && /^Digit[1-3]$/.test(c)) { invUI.tab = +c[5] - 1; invUI.sel = 0; sfx.ui(); return; }
+  overlayNav(dx, dy, ok, back, tab, alt, move);
 }
 let padRepeat = 0;
 function overlayPad(dt) {
@@ -3277,42 +3471,56 @@ function overlayPad(dt) {
   padRepeat -= dt;
   const dx = Math.abs(pad.x) > 0.5 ? Math.sign(pad.x) : 0, dy = Math.abs(pad.y) > 0.5 ? Math.sign(pad.y) : 0;
   let mx = 0, my = 0;
-  if ((dx || dy) && padRepeat <= 0) { mx = dy ? 0 : dx; my = dy; padRepeat = 0.2; }
+  if ((dx || dy) && padRepeat <= 0) { mx = Math.abs(pad.x) > Math.abs(pad.y) ? dx : 0; my = mx ? 0 : dy; padRepeat = 0.18; }
   if (!dx && !dy) padRepeat = 0;
   const P = pad.pressed;
-  overlayNav(mx, my, P[0], P[1] || P[9], P[4] ? -1 : P[5] ? 1 : 0);
+  // A valider, B fermer, X la moitié / un seul, Y vers l'autre côté, L1/R1 onglets
+  overlayNav(mx, my, P[0], P[1] || P[9], P[4] ? -1 : P[5] ? 1 : 0, P[2], P[3]);
 }
 
-// --- barre d'objets (en bas au milieu, en haut en portrait pour laisser la place aux boutons)
+// --- barre d'objets façon Minecraft (en bas au milieu, en haut en portrait)
+const HB = 18; // pas d'une case
+let hbName = { sel: -1, t: 0 }; // le nom de l'objet choisi s'affiche un instant au-dessus de la barre
 const hotbarBox = () => {
-  const w = 9 * 15 + 2, x = Math.round(VW / 2 - w / 2);
-  return { x, y: VW < VH ? 56 + safe.t : VH - 18 - safe.b, w };
+  const w = 9 * HB + 4, x = Math.round(VW / 2 - w / 2);
+  return { x, y: VW < VH ? 54 + safe.t : VH - HB - 6 - safe.b, w };
 };
 function drawHotbar() {
-  const { x, y } = hotbarBox();
+  const { x, y, w } = hotbarBox();
+  ctx.fillStyle = '#000000'; ctx.fillRect(x, y, w, HB + 4);
+  ctx.fillStyle = 'rgba(40,40,40,0.85)'; ctx.fillRect(x + 1, y + 1, w - 2, HB + 2);
   for (let i = 0; i < 9; i++) {
-    const s = player.inv[i], sx = x + i * 15, on = i === player.sel;
-    frame9(sx, y, 14, 14, on ? 'rgba(42,36,64,0.9)' : 'rgba(10,12,20,0.7)', on ? '#ffe28a' : '#2e3450');
-    if (s) {
-      ctx.drawImage(icons[s.id], sx + 1, y + 1);
-      if (s.n > 1) { const t = String(s.n); drawText(ctx, t, sx + 14 - textWidth(t), y + 9, '#ffffff'); }
-    }
+    const sx = x + 2 + i * HB;
+    ctx.fillStyle = '#5a5a5a'; ctx.fillRect(sx, y + 2, HB, 1); ctx.fillRect(sx, y + 2, 1, HB);
+    ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.fillRect(sx + 1, y + 3, HB - 1, HB - 1);
+    drawStack(player.inv[i], sx, y + 2);
   }
-  const s = player.inv[player.sel];
+  // le cadre de la case choisie, épais et blanc
+  const sx = x + 2 + player.sel * HB - 2;
+  ctx.fillStyle = '#000000'; ctx.fillRect(sx - 1, y - 1, HB + 6, HB + 6);
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(sx, y, HB + 4, HB + 4);
+  ctx.fillStyle = '#9a9a9a'; ctx.fillRect(sx + 1, y + 1, HB + 2, HB + 2);
+  ctx.fillStyle = 'rgba(40,40,40,0.95)'; ctx.fillRect(sx + 2, y + 2, HB, HB);
+  drawStack(player.inv[player.sel], sx + 2, y + 2);
+  if (hbName.sel !== player.sel) hbName = { sel: player.sel, t: 2.2 };
+  hbName.t -= 1 / 60;
+  const s = player.inv[player.sel], ty = VW < VH ? y + HB + 8 : y - 9;
   if (toast) {
     ctx.globalAlpha = Math.min(1, toast.t);
-    const t = '+' + toast.n + ' ' + ITEMS[toast.id].name;
-    textC(t, VW / 2, VW < VH ? y + 17 : y - 8, '#7ee08a');
+    textC('+' + toast.n + ' ' + ITEMS[toast.id].name, VW / 2, ty, '#7ee08a');
     ctx.globalAlpha = 1;
-  } else if (s && ITEMS[s.id].kind === 'place') textC('POSER : ' + useKey(), VW / 2, VW < VH ? y + 17 : y - 8, '#ffe28a');
-  else if (s && ITEMS[s.id].kind === 'food') textC('MANGER : ' + useKey(), VW / 2, VW < VH ? y + 17 : y - 8, '#ffb870');
+  } else if (s && hbName.t > 0) {
+    ctx.globalAlpha = Math.min(1, hbName.t);
+    textC(ITEMS[s.id].name + (ITEMS[s.id].kind === 'place' ? ' - POSER : ' + useKey() : ITEMS[s.id].kind === 'food' ? ' - MANGER : ' + useKey() : ''), VW / 2, ty, '#ffffff');
+    ctx.globalAlpha = 1;
+  }
 }
-const useKey = () => ({ touch: 'TOUCHE LA CASE', keys: 'T', pad: 'CROIX HAUT' }[inputMode]);
+const useKey = () => ({ touch: 'RETOUCHE', keys: 'T', pad: 'CROIX HAUT' }[inputMode]);
 // Toucher la barre : une case = la choisir, la case déjà choisie = l'utiliser.
 function hotbarTap(x, y) {
   const b = hotbarBox();
-  if (y < b.y || y > b.y + 14 || x < b.x || x > b.x + b.w) return false;
-  const i = Math.min(8, Math.floor((x - b.x) / 15));
+  if (y < b.y - 2 || y > b.y + HB + 6 || x < b.x || x > b.x + b.w) return false;
+  const i = Math.max(0, Math.min(8, Math.floor((x - b.x - 2) / HB)));
   if (i === player.sel) useItem(); else { player.sel = i; sfx.ui(); }
   return true;
 }
@@ -4963,7 +5171,7 @@ function drawHUD() {
   drawSprintBar(x0, y0 + 17);
   drawHpBar(x0, y0 + 26);
   drawHungerBar(x0, y0 + 35);
-  if (player.equip.length) drawText(ctx, 'ALTERS: ' + player.equip.map((a) => ALTERS[a].name + (player.alterLv[a] > 1 ? ' ' + player.alterLv[a] : '')).join(' '), x0, y0 + 44, '#c9a0ff');
+  if (player.equip.some(Boolean)) drawText(ctx, 'ALTERS: ' + player.equip.filter(Boolean).map((a) => ALTERS[a].name + (player.alterLv[a] > 1 ? ' ' + player.alterLv[a] : '')).join(' '), x0, y0 + 44, '#c9a0ff');
   drawHotbar();
   drawBagButton();
   drawScent();
