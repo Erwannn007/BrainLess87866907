@@ -13,7 +13,7 @@ s'installe sur l'écran d'accueil (PWA, marche hors-ligne).
 - **iPhone** : ouvrir l'URL GitHub Pages dans Safari → Partager → *Sur l'écran d'accueil*.
 - Pouce gauche : joystick pour marcher (debout).
 - **>> SPRINT** (maintenir) : galop de bête à quatre pattes qui pulvérise arbres et rochers, fait trembler l'écran et vide la barre de sprint.
-- **A COUP** : tapoter = enchaînement de boxeur (direct gauche, direct droit, crochet). Maintenir = il se met en position et arme un gros coup qui souffle tout devant lui au relâchement ; pendant la charge, le joystick le fait pivoter sur place pour viser (un cône en pointillés montre la zone touchée). **^ SAUT** : saut (permet de grimper une marche de plus).
+- **A COUP** : tapoter = trois frappes en diagonale (gauche, droite, montante) ; continuer à spammer = **rafale**, une nuée de poings qui balaie tout devant et sur les côtés. Maintenir = il se met en position et arme un gros coup qui souffle tout devant lui au relâchement ; pendant la charge, le joystick le fait pivoter sur place pour viser (un cône en pointillés montre la zone touchée). **^ SAUT** : saut (permet de grimper une marche de plus).
 - **B CHARGE** (maintenir) : il se met sur les coudes et gonfle ; au relâchement il lève les bras et frappe le sol. Plus la charge est longue, plus la zone détruite est grande.
 - Les boutons se combinent en glissant : pars de SPRINT et glisse sur SAUT ou COUP, il saute ou frappe sans arrêter de sprinter.
 - Demi-tour en plein sprint : il dérape et laisse des traces ; lâcher le sprint en pleine course : il freine.

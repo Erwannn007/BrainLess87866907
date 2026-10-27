@@ -766,14 +766,18 @@ function healGround(dt) {
 }
 
 // Enchaînement de boxeur : direct gauche, direct droit, crochet, et ça recommence.
-const JABS = ['jabL', 'jabR', 'hook'];
-const HIT_AT = { jabL: 0.44, jabR: 0.44, hook: 0.44, bigpunch: 0.22, slam: 0.44, sniff: 0.6, eat: 9, hurt: 9 };
+// Enchaînement : 3 frappes en diagonale (gauche, droite, montante), puis si on continue de
+// spammer, la rafale (`rush`) en boucle tant que les coups arrivent.
+const JABS = ['jabL', 'jabR', 'hook', 'rush'];
+const HIT_AT = { jabL: 0.44, jabR: 0.44, hook: 0.44, rush: 0.5, bigpunch: 0.22, slam: 0.44, sniff: 0.6, eat: 9, hurt: 9 };
 let hitstop = 0; // arrêt sur image après un gros impact
 const CHOMPS = [0.22, 0.35, 0.48, 0.61, 0.74]; // bouchées pendant qu'il dévore
 
 function startJab() {
   if (!JABS.includes(player.action) && time - player.lastPunch > 0.45) player.combo = 0; // trop lent : on repart du direct gauche
-  const a = JABS[player.combo % JABS.length];
+  // la rafale ne part que si on spamme vraiment : appui pendant le coup précédent ou juste après
+  if (player.combo >= 3 && !JABS.includes(player.action) && time - player.lastPunch > 0.15) player.combo = 0;
+  const a = JABS[Math.min(player.combo, 3)];
   player.combo++;
   player.punchBuf = false;
   startAction(a);
@@ -802,6 +806,44 @@ function doPunchHit(strong) {
   const gz = player.z;
   if (best) { damage(best[0], best[1], Math.round((strong ? 2 : 1) * strength())); shake = Math.max(shake, strong ? 2.5 : 1.5); }
   else { burst(hx, hy, gz + 18, ['#ffffff', '#d8e0f0'], 5, { up: 10, g: 0, life: 0.25, speed: 1.2 }); sfx.punchAir(); }
+}
+
+// Rafale : chaque salve balaie un très large éventail (±110°, 1.7 tuile : les bras vont jusque
+// sur les côtés, et il avance à chaque salve) et touche tout ce qui s'y trouve, gens comme décor.
+// Des traînées blanches partent en éventail.
+const RUSH_R = 1.7, RUSH_COS = -0.34;
+function doRushHit() {
+  const [dx, dy] = dirWorld(player.dir);
+  const inFan = (x, y) => {
+    const rx = x - player.x, ry = y - player.y, d = Math.hypot(rx, ry);
+    return d < RUSH_R && (d < 0.4 || (rx * dx + ry * dy) / d > RUSH_COS);
+  };
+  let hit = false;
+  for (const n of npcs) {
+    if (n.inside || !alive(n) || !inFan(n.x, n.y)) continue;
+    const rx = n.x - player.x, ry = n.y - player.y, d = Math.hypot(rx, ry) || 1;
+    hitNpc(n, strength(), rx / d, ry / d, 0.12);
+    hit = true;
+  }
+  for (let ty = Math.floor(player.y) - 2; ty <= Math.floor(player.y) + 2; ty++) {
+    for (let tx = Math.floor(player.x) - 2; tx <= Math.floor(player.x) + 2; tx++) {
+      const info = OBJ_INFO[world.objAt(tx, ty)];
+      if (!info || info.part || info.building || !inFan(tx + 0.5, ty + 0.5)) continue;
+      damage(tx, ty, info.small ? 1 : Math.max(1, Math.round(strength())));
+      if (!info.small) hit = true;
+    }
+  }
+  shake = Math.max(shake, hit ? 2.2 : 1.2);
+  const base = Math.atan2(dy, dx);
+  for (let i = 0; i < 14; i++) {
+    const a = base + (Math.random() * 2 - 1) * 1.2, sp = 5 + Math.random() * 4;
+    particles.push({
+      x: player.x + Math.cos(a) * 0.4, y: player.y + Math.sin(a) * 0.4, z: player.z + 14 + Math.random() * 14,
+      vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, vz: (Math.random() - 0.5) * 8, g: 0, drag: 2,
+      life: 0.15 + Math.random() * 0.15, col: Math.random() < 0.7 ? '#ffffff' : '#d8ecff', size: 1, streak: true,
+    });
+  }
+  if (!hit) sfx.punchAir();
 }
 
 // En sprint, Brainless pulvérise tout ce qui se trouve devant lui.
@@ -1112,7 +1154,8 @@ function update(dt) {
       const hitAt = HIT_AT[act] ?? 0.4;
       if (act === 'eat') for (const c of CHOMPS) if (prev < c && player.actionT >= c) chomp();
       if (prev < hitAt && player.actionT >= hitAt) {
-        if (JABS.includes(act)) doPunchHit(act === 'hook');
+        if (act === 'rush') doRushHit();
+        else if (JABS.includes(act)) doPunchHit(act === 'hook');
         else if (act === 'sniff') doSniff();
         else if (act === 'eat' || act === 'hurt') { /* rien à frapper */ }
         else if (act === 'bigpunch') doBigPunch(player.punchPower);
@@ -2356,7 +2399,8 @@ function doSniff() {
 }
 
 function startAction(a) {
-  if (JABS.includes(a)) sfx.jab(a === 'hook');
+  if (a === 'rush') sfx.rush();
+  else if (JABS.includes(a)) sfx.jab(a === 'hook');
   player.action = a;
   player.actionT = 0;
   player.anim = a;
@@ -2707,7 +2751,15 @@ function drawPlayer(ox, oy, withShadow) {
     img = nomu.jump[player.dir][Math.floor(u * ANIMS.jump.frames)];
   } else if (player.action) {
     const A = ANIMS[player.action];
-    img = nomu[player.action][player.dir][Math.min(A.frames - 1, Math.floor(player.actionT * A.frames))];
+    const f = Math.min(A.frames - 1, Math.floor(player.actionT * A.frames));
+    img = nomu[player.action][player.dir][f];
+    if (player.action === 'rush' && withShadow && !player.water) {
+      // image rémanente : la frame d'en face, en transparence, double la nuée de poings
+      const ghost = nomu.rush[player.dir][(f + 3) % A.frames];
+      ctx.globalAlpha = 0.35;
+      draw(ghost, sx - ghost.ox, sy - gz - jz - ghost.oy);
+      ctx.globalAlpha = 1;
+    }
   } else {
     const A = ANIMS[player.anim];
     img = nomu[player.anim][player.dir][Math.floor(player.t) % A.frames];
@@ -3152,7 +3204,7 @@ function updateMenu(dt) {
   if (location.hash === '#debug') {
     window.BRAINLESS = { get world() { return world; }, player, startWorld, createWorld, listWorlds, quitToMenu, get mode() { return mode; }, stats, O, T, decals, particles, npcs, damage, hurtPlayer,
       vstate, crime, killNpc, hitNpc, nearestPrey, get scent() { return scent; },
-      get tod() { return tod; }, set tod(v) { tod = v; }, weather, spawnBeast, gainEvo, has, pages, blockedFor, freeSpot, OBJ_INFO, overlapping, crackTile, craterTile, doSlam, doBigPunch };
+      get tod() { return tod; }, set tod(v) { tod = v; }, weather, spawnBeast, gainEvo, has, pages, blockedFor, freeSpot, OBJ_INFO, overlapping, crackTile, craterTile, doSlam, doBigPunch, doRushHit };
   }
   await loadAssets();
   loading.style.display = 'none';

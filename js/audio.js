@@ -240,6 +240,12 @@ export const sfx = {
     noise({ f, f2: f * 3, q: 1.6, gain: hook ? 0.3 : 0.22, a: 0.03, dec: hook ? 0.15 : 0.1 });
     tone({ f: hook ? 130 : 160, f2: 110, type: 'sawtooth', gain: 0.05, dec: 0.08, lp: 600 }); // souffle du boxeur
   },
+  rush() {
+    // rafale : trois souffles très courts qui se chevauchent, un claquement sourd
+    if (!ready() || !gate('rush', 0.05)) return;
+    for (let i = 0; i < 3; i++) noise({ f: rnd(900, 1400), f2: rnd(2500, 3500), q: 1.4, gain: 0.16, a: 0.01, dec: 0.05, delay: i * 0.06 });
+    tone({ f: 120, f2: 70, gain: 0.12, dec: 0.07, delay: 0.04 });
+  },
   bigPunch(power) {
     if (!ready()) return;
     noise({ f: 300, f2: 3000, q: 1, gain: 0.5, a: 0.05, dec: 0.15 }); // le bras fend l'air

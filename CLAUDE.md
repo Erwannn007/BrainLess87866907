@@ -100,7 +100,10 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
   les 8 directions au chargement. Rien d'autre à brancher pour le rendu.
 - **Esprit des mouvements** : une **bête**, organique et sauvage, jamais robotique.
   - Grandes amplitudes, le poids qui bascule, les hanches qui tournent.
-  - Bras qui vont loin (galop étiré/ramassé, swings de l'extérieur vers l'intérieur).
+  - Bras qui vont loin (galop étiré/ramassé, frappes en diagonale qui traversent tout le corps).
+  - Coups (`jabL jabR hook`) : diagonales violentes, de haut-dehors à bas-dedans puis une montante ;
+    en spammant, la rafale `rush` : bras fantômes (`P.ghosts`, rampe `GHOST`, avant-bras + poing
+    seulement) en éventail, image rémanente en jeu, coup dans un éventail de ±110° (`doRushHit`).
   - Gueule qui s'ouvre (`jaw`) à l'effort.
   - Marche debout ; sprint à quatre pattes.
 
