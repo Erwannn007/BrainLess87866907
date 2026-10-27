@@ -102,8 +102,10 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
   - Grandes amplitudes, le poids qui bascule, les hanches qui tournent.
   - Bras qui vont loin (galop étiré/ramassé, frappes en diagonale qui traversent tout le corps).
   - Coups (`jabL jabR hook`) : diagonales violentes, de haut-dehors à bas-dedans puis une montante ;
-    en spammant, la rafale `rush` : bras fantômes (`P.ghosts`, rampe `GHOST`, avant-bras + poing
-    seulement) en éventail, image rémanente en jeu, coup dans un éventail de ±110° (`doRushHit`).
+    en spammant, la rafale `rush` : voûté (buste basculé, tête rentrée), bras fantômes (`P.ghosts`,
+    rampe `GHOST`, avant-bras + poing seulement, jamais vers le sol) en éventail + un armé au-dessus
+    de l'épaule, image rémanente en jeu, coup dans un éventail de ±110° (`doRushHit`). Effets :
+    arcs de choc, éclairs d'impact (`spark`), poussière, vent — mais le sol n'est jamais abîmé.
   - Gueule qui s'ouvre (`jaw`) à l'effort.
   - Marche debout ; sprint à quatre pattes.
 

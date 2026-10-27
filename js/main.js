@@ -834,6 +834,15 @@ function doRushHit() {
     }
   }
   shake = Math.max(shake, hit ? 2.2 : 1.2);
+  // puissance et vitesse, sans abîmer le sol : arcs de choc en éventail, éclairs d'impact au bout
+  // des poings, poussière soufflée au ras du sol, l'herbe et les arbres plient sous le vent
+  fx.push({ kind: 'cone', x: player.x + dx * 0.4, y: player.y + dy * 0.4, z: player.z + 20, dx, dy, half: 1.5, r: 0.9, t: 0 });
+  for (let i = 0; i < 3; i++) {
+    const a = Math.atan2(dy, dx) + (Math.random() * 2 - 1) * 1.4, d = 0.7 + Math.random() * 0.7;
+    fx.push({ kind: 'spark', x: player.x + Math.cos(a) * d, y: player.y + Math.sin(a) * d, z: player.z + 18 + Math.random() * 12, t: -i * 0.04 });
+  }
+  burst(player.x + dx * 0.6, player.y + dy * 0.6, player.z, DUST_COLS, 6, { up: 8, speed: 2.6, g: 60, life: 0.5, spread: 1 });
+  windT = Math.max(windT, 0.5);
   const base = Math.atan2(dy, dx);
   for (let i = 0; i < 14; i++) {
     const a = base + (Math.random() * 2 - 1) * 1.2, sp = 5 + Math.random() * 4;
@@ -1260,7 +1269,7 @@ function update(dt) {
       burst(ex, ey, f.gz, DUST_COLS, 14, { up: 25, speed: 2 });
       shake = Math.max(shake, 3);
     }
-    if ((f.kind === 'collapse' && f.t > 0.7) || (f.kind === 'bolt' && f.t > 0.3) || (f.kind === 'mark' && f.t > 8) || (f.kind === 'ring' && f.t > 0.6) || (f.kind === 'fall' && f.t > 0.95) || (f.kind === 'ripple' && f.t > 1.1) || (f.kind === 'cone' && f.t > 0.5)) fx.splice(i, 1);
+    if ((f.kind === 'collapse' && f.t > 0.7) || (f.kind === 'bolt' && f.t > 0.3) || (f.kind === 'mark' && f.t > 8) || (f.kind === 'ring' && f.t > 0.6) || (f.kind === 'fall' && f.t > 0.95) || (f.kind === 'ripple' && f.t > 1.1) || (f.kind === 'cone' && f.t > 0.5) || (f.kind === 'spark' && f.t > 0.14)) fx.splice(i, 1);
   }
 }
 
@@ -2892,6 +2901,20 @@ function drawFx(f, ox, oy) {
       ctx.fillRect(Math.round(sx + Math.cos(a) * r), Math.round(sy + Math.sin(a) * r * 0.5), 2, 1);
     }
     ctx.globalAlpha = 1;
+    return;
+  }
+  if (f.kind === 'spark') {
+    // éclair d'impact d'un poing de la rafale : une étoile blanche à cœur, branches dorées
+    if (f.t < 0) return;
+    const sx = Math.round(ox + isoX(f.x, f.y)), sy = Math.round(oy + isoY(f.x, f.y) - f.z);
+    const k = f.t < 0.06 ? 3 : 2;
+    ctx.fillStyle = '#ffe28a';
+    ctx.fillRect(sx - k, sy, k * 2 + 1, 1);
+    ctx.fillRect(sx, sy - k, 1, k * 2 + 1);
+    if (f.t < 0.06) { ctx.fillRect(sx - 1, sy - 1, 1, 1); ctx.fillRect(sx + 1, sy - 1, 1, 1); ctx.fillRect(sx - 1, sy + 1, 1, 1); ctx.fillRect(sx + 1, sy + 1, 1, 1); }
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(sx - 1, sy, 3, 1);
+    ctx.fillRect(sx, sy - 1, 1, 3);
     return;
   }
   if (f.kind === 'ring') {

@@ -330,22 +330,27 @@ export function poseFor(anim, t) {
     ], t);
   }
   if (anim === 'rush') {
-    // Rafale : penché en avant, il mitraille en éventail. Les deux vrais bras frappent en
-    // alternance, et des bras fantômes (déjà partis ou pas encore revenus) remplissent l'éventail
-    // pour donner la vitesse. Chaque frame montre l'éventail à un autre moment.
+    // Rafale : voûté, le buste basculé en avant et la tête rentrée, il mitraille en éventail.
+    // Les deux vrais bras frappent en alternance ; des bras fantômes (déjà partis ou pas encore
+    // revenus) remplissent l'éventail, et un autre est armé au-dessus de l'épaule. Les poings
+    // restent à hauteur de poitrine ou au-dessus : aucun ne pique vers le sol.
     const p = basePose();
-    const fist = (a, k) => [Math.sin(a) * 22, 9 + Math.cos(a) * 16 + k * 2, 28 + Math.cos(a * 1.6 + k) * 8];
+    const fist = (a, k) => [Math.sin(a) * 22, 9 + Math.cos(a) * 16 + k * 2, 34 + Math.max(0, Math.cos(a * 1.6 + k)) * 6 + Math.abs(Math.sin(a)) * 3];
     const ph = t * Math.PI * 2;
     const aL = -0.2 - Math.abs(Math.sin(ph)) * 1.0, aR = 0.2 + Math.abs(Math.cos(ph)) * 1.0;
     p.hL = fist(aL, 1); p.hR = fist(aR, 1);
-    p.fL = [-5, 5, 0]; p.fR = [5, -4, 0];
-    p.crouch = 3.5; p.lean = 4.5 + Math.sin(ph * 2) * 0.6; p.jaw = 1.3 + Math.sin(ph * 3) * 0.2;
+    p.fL = [-5.5, 5, 0]; p.fR = [5.5, -4, 0];
+    p.crouch = 4.5; p.lean = 5.5 + Math.sin(ph * 2) * 0.6; p.pitch = 0.28; p.headUp = -1.5;
+    p.jaw = 1.3 + Math.sin(ph * 3) * 0.2;
     p.twist = Math.sin(ph) * 0.22; p.hipTwist = Math.sin(ph) * 0.1; p.bob = Math.sin(ph * 2) * 0.4;
     p.ghosts = [];
     for (let i = 0; i < 4; i++) {
       const a = -1.3 + ((i + t * 4) % 4) * 0.87; // 4 poings répartis de -75° à +75°, qui tournent
       p.ghosts.push({ side: a < 0 ? -1 : 1, h: fist(a, 0) });
     }
+    // un poing armé au-dessus de l'épaule, prêt à repartir (alterne de côté)
+    const up = Math.floor(t * 6) % 2 ? 1 : -1;
+    p.ghosts.push({ side: up, h: [up * 10, 1, 47] });
     return p;
   }
   if (anim === 'pcharge') {
