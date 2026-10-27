@@ -384,7 +384,7 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
   habitants apparaissent en fondu, et sortent des maisons quand Brainless est assez près pour voir.
 - **Tuer** : la frappe au sol écrase tous ceux qui sont sous lui (`crushed`) ; frapper quelqu'un
   de KO à terre l'achève ; un gros coup chargé à bout portant tue en retombant.
-- Vie de Brainless : 100, super régénération après 3 s sans coup ; à 0 il s'effondre et se
+- Vie de Brainless : 100, super régénération (12 PV/s) après 4 s sans coup ; les héros frappent ×2 (+12 % par niveau de Brainless, champion ×1.5 de plus, `heroMul`) ; à 0 il s'effondre et se
   réveille au départ, et les villages se calment.
 - **Visée du gros coup** : pendant la charge (maintenir COUP), le stick oriente Brainless sans le
   déplacer (`player.aim`, direction continue, le sprite prend la plus proche des 8). Un cône en

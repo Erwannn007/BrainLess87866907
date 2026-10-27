@@ -1457,7 +1457,10 @@ function update(dt) {
 
     // flairer : il s'arrête, lève la tête et renifle l'air
     player.nearCorpse = player.action || player.held ? null : corpseNear();
-    player.interact = player.action || player.held || player.nearCorpse ? null : builtNear();
+    // les mains prises, il peut encore passer une porte (avec un prisonnier dans les bras)
+    const near0 = player.action || player.nearCorpse ? null : builtNear();
+    player.interact = player.held ? (near0 && (near0.enter || near0.exit) ? near0 : null) : near0;
+    if (input.sniff && player.held && player.interact && !player.air) { interact(player.interact); input.sniff = false; }
     if (input.sniff && !player.action && !player.charging && !player.held && !player.air && !player.slide && player.water < 2) {
       player.sprinting = false;
       if (player.nearCorpse) startEat(player.nearCorpse);
@@ -1722,6 +1725,9 @@ function waterNearby() {
 
 // ---------------------------------------------------------------- vie de Brainless
 // opts : { kb : force du recul, lift : il décolle du sol }
+// Ce que vaut un coup de héros : deux fois un coup ordinaire, un peu plus à chaque niveau de Brainless
+// (ils restent une menace même quand il a beaucoup grandi) ; un champion frappe encore moitié plus fort.
+const heroMul = (n) => (n && n.kind === 'hero' ? (2 + 0.12 * (player.level - 1)) * (n.boss ? 1.5 : 1) : 1);
 function hurtPlayer(dmg, fx0, fy0, opts = {}) {
   if (player.dead || player.invuln > 0) return;
   dmg *= [0.6, 1, 1.5][world.p.difficulty] * (has('absorb') ? 0.6 - 0.1 * alterLv('absorb') : 1) * (mut('carapace') ? 0.75 : 1);
@@ -1813,9 +1819,9 @@ function updateHealth(dt) {
     } else if (player.hunger > 20) player.starveMsg = false;
   }
   // Super régénération : quelques secondes sans coup, et ses blessures se referment (pas le ventre vide).
-  if (!player.dead && player.hp < maxHp() && time - player.lastHurt > (mut('brain') ? 1.8 : 3) && player.hunger > 15) {
+  if (!player.dead && player.hp < maxHp() && time - player.lastHurt > (mut('brain') ? 2.5 : 4) && player.hunger > 15) {
     if (!player.regen) { player.regen = true; sfx.regen(); }
-    player.hp = Math.min(maxHp(), player.hp + 22 * (mut('brain') ? 2 : 1) * dt);
+    player.hp = Math.min(maxHp(), player.hp + 12 * (mut('brain') ? 1.8 : 1) * dt);
     if (Math.random() < dt * 10) {
       burst(player.x + (Math.random() - 0.5) * 0.6, player.y + (Math.random() - 0.5) * 0.6, player.z + 6 + Math.random() * 20,
         ['#8f9cff', '#c9d0ff', '#ff8a9a'], 1, { up: 18, g: -10, speed: 0.1, life: 0.8, spread: 0 });
@@ -2216,14 +2222,14 @@ function updateSpecial(n, dt) {
       burst(n.x, n.y, n.z, DUST_COLS, 20, { up: 40, speed: 2.5, life: 0.7 });
       crackTile(Math.floor(n.x), Math.floor(n.y), 2);
       sfx.slam(0.25); shake = Math.max(shake, 4);
-      if (Math.hypot(player.x - n.x, player.y - n.y) < 1.5) hurtPlayer(16, n.x, n.y, { kb: 8, lift: 70 });
+      if (Math.hypot(player.x - n.x, player.y - n.y) < 1.5) hurtPlayer(16 * heroMul(n), n.x, n.y, { kb: 8, lift: 70 });
       n.cd = 2.6;
     }
   } else if (S.kind === 'dash') {
     // TURBO fonce en ligne droite, moteurs à fond
     npcMove(n, S.ux * 11 * dt, S.uy * 11 * dt);
     burst(n.x - S.ux * 0.5, n.y - S.uy * 0.5, n.z + 6, ['#ffb347', '#c9d0e0', '#8a91a0'], 3, { up: 10, speed: 0.4, g: -10, life: 0.4 });
-    if (!S.hit && Math.hypot(player.x - n.x, player.y - n.y) < 0.9) { S.hit = true; hurtPlayer(14, n.x - S.ux, n.y - S.uy, { kb: 9 }); }
+    if (!S.hit && Math.hypot(player.x - n.x, player.y - n.y) < 0.9) { S.hit = true; hurtPlayer(14 * heroMul(n), n.x - S.ux, n.y - S.uy, { kb: 9 }); }
     if (u >= 1) { n.cd = 2.8; n.state = 'hurt'; n.hurtT = 0.6; return false; } // essoufflé après la charge
   } else if (S.kind === 'bolt') {
     // ECLAIR vise, puis la foudre tombe là où était Brainless
@@ -2237,7 +2243,7 @@ function updateSpecial(n, dt) {
       sfx.thunder(0.6); shake = Math.max(shake, 4);
       burst(S.tx, S.ty, groundZ(S.tx, S.ty), ['#fff7a8', '#8fd8ff', '#ffffff'], 16, { up: 50, speed: 2, life: 0.5 });
       crackTile(Math.floor(S.tx), Math.floor(S.ty), 2);
-      if (Math.hypot(player.x - S.tx, player.y - S.ty) < 1.1) hurtPlayer(15, S.tx, S.ty, { kb: 6, lift: 50 });
+      if (Math.hypot(player.x - S.tx, player.y - S.ty) < 1.1) hurtPlayer(15 * heroMul(n), S.tx, S.ty, { kb: 6, lift: 50 });
       n.cd = 2.4;
     }
   } else if (S.kind === 'smash') {
@@ -2247,7 +2253,7 @@ function updateSpecial(n, dt) {
       fx.push({ kind: 'ring', x: n.x, y: n.y, z: n.z, t: 0, r: 1.4 });
       sfx.slam(0.2); shake = Math.max(shake, 4);
       crackTile(Math.floor(n.x), Math.floor(n.y), 1);
-      if (Math.hypot(player.x - n.x, player.y - n.y) < 1.6) hurtPlayer(n.type === 'acier' ? 18 : 15, n.x, n.y, { kb: 9, lift: 60 });
+      if (Math.hypot(player.x - n.x, player.y - n.y) < 1.6) hurtPlayer((n.type === 'acier' ? 18 : 15) * heroMul(n), n.x, n.y, { kb: 9, lift: 60 });
     }
     if (u >= 1) n.cd = 1.8;
   }
@@ -2287,7 +2293,7 @@ function updateCombo(n, dt) {
     if (M.ring) { fx.push({ kind: 'ring', x: n.x + dx / d * 0.6, y: n.y + dy / d * 0.6, z: n.z, t: 0, r: 1.3 }); sfx.slam(0.2); crackTile(Math.floor(n.x + dx / d), Math.floor(n.y + dy / d), 1); }
     if (M.spark) burst(n.x + dx / d * 0.8, n.y + dy / d * 0.8, n.z + 16, ['#fff7a8', '#8fd8ff'], 10, { up: 30, speed: 2, life: 0.35 });
     if (d < M.range) {
-      hurtPlayer(M.dmg, n.x, n.y, { kb: M.kb, lift: M.lift });
+      hurtPlayer(M.dmg * heroMul(n), n.x, n.y, { kb: M.kb, lift: M.lift });
       if (M.kb >= 6) { hitstop = Math.max(hitstop, 0.07); shake = Math.max(shake, 6); }
     } else sfx.punchAir();
   }
@@ -2548,7 +2554,7 @@ function updateNpcs(dt) {
         n.atkT += dt / 0.5;
         if (!n.hitDone && n.atkT >= 0.55) {
           n.hitDone = true;
-          if (Math.hypot(player.x - n.x, player.y - n.y) < 1.35) hurtPlayer(n.boss ? 16 : n.kind === 'hero' ? 10 : 7, n.x, n.y);
+          if (Math.hypot(player.x - n.x, player.y - n.y) < 1.35) hurtPlayer((n.kind === 'hero' ? 10 : 7) * heroMul(n), n.x, n.y);
         }
         if (n.atkT >= 1) { n.state = 'chase'; n.cd = (n.kind === 'hero' ? 0.6 : 0.8) + Math.random() * 0.6; }
         break;
@@ -4132,7 +4138,7 @@ function realmDoors(mag) {
   }
   const b = player.interact;
   if (doorLock) { if (!b || mag < 0.2) doorLock = false; return; }
-  if (!b || !b.enter || mag < 0.3 || player.held || player.action) return;
+  if (!b || !b.enter || mag < 0.3 || player.action) return;
   const [nx, ny] = b.door, rx = player.x - b.tx, ry = player.y - b.ty;
   const along = rx * nx + ry * ny, side = Math.abs(rx * ny - ry * nx), [fx0, fy0] = dirWorld(player.dir);
   if (along > 0.4 && along < 1.6 && side < 0.75 && fx0 * nx + fy0 * ny < -0.6) enterBuilding(b);
@@ -5406,7 +5412,7 @@ function updateHeldNpc(n, dt) {
   Object.assign(n, { x: player.x + dx * 0.7, y: player.y + dy * 0.7, z: groundZ(player.x, player.y), air: true, jz: 18, vz: 60, vx: dx * 2.5, vy: dy * 2.5, state: 'hurt', hurtT: 0.6 });
   if (n.kind === 'hero') showMsg(PEOPLE[n.type].name + ' SE DEGAGE', 1.5);
   sfx.clank();
-  hurtPlayer(n.kind === 'hero' ? 9 : 5, n.x, n.y, { kb: n.kind === 'hero' ? 6 : 3 });
+  hurtPlayer((n.kind === 'hero' ? 9 : 5) * heroMul(n), n.x, n.y, { kb: n.kind === 'hero' ? 6 : 3 });
 }
 
 // Trajectoire d'un projectile (objet ou habitant lancé) sur une image, découpée en petits pas
