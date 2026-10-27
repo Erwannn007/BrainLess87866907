@@ -5,7 +5,6 @@ import { renderNomu, ANIMS, holdPoint, sizeOf } from './nomu.js';
 import { MUTATIONS, BRANCHES, draw3, looks } from './mutations.js';
 import { ITEMS, RECIPES, DROPS, STACK, TOOLS, buildIcons, buildMutIcons } from './items.js';
 import { renderBeast, BEASTS, BEAST_ANIMS, BEAST_MEAL } from './beasts.js';
-import { valueNoise } from './noise.js';
 import * as SP from './sprites.js';
 import { hash, makeBuffer } from './raster.js';
 import { drawText, textWidth } from './font.js';
@@ -124,7 +123,7 @@ const HOLD_ANIMS = ['grab', 'carry', 'carryWalk', 'carryJump', 'throwAim', 'thro
 // à une main (la droite) ; dérapage et freinage en sprint : la prise traîne sous sa main
 const HOLD1_ANIMS = ['grab1', 'carry1', 'carryWalk1', 'carryJump1', 'run1', 'drop1', 'rise1', 'throwAim1', 'throw1', 'skid', 'brake'];
 const holdPts = {};
-let objSprites, objGlow, objRot, icons, crackImgs, peopleImgs, bloodImgs, ashImgs, flameImgs, fogImg, waterImgs, foamImgs, rimImgs, shadows, ui;
+let objSprites, objGlow, objRot, icons, crackImgs, peopleImgs, bloodImgs, ashImgs, flameImgs, waterImgs, foamImgs, rimImgs, shadows, ui;
 const blockCache = new Map();
 
 function block(type, h, v) {
@@ -206,7 +205,6 @@ async function loadAssets() {
   icons = {};
   const ic = Object.assign(buildIcons(), buildMutIcons());
   for (const id in ic) icons[id] = toCanvas(ic[id]);
-  fogImg = toCanvas(fogBuffer());
   const total = jobs.length + 5;
   let done = 0;
   const progress = () => { bar.style.width = (100 * done / total) + '%'; };
@@ -305,6 +303,10 @@ let scent = null; // après avoir flairé : { v, t } le village le plus proche
 let msg = null; // bandeau au milieu de l'écran : { text, t }
 function showMsg(text, dur = 2.5, sub = '') { msg = { text, sub, t: dur }; }
 let windT = 0; // rafale après une frappe au sol : la végétation s'agite
+// Horloge du balancement de la végétation : le vent la fait avancer plus vite, sans jamais la
+// faire sauter (multiplier `time` par la rafale faisait clignoter les arbres après quelques minutes).
+let swayT = 0;
+const advanceSway = (dt) => { swayT += dt * (1 + Math.min(1.5, windT) * 1.2); };
 const hits = new Map();
 const particles = [];
 const flyers = []; // papillons / lucioles
@@ -324,7 +326,7 @@ function resetState() {
   if (realm) world = surface;
   realm = null; realmWorlds.clear(); realmData = new Map(); realmFade = 0;
   scent = null; msg = null; shake = 0; windT = 0; tod = 0.3; curVillage = null;
-  Object.assign(weather, { kind: 'clear', left: 40, rain: 0, cloud: 0, fog: 0, storm: 0, flash: 0, boltT: 6 });
+  Object.assign(weather, { kind: 'clear', left: 40, rain: 0, cloud: 0, storm: 0, flash: 0, boltT: 6 });
   weather.drops.length = weather.flakes.length = thunders.length = 0;
   input.punch = input.jump = input.sniff = input.grab = false;
   chargeStop();
@@ -1285,6 +1287,7 @@ function update(dt) {
   for (let i = bloods.length - 1; i >= 0; i--) if ((bloods[i].age += dt) > 180) bloods.splice(i, 1);
   tod = (tod + dt / DAY_LENGTH) % 1;
   hintT -= dt;
+  advanceSway(dt);
   windT = Math.max(0, windT - dt);
   if (shake > lastShake + 0.8) rumble(shake / 12, 60 + shake * 20); // la manette vibre avec l'écran
   shake = Math.max(0, shake - dt * 20);
@@ -2619,11 +2622,11 @@ function updateBeast(n, dt, d) {
 // ---------------------------------------------------------------- météo
 // Probabilités de chaque temps selon le réglage du monde (calme, variable, orageuse).
 const WEATHER_ODDS = [
-  { clear: 0.65, cloudy: 0.2, fog: 0.1, rain: 0.05, storm: 0 },
-  { clear: 0.4, cloudy: 0.2, fog: 0.12, rain: 0.2, storm: 0.08 },
-  { clear: 0.2, cloudy: 0.15, fog: 0.05, rain: 0.3, storm: 0.3 },
+  { clear: 0.72, cloudy: 0.23, rain: 0.05, storm: 0 },
+  { clear: 0.47, cloudy: 0.25, rain: 0.2, storm: 0.08 },
+  { clear: 0.23, cloudy: 0.17, rain: 0.3, storm: 0.3 },
 ];
-const weather = { kind: 'clear', left: 40, rain: 0, cloud: 0, fog: 0, storm: 0, flash: 0, boltT: 6, snow: false, drops: [], flakes: [] };
+const weather = { kind: 'clear', left: 40, rain: 0, cloud: 0, storm: 0, flash: 0, boltT: 6, snow: false, drops: [], flakes: [] };
 const thunders = []; // grondements à venir (le son arrive après l'éclair)
 
 function updateWeather(dt) {
@@ -2636,9 +2639,8 @@ function updateWeather(dt) {
   }
   const k = W.kind;
   const ease = (v, t, sp) => v + (t - v) * Math.min(1, dt * sp);
-  W.cloud = ease(W.cloud, { clear: 0, cloudy: 0.6, fog: 0.35, rain: 0.8, storm: 1 }[k], 0.15);
+  W.cloud = ease(W.cloud, { clear: 0, cloudy: 0.6, rain: 0.8, storm: 1 }[k] || 0, 0.15);
   W.rain = ease(W.rain, { rain: 0.7, storm: 1 }[k] || 0, 0.2);
-  W.fog = ease(W.fog, { fog: 1, rain: 0.15, storm: 0.1 }[k] || 0, 0.12);
   W.storm = ease(W.storm, k === 'storm' ? 1 : 0, 0.2);
   // en montagne et sur la neige, il neige au lieu de pleuvoir
   const tt = world.typeAt(Math.floor(player.x), Math.floor(player.y));
@@ -2677,23 +2679,6 @@ function strike() {
   }
 }
 
-// Texture de brouillard : des nappes tramées qui dérivent (tuilée à l'écran).
-function fogBuffer() {
-  const w = 160, h = 120, b = makeBuffer(w, h);
-  // bruit raccordable : on mélange 4 copies décalées pour que les bords se rejoignent
-  const tile = (x, y, sx, sy, seed) => {
-    const n = (a, c) => valueNoise(a / sx, c / sy, seed);
-    return (n(x, y) * (w - x) * (h - y) + n(x - w, y) * x * (h - y) + n(x, y - h) * (w - x) * y + n(x - w, y - h) * x * y) / (w * h);
-  };
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-    const v = (tile(x, y, 26, 16, 7) * 0.65 + tile(x, y, 9, 6, 8) * 0.35 - 0.5) * 1.6 + 0.5;
-    const bay = ((x & 1) ^ (y & 1)) ? 0.04 : -0.04;
-    if (v + bay > 0.62) b.set(x, y, [226, 232, 240], 150);
-    else if (v + bay > 0.5 && (x + y) % 2 === 0) b.set(x, y, [214, 222, 232], 110);
-  }
-  return Object.assign(b, { ox: 0, oy: 0 });
-}
-
 function drawWeather(dt) {
   const W = weather;
   // pluie (ou neige) en espace écran
@@ -2719,13 +2704,6 @@ function drawWeather(dt) {
       }
     }
     if (p.y > (W.snow ? VH : p.gy) || p.x > VW + 4) { p.y = -4 - Math.random() * 20; p.x = Math.random() * (VW + 40) - 40; p.gy = VH * (0.3 + Math.random() * 0.75); }
-  }
-  // brouillard qui dérive
-  if (W.fog > 0.02) {
-    ctx.globalAlpha = Math.min(0.85, W.fog * 0.8);
-    const fx0 = -Math.floor((time * 4) % fogImg.width), fy0 = -Math.floor((time * 1.5) % fogImg.height);
-    for (let y = fy0; y < VH; y += fogImg.height) for (let x = fx0; x < VW; x += fogImg.width) ctx.drawImage(fogImg, x, y);
-    ctx.globalAlpha = 1;
   }
 }
 
@@ -3360,6 +3338,7 @@ function buildKey(e) {
 function updateBuild(dt) {
   const B = build;
   time += dt; B.t += dt;
+  advanceSway(dt);
   if (msg && (msg.t -= dt) <= 0) msg = null;
   if (toast && (toast.t -= dt) <= 0) toast = null;
   shake = Math.max(0, shake - dt * 20);
@@ -5663,9 +5642,8 @@ function drawObject(e) {
   let f = 0;
   if (frames.length > 1) {
     const ph = hash(e.x, e.y, 1) * 10;
-    const wind = Math.sin(time * 0.7 + e.x * 0.15 + e.y * 0.1); // rafales qui traversent le monde
-    const gust = 1 + Math.max(0, wind) + windT * 3; // la bourrasque d'une frappe affole tout
-    f = Math.floor(time * (info.tree ? 2 : 2.5) * gust + ph) % frames.length;
+    const wave = Math.max(0, Math.sin(time * 0.5 + e.x * 0.15 + e.y * 0.1)) * 0.9; // une rafale qui traverse le monde
+    f = Math.floor(swayT * (info.tree ? 1.3 : 1.8) + ph + wave) % frames.length;
   }
   const img = rk ? objRot[e.o][rk].img : frames[f];
   draw(img, gx - img.ox, gy - img.oy);
@@ -6272,6 +6250,7 @@ function frame(now) {
 // Écran d'accueil : la caméra survole lentement le monde.
 function updateMenu(dt) {
   time += dt;
+  advanceSway(dt);
   tod = (tod + dt / DAY_LENGTH) % 1;
   pollPad();
   menuPad(pad, dt);

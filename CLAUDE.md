@@ -31,8 +31,9 @@ du même jeu.
    éclaircir ~7 %. Ça donne le grain feuillage / roche / herbe. Pas de motif régulier visible.
 8. **Couleurs saturées mais pas fluo.** Verts naturels, bleus profonds pour l'eau, tons terre.
    Le néon est réservé aux effets d'énergie (charge) et aux lucioles.
-9. **Tout bouge un peu** : végétation qui se balance avec le vent (`windT` amplifie après les
-   gros coups), eau animée sur 4 frames, respiration au repos.
+9. **Tout bouge un peu** : végétation qui se balance doucement avec le vent (horloge `swayT`, qui
+   avance plus vite quand `windT` souffle après les gros coups ou l'orage ; ne jamais multiplier `time`
+   par une rafale, ça fait clignoter), eau animée sur 4 frames, respiration au repos.
 10. **Lisible à la taille réelle.** Le jeu s'affiche à environ 240 px de haut en pixels logiques. Un
     détail de moins de 2 px ne se verra pas. Toujours juger un sprite à ×1 *et* agrandi.
 
@@ -164,8 +165,11 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
 - **Arbres** : tronc en capsule effilée + houppier en grappe de 5 à 7 sphères. On a 4 frames
   de balancement (`SWAY_FRAMES`), et le haut bouge plus que le bas. Le canevas fait 60×78,
   avec l'origine en (30, 70).
-- **Sapins** : couches de capsules effilées dont le dessous arrondi est coupé (« jupe plate »),
-  avec des stries horizontales tous les 3 px.
+- **Sapins** : un tronc à racines, puis 5 étages de branches. Chaque étage = un cœur conique (un ton
+  plus sombre : la profondeur sous les rameaux) et une couronne de 5 à 8 rameaux en capsules qui
+  partent du tronc et retombent, en éventail décalé d'un étage à l'autre : silhouette dentelée.
+  Bouts des rameaux un ton plus clairs, dessous à l'ombre, aiguilles en grain `hash`, quelques
+  pommes de pin `#5a3a1e`. Sapin enneigé : la neige se pose sur le dessus des rameaux (`ny < 0`).
 - **Rochers** : 2 à 4 sphères qui se chevauchent, une ombre au sol, mousse sur le dessus si besoin.
 - **Petits objets** (herbes, fleurs, roseaux, cailloux, nénuphars) : dessinés pixel par pixel,
   2 à 3 frames de balancement, contour sel-out.
@@ -377,9 +381,9 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
   zigzag), cerf (bois, fuit vite), sanglier (défenses, charge si on l'approche ou le frappe), loup
   (meute de 3, chasse la nuit, fuit blessé). Ils apparaissent hors écran selon le biome et
   repartent quand Brainless s'éloigne ; quantité réglée par le paramètre FAUNE.
-- **Météo** (`updateWeather`) : clair, couvert, brouillard, pluie, orage, tirés au sort selon le
-  paramètre METEO. Pluie = gouttes de 6 px en espace écran + éclaboussures ; neige à la place sur
-  la neige et en altitude ; brouillard = texture tramée raccordable qui dérive ; ciel couvert =
+- **Météo** (`updateWeather`) : clair, couvert, pluie, orage, tirés au sort selon le
+  paramètre METEO (pas de brouillard : retiré, il voilait l'écran). Pluie = gouttes de 6 px en espace
+  écran + éclaboussures ; neige à la place sur la neige et en altitude ; ciel couvert =
   teinte plus sombre. L'orage agite la végétation et la foudre frappe (souvent un arbre) : éclair
   en zigzag `#8fd8ff`/blanc, flash, tonnerre retardé selon la distance. Les villageois rentrent
   quand il pleut fort.

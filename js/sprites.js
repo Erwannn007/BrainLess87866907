@@ -8,6 +8,7 @@ const LEAF_FOREST = ramp('#183d24', '#255a2d', '#3b7c37', '#62a64c');
 const CHERRY = ramp('#86365a', '#c55c88', '#ec8fb2', '#ffc8dc');
 const PINE = ramp('#123327', '#1c4c35', '#2a6843', '#448a52');
 const SNOWY = ramp('#9cb0c6', '#c9d6e4', '#eaf1f8', '#ffffff');
+const CONE = hex('#5a3a1e'); // pomme de pin
 const ROCK = ramp('#34373f', '#5a5f6b', '#838894', '#b1b6bf');
 const MOSS = ramp('#2b4a23', '#3f6b2e', '#5d8e3c', '#86b356');
 const BUSH = ramp('#1a4424', '#28622f', '#3f8a3a', '#69b14f');
@@ -41,19 +42,37 @@ function treeParts(kind, f, seed) {
       parts.push({ a: [x + sw(z), y, z], r1: r, ramp: leaves, group: 2 + (i > 3 ? 1 : 0), tex: leafTex(seed + i, sway * 0.06 * (z - 10)) });
     });
   } else if (kind === 'pine' || kind === 'snowpine') {
-    parts.push({ a: [0, 0, 0], b: [0, 0, 10], r1: 2.6, r2: 2, ramp: BARK, group: 1 });
-    const layers = [[7, 10, 20], [13, 8.2, 26], [19, 6.4, 31], [25, 4.6, 36]];
-    layers.forEach(([z, r, top], i) => {
-      parts.push({
-        a: [sw(z), 0, z], b: [sw(top), 0, top], r1: r, r2: 0.6, ramp: PINE, group: 2 + i,
-        tex: (p) => {
-          if (p.t === 0 && p.ey > p.r * 0.25) return null; // jupe plate, pas de fond arrondi
-          if (kind === 'snowpine' && (p.y + i) % 3 !== 0 && hash(p.x, p.y, 3) < (p.y + i) % 3 * 0.45) return SNOWY[Math.min(3, p.shade + 1)];
-          if ((p.y + i) % 3 === 0) return Math.max(0, p.shade - 1);
-          return p.shade;
-        },
-      });
+    // Sapin : un tronc à racines, puis des étages de branches. Chaque étage = un cœur conique
+    // plus une couronne de rameaux qui partent du tronc et retombent : la silhouette est
+    // dentelée comme un vrai sapin. Bouts des rameaux plus clairs, dessous dans l'ombre,
+    // aiguilles en grain, quelques pommes de pin ; la neige se pose sur le dessus des rameaux.
+    const snow = kind === 'snowpine', rnd = (k) => hash(k, seed, 41);
+    const needles = (i, core) => (p) => {
+      const r = hash(p.x, p.y, seed + i * 13);
+      if (snow && p.ny < (core ? -0.55 : -0.2) && r < 0.88) return SNOWY[Math.min(3, p.shade + (p.ny < -0.6 ? 1 : 0))];
+      if (!core && r > 0.988 && p.t > 0.35 && p.ny > -0.2) return CONE;
+      let sh = p.shade;
+      if (core) sh--; // le cœur, sous les rameaux : de la profondeur entre les étages
+      else if (p.t > 0.72) sh++; // les bouts au soleil
+      if (p.ny > 0.5) sh--; // le dessous
+      if (r < 0.17) sh--; else if (r > 0.95) sh++;
+      return Math.max(0, Math.min(3, sh));
+    };
+    parts.push({ a: [0, 0, 0], b: [sw(12), 0, 12], r1: 2.3, r2: 1.3, ramp: BARK, group: 1,
+      tex: (p) => ((p.y % 3 === 0 || hash(p.x, p.y, 8) < 0.15) && p.shade > 0 ? p.shade - 1 : p.shade) });
+    for (const [x, y] of [[-2.8, 1.3], [2.6, -1.2], [0.8, 2.8]]) parts.push({ a: [x, y, 0.3], b: [0, 0, 2.6], r1: 1.25, r2: 1, ramp: BARK, group: 1 });
+    const tiers = [[9.5, 11, 8], [14.5, 9.3, 8], [19.5, 7.5, 7], [24.2, 5.7, 6], [28.5, 4, 5]];
+    tiers.forEach(([z, R, n], i) => {
+      const g = 2 + i;
+      parts.push({ a: [sw(z - 1), 0, z - 1], b: [sw(z + 6), 0, z + 6], r1: R * 0.6, r2: 0.9, ramp: PINE, group: g, tex: needles(i, true) });
+      for (let k = 0; k < n; k++) {
+        const a = (k / n + rnd(i * 17 + k) * 0.1 + i * 0.29) * Math.PI * 2, rr = R * (0.82 + rnd(i * 17 + k + 7) * 0.26);
+        const ez = z - 2 - rnd(i * 31 + k) * 1.4, sz = z + 1.2;
+        parts.push({ a: [sw(sz) + Math.cos(a) * 1.2, Math.sin(a) * 1.2, sz], b: [sw(ez) + Math.cos(a) * rr, Math.sin(a) * rr, ez],
+          r1: 2.5 - i * 0.22, r2: 1.05, ramp: PINE, group: g, tex: needles(i, false) });
+      }
     });
+    parts.push({ a: [sw(31), 0, 31], b: [sw(38), 0, 38], r1: 1.7, r2: 0.35, ramp: PINE, group: 8, tex: needles(6, true) });
   }
   return parts;
 }
