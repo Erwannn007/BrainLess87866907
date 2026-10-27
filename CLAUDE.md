@@ -119,8 +119,14 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
     galop) / `carryJump`, `throwAim` (charge tirée derrière la nuque, il vise au stick et dose la
     force, trajectoire en pointillés et point de chute au sol), `throw` (lancer à deux mains, lâché à
     t = 0.4), `heave` (COUP en portant : il fracasse sa charge au sol devant lui). Ce qu'il porte est
-    dessiné au point entre ses mains, `holdPoint(anim, t, dir)` (précalculé dans `holdPts`) ; un arbre
-    ou un habitant qui se débat passe en travers au-dessus de sa tête.
+    dessiné au point entre ses mains, `holdPoint(anim, t, dir, one)` (précalculé dans `holdPts`) ; un
+    arbre passe en travers au-dessus de sa tête.
+  - **À une main** (`lightLoad` : poids ≤ 1.5, pas un arbre — habitants, chevaliers, héros, lapin,
+    loup, cerf, caisses, tonneaux, foin, lanternes, petits rochers) : la main droite tient, la prise
+    pend au bout du bras sans toucher le sol. `grab1`, `carry1`, `carryWalk1`, `carryJump1`, galop sur
+    trois membres `run1` (+ `drop1` / `rise1` ; un habitant qui gigote est alors traîné à
+    l'horizontale), lancer de javelot `throwAim1` (bras libre tendu vers la cible, prise armée
+    derrière) / `throw1`. ÉCRASER repasse à deux mains (`heave`).
 
 ## 5. Le décor (`js/sprites.js`, `js/world.js`)
 

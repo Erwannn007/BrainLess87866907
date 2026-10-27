@@ -58,6 +58,16 @@ export const ANIMS = {
   throwAim: { frames: 4, fps: 10, loop: true }, // la charge tirée derrière la tête, il vise
   throw: { frames: 8, fps: 18, loop: false }, // lancer à deux mains par-dessus la tête
   heave: { frames: 10, fps: 15, loop: false }, // il soulève encore plus haut et fracasse la charge au sol
+  // à une main (habitants, animaux légers, caisses, tonneaux…) : la main droite tient, la gauche est libre
+  grab1: { frames: 8, fps: 16, loop: false }, // il l'empoigne d'une main et l'arrache du sol
+  carry1: { frames: 4, fps: 5, loop: true }, // immobile, la prise pendue au bout du bras
+  carryWalk1: { frames: 8, fps: 11, loop: true }, // marche, le bras libre balance, l'autre traîne la prise
+  carryJump1: { frames: 5, fps: 1, loop: false },
+  run1: { frames: 10, fps: 17, loop: true }, // galop sur trois membres, la prise sous le ventre
+  drop1: { frames: 4, fps: 18, loop: false },
+  rise1: { frames: 4, fps: 18, loop: false },
+  throwAim1: { frames: 4, fps: 10, loop: true }, // bras libre tendu vers la cible, la prise armée derrière
+  throw1: { frames: 8, fps: 18, loop: false }, // il fouette du bras et la lâche
 };
 
 const smooth = (u) => u * u * (3 - 2 * u);
@@ -388,6 +398,71 @@ export function poseFor(anim, t) {
       { t: 1, p: {} },
     ], t);
   }
+  if (anim === 'carry1' || anim === 'carryWalk1') {
+    // La prise pendue au bout du bras droit, un peu écarté pour ne pas se cogner dedans. En marchant,
+    // le bras libre balance large et le bras chargé suit à peine (le poids le freine).
+    const p = poseFor(anim === 'carry1' ? 'idle' : 'walk', t);
+    const s = Math.sin(t * TAU);
+    p.hR = [10.5, 4 + (anim === 'carry1' ? 0 : -s * 1.2), 22 + (anim === 'carry1' ? s * 0.5 : Math.abs(s) * 0.8)];
+    if (anim === 'carryWalk1') p.hL = [-11, 2.5 - s * 6, 16 + Math.max(0, -s) * 3];
+    p.twist = (p.twist || 0) - 0.06;
+    p.curl = 1;
+    return p;
+  }
+  if (anim === 'carryJump1') {
+    const p = poseFor('jump', t);
+    p.hR = [10.5, 4, 24];
+    return p;
+  }
+  if (anim === 'run1') {
+    // Galop sur trois membres : la main gauche frappe le sol seule, en grandes enjambées ; la droite
+    // serre la prise sous la poitrine et rebondit avec le corps.
+    const p = poseFor('run', t), ph = t * TAU;
+    p.hL = [-3.5, 16 + Math.sin(ph) * 13, 2.6 + Math.max(0, Math.cos(ph)) * 9];
+    p.hR = [7.5, 9 + Math.sin(ph) * 1.5, 9 + Math.max(0, Math.sin(ph - 0.5)) * 2];
+    p.twist = Math.sin(ph + 0.4) * 0.1 + 0.08;
+    return p;
+  }
+  if (anim === 'drop1' || anim === 'rise1') {
+    const u = smooth(anim === 'drop1' ? t : 1 - t);
+    const a = poseFor('jog', 0.25);
+    a.hR = [10.5, 4, 22];
+    const p = blend(a, poseFor('run1', 0), u);
+    p.handsAbs = 0;
+    p.absMix = u;
+    p.jaw = 0.6 + u * 0.8;
+    return p;
+  }
+  if (anim === 'grab1') {
+    // Il fond sur sa prise, épaule droite en avant, et l'empoigne d'une main (t = 0.4), puis l'arrache
+    // du sol d'un coup sec et la laisse pendre au bout du bras.
+    return keyed([
+      { t: 0, p: {} },
+      { t: 0.2, p: { absMix: 1, hR: [6, 15, 11], hL: [-9, 5, 16], crouch: 5, pitch: 0.45, lean: 3, twist: 0.3, hipTwist: 0.15, fL: [-5, -2, 0], fR: [5, 5, 0], jaw: 1.2, curl: 0 } },
+      { t: 0.4, p: { absMix: 1, hR: [5, 14, 8], hL: [-9, 4, 15], crouch: 6.5, pitch: 0.5, lean: 3.2, twist: 0.3, hipTwist: 0.15, fL: [-5, -2, 0], fR: [5, 5, 0], jaw: 0.5, curl: 1.4 } },
+      { t: 0.68, p: { hR: [12, 6, 32], hL: [-11, 1, 18], crouch: 2, pitch: 0.05, lean: 1, twist: 0.1, jaw: 1.3, curl: 1 } },
+      { t: 1, p: { ...poseFor('idle', 0), hR: [10.5, 4, 22], twist: -0.06, curl: 1 } },
+    ], t);
+  }
+  if (anim === 'throwAim1' || anim === 'throw1') {
+    // Lancer de javelot : le bras libre tendu vers la cible, la prise armée loin derrière l'épaule,
+    // le buste vrillé ; puis il dévisse tout le corps et fouette du bras (lâché à t = 0.4).
+    const aim = { hL: [-4, 21, 34], hR: [10, -12, 32], twist: -0.55, hipTwist: -0.25, fL: [-5, 6, 0], fR: [5, -5, 0], lean: -0.8, crouch: 3, jaw: 0.8, swell: 0.04, curl: 1 };
+    if (anim === 'throwAim1') {
+      const sn = Math.sin(t * TAU), j = Math.sin(t * TAU * 3);
+      const p = Object.assign(basePose(), aim);
+      p.hR = [10 + j * 0.4, -12, 32 + sn * 0.5];
+      p.swell = 0.04 + sn * 0.04; p.breathe = sn * 1.2; p.jaw = 0.8 + sn * 0.3;
+      return p;
+    }
+    return keyed([
+      { t: 0, p: { ...poseFor('idle', 0), hR: [10.5, 4, 22], twist: -0.06, curl: 1 } },
+      { t: 0.22, p: aim },
+      { t: 0.4, p: { hR: [2, 22, 34], hL: [-10, -4, 20], twist: 0.7, hipTwist: 0.4, lean: 5, crouch: 2.5, fL: [-5, 8, 0], fR: [5, -6, 2], jaw: 1.4, swell: 0.08, curl: 0 } },
+      { t: 0.65, p: { hR: [-4, 15, 14], hL: [-10, -3, 18], twist: 0.85, hipTwist: 0.45, lean: 5.5, crouch: 3.5, fL: [-5, 8, 0], fR: [5, -5, 3], jaw: 1 } },
+      { t: 1, p: {} },
+    ], t);
+  }
   if (anim === 'hurt') {
     // projeté en arrière : buste rejeté, bras qui battent, il se rattrape
     return keyed([
@@ -695,12 +770,13 @@ export function dirFacing(k) {
   return [Math.cos(a), Math.sin(a)];
 }
 
-// Point entre les deux mains, à l'écran, par rapport à l'origine du sprite : c'est là qu'on dessine
+// Point entre les deux mains (ou dans la main droite), à l'écran, par rapport à l'origine du sprite : c'est là qu'on dessine
 // ce qu'il porte. `z` = hauteur des mains dans le modèle, `depth` > 0 = devant son corps.
-export function holdPoint(anim, t, dir) {
+// `one` : il tient d'une seule main (la droite).
+export function holdPoint(anim, t, dir, one = false) {
   const P = poseFor(anim, t);
   const { handAt } = skeleton(P);
-  const m = lerpV(handAt(P.hL), handAt(P.hR), 0.5);
+  const m = one ? handAt(P.hR) : lerpV(handAt(P.hL), handAt(P.hR), 0.5);
   const [fx, ft] = dirFacing(dir), s = SCALE * (1 + P.swell);
   const mx = m[0] * s, mf = (m[1] + 3) * s, mz = m[2] * s; // +3 : au creux des doigts, pas au poignet
   const cx = mx * -ft + mf * fx, ct = mx * fx + mf * ft;

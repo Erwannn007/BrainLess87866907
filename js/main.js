@@ -113,6 +113,8 @@ function drawTurned(s, ax, ay, rot) {
 const nomu = {}; // nomu[anim][dir][frame]
 // point entre ses mains pour chaque image des anims où il porte quelque chose : holdPts[anim][dir][frame]
 const HOLD_ANIMS = ['grab', 'carry', 'carryWalk', 'carryJump', 'throwAim', 'throw', 'heave'];
+// à une main (la droite) ; dérapage et freinage en sprint : la prise traîne sous sa main
+const HOLD1_ANIMS = ['grab1', 'carry1', 'carryWalk1', 'carryJump1', 'run1', 'drop1', 'rise1', 'throwAim1', 'throw1', 'skid', 'brake'];
 const holdPts = {};
 let objSprites, objGlow, crackImgs, peopleImgs, bloodImgs, ashImgs, flameImgs, fogImg, waterImgs, foamImgs, rimImgs, shadows, ui;
 const blockCache = new Map();
@@ -159,9 +161,10 @@ async function loadAssets() {
       }
     }
   }
-  for (const anim of HOLD_ANIMS) {
+  for (const anim of HOLD_ANIMS.concat(HOLD1_ANIMS)) {
+    const one = HOLD1_ANIMS.includes(anim);
     holdPts[anim] = [];
-    for (let d = 0; d < 8; d++) holdPts[anim][d] = Array.from({ length: ANIMS[anim].frames }, (_, f) => holdPoint(anim, f / ANIMS[anim].frames, d));
+    for (let d = 0; d < 8; d++) holdPts[anim][d] = Array.from({ length: ANIMS[anim].frames }, (_, f) => holdPoint(anim, f / ANIMS[anim].frames, d, one));
   }
   fogImg = toCanvas(fogBuffer());
   const total = jobs.length + 5;
@@ -821,7 +824,7 @@ function healGround(dt) {
 // Enchaînement : 3 frappes en diagonale (gauche, droite, montante), puis si on continue de
 // spammer, la rafale (`rush`) en boucle tant que les coups arrivent.
 const JABS = ['jabL', 'jabR', 'hook', 'rush'];
-const HIT_AT = { jabL: 0.44, jabR: 0.44, hook: 0.44, rush: 0.5, bigpunch: 0.22, slam: 0.44, sniff: 0.6, eat: 9, hurt: 9, grab: 0.4, throw: 0.4, heave: 0.45 };
+const HIT_AT = { jabL: 0.44, jabR: 0.44, hook: 0.44, rush: 0.5, bigpunch: 0.22, slam: 0.44, sniff: 0.6, eat: 9, hurt: 9, grab: 0.4, throw: 0.4, heave: 0.45, grab1: 0.4, throw1: 0.4 };
 let hitstop = 0; // arrêt sur image après un gros impact
 const CHOMPS = [0.22, 0.35, 0.48, 0.61, 0.74]; // bouchées pendant qu'il dévore
 
@@ -1128,7 +1131,7 @@ function stickSpeed(mag) {
 function gaitStep(dt) {
   const g = Math.max(0, Math.min(1, (player.spd - 2) / 1.4)); // 0 = marche, 1 = course
   player.phase = (player.phase + dt * Math.max(0.7, player.spd / (1.6 + g * 0.9))) % 1;
-  player.anim = player.held ? 'carryWalk' : GAITS[g < 0.3 ? 0 : g < 0.7 ? 1 : 2];
+  player.anim = player.held ? (oneHand() ? 'carryWalk1' : 'carryWalk') : GAITS[g < 0.3 ? 0 : g < 0.7 ? 1 : 2];
   player.t = player.phase * ANIMS.walk.frames;
 }
 const TRANS_DUR = ANIMS.drop.frames / ANIMS.drop.fps;
@@ -1242,7 +1245,7 @@ function update(dt) {
           player.grabHoldT += dt;
           if (player.grabHoldT > 0.18 && !player.aiming) {
             player.aiming = true; player.throwPow = 0; player.aim = dirWorld(player.dir); player.spd = 0;
-            setAnim('throwAim'); sfx.growl();
+            setAnim(oneHand() ? 'throwAim1' : 'throwAim'); sfx.growl();
           }
           if (player.aiming) {
             player.throwPow = Math.min(1, player.throwPow + dt / 0.9);
@@ -1284,8 +1287,8 @@ function update(dt) {
       if (act === 'eat') for (const c of CHOMPS) if (prev < c && player.actionT >= c) chomp();
       if (prev < hitAt && player.actionT >= hitAt) {
         if (act === 'rush') doRushHit();
-        else if (act === 'grab') seize();
-        else if (act === 'throw') doThrow();
+        else if (act === 'grab' || act === 'grab1') seize();
+        else if (act === 'throw' || act === 'throw1') doThrow();
         else if (act === 'heave') doHeave();
         else if (JABS.includes(act)) doPunchHit(act === 'hook');
         else if (act === 'sniff') doSniff();
@@ -1298,15 +1301,15 @@ function update(dt) {
       if (JABS.includes(act) && player.actionT > 0.1 && player.actionT < hitAt) tryMove(dx * dt * 1.6, dy * dt * 1.6);
       if (act === 'bigpunch' && player.actionT < 0.3) { const [ax, ay] = aimDir(); tryMove(ax * dt * 4.5, ay * dt * 4.5); }
       // il fond sur sa prise ; il prend appui en lançant
-      if (act === 'grab' && player.actionT < hitAt && player.grabTarget) {
+      if ((act === 'grab' || act === 'grab1') && player.actionT < hitAt && player.grabTarget) {
         const g = player.grabTarget, gx = g.n ? g.n.x : g.tx + 0.5, gy = g.n ? g.n.y : g.ty + 0.5, d = Math.hypot(gx - player.x, gy - player.y);
         if (d > 0.7) tryMove((gx - player.x) / d * dt * 3.5, (gy - player.y) / d * dt * 3.5);
       }
-      if (act === 'throw' && player.actionT < hitAt) { const [ax, ay] = aimDir(); tryMove(ax * dt * 1.5, ay * dt * 1.5); }
+      if ((act === 'throw' || act === 'throw1') && player.actionT < hitAt) { const [ax, ay] = aimDir(); tryMove(ax * dt * 1.5, ay * dt * 1.5); }
       if (JABS.includes(act) && player.punchBuf && player.actionT >= 0.6) startJab();
       else if (player.actionT >= 1) {
         if (JABS.includes(act)) player.lastPunch = time;
-        if (act === 'bigpunch' || act === 'throw') player.aim = null;
+        if (act === 'bigpunch' || act === 'throw' || act === 'throw1') player.aim = null;
         if (act === 'eat') finishEat();
         player.action = null;
         player.t = 0;
@@ -1319,7 +1322,7 @@ function update(dt) {
       // Petite tolérance : un joystick qui repasse par le centre pendant un demi-tour ne coupe pas le sprint.
       player.idleT = mag > 0.15 ? 0 : player.idleT + dt;
       const coasting = wasSprinting && player.mv && player.idleT < 0.12 && sprintHeld();
-      const run = sprintHeld() && !player.tired && (mag > 0.15 || coasting) && !player.held; // les mains prises : pas de galop
+      const run = sprintHeld() && !player.tired && (mag > 0.15 || coasting) && (!player.held || oneHand()); // à deux mains : pas de galop
       if (!player.air) player.sprinting = run;
       player.moving = mag > 0.15;
       // vitesse réelle : rattrape en douceur la vitesse voulue (sprint, ou selon le joystick)
@@ -1327,10 +1330,10 @@ function update(dt) {
         : stickSpeed(mag) * (player.water ? 0.62 : 1) * (player.held ? 1.1 - 0.15 * player.held.w : 1); // plus c'est lourd, plus il est lent
       player.spd += Math.max(-dt * 9, Math.min(dt * (player.sprinting ? 12 : 6), target - player.spd));
       // passage debout <-> quatre pattes : il plonge sur les mains, ou se redresse en courant
-      if (player.sprinting && !player.quad && !player.air && !player.water) { player.quad = true; player.trans = { a: 'drop', t: 0 }; }
+      if (player.sprinting && !player.quad && !player.air && !player.water) { player.quad = true; player.trans = { a: oneHand() ? 'drop1' : 'drop', t: 0 }; }
       if (!player.sprinting && player.quad && !player.air) {
         player.quad = false;
-        player.trans = mag > 0.15 && !player.water ? { a: 'rise', t: 0 } : null;
+        player.trans = mag > 0.15 && !player.water ? { a: oneHand() ? 'rise1' : 'rise', t: 0 } : null;
       }
       if (player.trans && (player.trans.t += dt) >= TRANS_DUR) player.trans = null;
       if (mag > 0.15) {
@@ -1348,7 +1351,7 @@ function update(dt) {
           player.mv = player.sprinting ? [vx, vy] : null;
           if (player.water === 2) { setAnim(player.sprinting ? 'swimfast' : 'swim'); swimStrokes(vx, vy); }
           else if (player.trans) { player.anim = player.trans.a; player.t = player.trans.t / TRANS_DUR * ANIMS.drop.frames; }
-          else if (player.sprinting) { setAnim('run'); if (!player.air) sprintImpacts(vx, vy); }
+          else if (player.sprinting) { setAnim(oneHand() ? 'run1' : 'run'); if (!player.air) sprintImpacts(vx, vy); }
           else { gaitStep(dt); if (!player.air) walkSteps(); }
         }
       } else if (coasting && run) {
@@ -1360,7 +1363,7 @@ function update(dt) {
         if (!player.air) walkSteps();
       } else {
         player.spd = 0;
-        setAnim(player.water === 2 ? 'tread' : player.held ? 'carry' : 'idle');
+        setAnim(player.water === 2 ? 'tread' : player.held ? (oneHand() ? 'carry1' : 'carry') : 'idle');
         if (player.water === 2) swimStrokes(0, 0);
         if (!player.air) player.sprinting = false;
       }
@@ -1373,12 +1376,12 @@ function update(dt) {
       if (!player.sprinting && !player.slide) player.mv = null;
     }
     // un coup, une charge ou un freinage interrompt le galop : pas de « redressement » après coup
-    if (player.action || player.charging || (player.slide && player.slide.kind === 'brake')) { player.quad = false; player.trans = null; }
+    if (player.action || player.charging || player.aiming || (player.slide && player.slide.kind === 'brake')) { player.quad = false; player.trans = null; }
     if (player.sprinting && !player.air) player.stamina = Math.max(0, player.stamina - dt / 4.5 / (1 + 0.08 * (player.level - 1)) * (has('engine') ? 0.6 : 1));
     else if (!player.sprinting) player.stamina = Math.min(1, player.stamina + dt / (player.tired ? 3 : 5));
     const A = ANIMS[player.anim];
     // les allures et les transitions règlent elles-mêmes leur image
-    if (!GAITS.includes(player.anim) && player.anim !== 'carryWalk' && !player.trans) player.t += dt * A.fps * (player.charging ? 1 + player.charge * 1.8 : 1);
+    if (!GAITS.includes(player.anim) && !player.anim.startsWith('carryWalk') && !player.trans) player.t += dt * A.fps * (player.charging ? 1 + player.charge * 1.8 : 1);
   }
 
   const depth = waterDepth(player.x, player.y);
@@ -2786,6 +2789,9 @@ const npcWeight = (n) => (n.kind === 'beast' ? { rabbit: 0.6, deer: 1.5, boar: 1
 const breakTime = (n) => (n.kind === 'hero' ? (n.hp > n.maxHp * 0.4 ? 1.3 : 3) : n.kind === 'knight' ? 3.5 : 1e9);
 const throwDmg = (th) => Math.max(1, Math.round((1 + th.w * 1.5) * (0.5 + th.power) * strength()));
 const tough = (n) => n.kind === 'hero' && n.hp > n.maxHp * 0.4; // un héros encore en forme
+// léger (habitant, petit animal, caisse, tonneau…) : il le tient d'une main et peut galoper avec
+const lightLoad = (w, big) => !big && w <= 1.5;
+const oneHand = () => !!(player.held && player.held.one);
 
 // Vitesse de lancer : la force du bras, freinée par le poids.
 function throwSpeed(power, w) {
@@ -2821,9 +2827,11 @@ function startGrab() {
   const tg = grabTarget();
   player.grabTarget = tg;
   if (tg) player.dir = faceDir((tg.n ? tg.n.x : tg.tx + 0.5) - player.x, (tg.n ? tg.n.y : tg.ty + 0.5) - player.y);
+  const info = tg && !tg.n && OBJ_INFO[world.objAt(tg.tx, tg.ty)];
+  const one = !tg || (tg.n ? lightLoad(npcWeight(tg.n)) : lightLoad(info.lift, info.tree || info.burnt));
   player.sprinting = false;
   player.spd = 0;
-  startAction('grab');
+  startAction(one ? 'grab1' : 'grab');
   sfx.grabReach();
 }
 
@@ -2842,7 +2850,7 @@ function seize() {
       if (n.kind === 'beast') n.angry = true;
       else { sfx.scream(PEOPLE[n.type].voice * 1.2); crime(n.kind === 'civ' ? 2.5 : 1, n.x, n.y); }
     }
-    player.held = { n, w: npcWeight(n) };
+    player.held = { n, w: npcWeight(n), one: lightLoad(npcWeight(n)) };
     sfx.grab(player.held.w);
     burst(n.x, n.y, n.z + 2, DUST_COLS, 6, { up: 20, speed: 1.2, g: 60, life: 0.5, spread: 1 });
     shake = Math.max(shake, 1.5);
@@ -2871,7 +2879,7 @@ function seize() {
     if (info.rock) crackTile(tg.tx, tg.ty, 1);
   }
   if (info.village) crime(info.crime || 0.2, cx, cy);
-  player.held = { o, w: info.lift, tree: !!(info.tree || info.burnt), burning };
+  player.held = { o, w: info.lift, tree: !!(info.tree || info.burnt), burning, one: lightLoad(info.lift, info.tree || info.burnt) };
 }
 
 // Un appui bref : droit devant, ou vers le stick ; visée aidée sur la proie la plus proche du tir.
@@ -2892,7 +2900,7 @@ function tapAim(ix, iy, mag) {
 function startThrow(power, aimed) {
   player.throwPower = power;
   player.dir = faceDir(player.aim[0], player.aim[1]);
-  startAction('throw');
+  startAction(oneHand() ? 'throw1' : 'throw');
   if (aimed) player.actionT = 0.22; // déjà armé : il part directement
   sfx.heave();
 }
@@ -2962,7 +2970,7 @@ function updateHeldNpc(n, dt) {
   if ((n.breakT -= dt) > 0) return;
   // il se dégage d'un coup de pied et repart à l'attaque
   player.held = null; player.aiming = false; player.grabArm = false;
-  if (['grab', 'throw', 'heave'].includes(player.action)) { player.action = null; player.t = 0; }
+  if (['grab', 'throw', 'heave', 'grab1', 'throw1'].includes(player.action)) { player.action = null; player.t = 0; }
   n.held = false;
   Object.assign(n, { x: player.x + dx * 0.7, y: player.y + dy * 0.7, z: groundZ(player.x, player.y), air: true, jz: 18, vz: 60, vx: dx * 2.5, vy: dy * 2.5, state: 'hurt', hurtT: 0.6 });
   if (n.kind === 'hero') showMsg(PEOPLE[n.type].name + ' SE DEGAGE', 1.5);
@@ -3638,7 +3646,7 @@ function drawPlayer(ox, oy, withShadow) {
   } else if (player.air) {
     // image du saut choisie selon la vitesse verticale : décollage -> sommet -> réception
     const u = Math.max(0, Math.min(0.999, (1 - player.vz / JUMP_V) / 2));
-    an = player.held ? 'carryJump' : 'jump';
+    an = player.held ? (oneHand() ? 'carryJump1' : 'carryJump') : 'jump';
     fi = Math.floor(u * ANIMS[an].frames);
     img = nomu[an][player.dir][fi];
   } else if (player.action) {
@@ -3662,7 +3670,10 @@ function drawPlayer(ox, oy, withShadow) {
   // ce qu'il porte : derrière lui si ses mains sont basses et dans son dos, devant sinon
   let hp = null;
   if (player.held) {
-    hp = (holdPts[an] || holdPts.carry)[player.dir][holdPts[an] ? fi : 0];
+    // la table de l'anim jouée, sinon la pose de port (heave : à deux mains, même pour une prise légère)
+    let key = an, f = fi;
+    if (!holdPts[key] || (key !== 'heave' && HOLD1_ANIMS.includes(key) !== oneHand())) { key = oneHand() ? 'carry1' : 'carry'; f = 0; }
+    hp = { ...holdPts[key][player.dir][f], one: HOLD1_ANIMS.includes(key), run: ['run1', 'drop1', 'rise1', 'skid', 'brake'].includes(key), gy: sy - gz };
     if (hp.depth < -1.5 && hp.z < 44) { drawHeld(sx + hp.x, sy - gz - jz + hp.y, hp); hp = null; }
   }
   if (player.water) {
@@ -3730,6 +3741,17 @@ function drawHeld(hx, hy, hp) {
   } else {
     img = objSprites[h.o][0];
     if (h.tree) { if (g > 0.5) rot = side; else grip = 0.1; } // déraciné : il le tient par le pied du tronc
+  }
+  if (hp.one) {
+    // à une main : pendu à ses doigts par le col (ou l'anse), sans jamais traîner par terre ;
+    // en galop, un habitant qui gigote est traîné à l'horizontale
+    rot = h.n && h.n.kind !== 'beast' && alive(h.n) && h.n.state !== 'ko' && hp.run ? side : 0;
+    const hgt1 = rot & 1 ? img.w : img.h;
+    const cy1 = Math.min(hy + hgt1 / 2 - 3, hp.gy - 1 - hgt1 / 2 + (hp.run ? 3 : 0));
+    drawCentered(img, hx, cy1, rot);
+    if (h.burning || (h.n && h.n.burnT > 0)) drawFlame(1, hx, Math.round(cy1 - 2), 5);
+    if (h.n && h.n.flash > 0) { ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = 0.6; drawCentered(img, hx, cy1, rot); ctx.restore(); }
+    return;
   }
   const hgt = rot & 1 ? img.w : img.h;
   const cy = hy - (g * (hgt / 2 + 1) + (1 - g) * (0.5 - grip) * hgt); // levé : tout entier au-dessus de ses doigts
