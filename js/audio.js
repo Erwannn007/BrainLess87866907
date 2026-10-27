@@ -470,6 +470,19 @@ export const sfx = {
     noise({ f: 400 - w * 60, f2: 2400 - w * 300, q: 1, gain: 0.3 + p * 0.2, a: 0.04, dec: 0.25 + w * 0.08 });
     noise({ f: 1800, f2: 500, q: 0.8, gain: 0.12 + p * 0.12, a: 0.05, dec: 0.5 + p * 0.4, delay: 0.1 });
   },
+  // --- feu
+  // ça prend : un « vouf » sourd qui enfle
+  ignite(p = 1) {
+    if (!ready() || !gate('ignite', 0.15)) return;
+    noise({ type: 'lowpass', f: 300, f2: 1600, gain: 0.25 + p * 0.25, a: 0.12, dec: 0.4 + p * 0.3 });
+    tone({ f: 70, f2: 45, gain: 0.3 * p, a: 0.08, dec: 0.4 });
+  },
+  // un seau sur les flammes : sifflement de vapeur
+  extinguish() {
+    if (!ready() || !gate('hiss', 0.2)) return;
+    noise({ type: 'highpass', f: 2800, gain: 0.22, a: 0.02, dec: 0.6 });
+    noise({ f: 1200, f2: 600, q: 0.8, gain: 0.15, a: 0.01, dec: 0.25 }); // l'eau qui s'écrase
+  },
   tired() {
     if (!ready() || !gate('tired', 1)) return;
     for (let i = 0; i < 3; i++) noise({ f: 600, q: 3, gain: 0.12, a: 0.05, dec: 0.2, delay: i * 0.35 });
@@ -540,14 +553,27 @@ function startAmbience() {
     src.start();
     return { fl, g };
   };
-  amb = { wind: mk('lowpass', 450, 0.7), water: mk('bandpass', 700, 0.8), rain: mk('highpass', 2200, 0.5), birdT: 2, cricketT: 1, t: 0 };
+  amb = { wind: mk('lowpass', 450, 0.7), water: mk('bandpass', 700, 0.8), rain: mk('highpass', 2200, 0.5),
+    fire: mk('bandpass', 900, 0.6), roar: mk('lowpass', 220, 0.8), birdT: 2, cricketT: 1, crackT: 0, t: 0 };
 }
 
-// Appelée chaque frame : vent qui souffle, eau qui clapote, oiseaux le jour, grillons la nuit.
-export function updateAmbience(dt, { night, water, height, rain = 0, storm = 0 }) {
+// Appelée chaque frame : vent qui souffle, eau qui clapote, oiseaux le jour, grillons la nuit,
+// feu qui ronfle et crépite.
+export function updateAmbience(dt, { night, water, height, rain = 0, storm = 0, fire = 0 }) {
   if (!ready() || !amb) return;
   const t = ctx.currentTime;
   amb.t += dt;
+  amb.fire.g.gain.setTargetAtTime(fire * 0.16, t, 0.3);
+  amb.roar.g.gain.setTargetAtTime(fire * fire * 0.3, t, 0.4); // un grand incendie gronde
+  if (fire > 0.03) {
+    amb.crackT -= dt;
+    if (amb.crackT <= 0) {
+      // craquements secs du bois qui éclate
+      amb.crackT = rnd(0.03, 0.25) / (0.3 + fire);
+      tone({ f: rnd(900, 3000), type: 'square', gain: 0.02 + fire * 0.03, dec: 0.012, bus: ambBus });
+      if (Math.random() < 0.2) noise({ f: rnd(1500, 3500), q: 3, gain: 0.08 * fire, dec: 0.03, bus: ambBus });
+    }
+  }
   amb.rain.g.gain.setTargetAtTime(rain * 0.14, t, 0.5); // crépitement de la pluie
   height += storm * 6; // l'orage fait souffler le vent
   const gust = 0.5 + 0.5 * Math.sin(amb.t * 0.37) * Math.sin(amb.t * 0.13 + 1);

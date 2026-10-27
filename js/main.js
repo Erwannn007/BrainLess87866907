@@ -114,7 +114,7 @@ const nomu = {}; // nomu[anim][dir][frame]
 // point entre ses mains pour chaque image des anims où il porte quelque chose : holdPts[anim][dir][frame]
 const HOLD_ANIMS = ['grab', 'carry', 'carryWalk', 'carryJump', 'throwAim', 'throw', 'heave'];
 const holdPts = {};
-let objSprites, objGlow, crackImgs, peopleImgs, bloodImgs, fogImg, waterImgs, foamImgs, rimImgs, shadows, ui;
+let objSprites, objGlow, crackImgs, peopleImgs, bloodImgs, ashImgs, flameImgs, fogImg, waterImgs, foamImgs, rimImgs, shadows, ui;
 const blockCache = new Map();
 
 function block(type, h, v) {
@@ -184,6 +184,8 @@ async function loadAssets() {
     if (vs[id][0].glow) objGlow[id] = toSprite(vs[id][0].glow);
   }
   bloodImgs = [6, 9, 13].map((r, i) => toSprite(SP.bloodBuffer(r, i * 17 + 3)));
+  ashImgs = [8, 10].map((r, i) => toSprite(SP.ashBuffer(r, i * 7 + 2)));
+  flameImgs = [0, 1, 2].map((sz) => [0, 1, 2, 3].map((f) => toCanvas(SP.flameBuffer(sz, f))));
   crackImgs = {};
   for (const m of ['earth', 'sand', 'stone', 'snow']) crackImgs[m] = [1, 2, 3].map((l) => [0, 1, 2, 3].map((v) => toSprite(SP.crackBuffer(m, l, v))));
   done++; progress(); await tick();
@@ -241,6 +243,7 @@ const player = { x: 0, y: 0, z: 0, dir: 2, anim: 'idle', t: 0, spd: 0, phase: 0,
   hunger: 100, xp: 0, level: 1, alters: [], eating: null, nearCorpse: null, bigJump: false, starveMsg: false,
   // attraper / lancer : ce qu'il porte ({ o } objet du décor ou { n } habitant/animal, w = poids),
   // visée du lancer (bouton maintenu) et force
+  burnT: 0, // en feu
   held: null, grabTarget: null, grabArm: false, grabHoldT: 0, aiming: false, throwPow: 0, throwPower: 0 };
 const npcs = []; // villageois et chevaliers autour de Brainless
 const vstate = new Map(); // id du village -> { populated, anger, alarm }
@@ -263,7 +266,7 @@ function resetState() {
   Object.assign(player, JSON.parse(JSON.stringify(PLAYER0)));
   for (const k in stats) stats[k] = 0;
   npcs.length = particles.length = flyers.length = fx.length = decals.length = bloods.length = thrown.length = 0;
-  hits.clear(); vstate.clear(); bumpT.clear();
+  hits.clear(); vstate.clear(); bumpT.clear(); fires.clear();
   scent = null; msg = null; shake = 0; windT = 0; tod = 0.3; curVillage = null;
   Object.assign(weather, { kind: 'clear', left: 40, rain: 0, cloud: 0, fog: 0, storm: 0, flash: 0, boltT: 6 });
   weather.drops.length = weather.flakes.length = thunders.length = 0;
@@ -696,6 +699,7 @@ function damage(tx, ty, dmg) {
     burst(cx, cy, gz + 2, cols.concat(o === O.PLANKS ? [] : LEAF_COLS), 6, { leaf: o !== O.PLANKS, up: 25, g: 30 });
   }
   world.setObj(tx, ty, next);
+  if (info.prop === 'lantern') oilSplash(tx, ty); // l'huile de la lanterne s'enflamme
   if (info.village) crime(info.crime || 0.2, cx, cy);
   return true;
 }
@@ -713,7 +717,7 @@ const bumpT = new Map(); // un bâtiment percuté en sprint ne prend pas un coup
 
 // Un bâtiment encaisse, tremble, s'abîme puis s'effondre. L'excédent d'un très gros coup
 // passe d'un état au suivant : un coup chargé à bout portant le rase d'un coup.
-function damageBuilding(ax, ay, dmg) {
+function damageBuilding(ax, ay, dmg, quiet) { // quiet : le feu (pas un méfait de Brainless, le village ne s'en prend pas à lui)
   const key = ax + ',' + ay;
   let o = world.objAt(ax, ay), info = OBJ_INFO[o];
   const gz = world.hAt(ax, ay) * 8;
@@ -726,7 +730,7 @@ function damageBuilding(ax, ay, dmg) {
   hits.set(key, st);
   burst(ax, ay, top, cols, 4 + Math.min(10, dmg * 2), { up: 30, speed: 1.4, spread: 10 });
   burst(ax, ay, gz + 2, DUST_COLS, 4, { up: 20, speed: 1.6, spread: 6 });
-  crime(0.4, ax, ay);
+  if (!quiet) crime(0.4, ax, ay);
   const before = o;
   while (info.next && st.n >= info.hp) {
     st.n -= info.hp;
@@ -742,13 +746,13 @@ function damageBuilding(ax, ay, dmg) {
     fx.push({ kind: 'collapse', img: objSprites[before][0], x: ax, y: ay, gz, t: 0 });
     burst(ax, ay, gz + 6, DUST_COLS.concat(cols), 60, { up: 60, speed: 3.5, g: 60, life: 1.6, spread: 18, big: 0.6 });
     burst(ax, ay, top, cols.concat(WOOD_COLS), 30, { up: 80, speed: 3, big: 0.7 });
-    crime(4, ax, ay);
+    if (!quiet) crime(4, ax, ay);
     releaseHome(ax, ay);
   } else {
     sfx.buildingCrack();
     shake = Math.max(shake, 3.5);
     burst(ax, ay, top, cols, 18, { up: 60, speed: 2.2, big: 0.5 });
-    crime(1.5, ax, ay);
+    if (!quiet) crime(1.5, ax, ay);
   }
   return true;
 }
@@ -985,6 +989,7 @@ function doBigPunch(power) {
   const inCone = (rx, ry, d) => d < 0.9 || (rx * dx + ry * dy) / d > Math.cos(half);
   const dmgAt = (d) => Math.max(1, Math.round(dmgBase * (1 - 0.75 * d / R)));
   blast(R, inCone, dmgAt);
+  blowFires(R, inCone, 0.9);
   for (const n of npcs) {
     const rx = n.x - player.x, ry = n.y - player.y, d = Math.hypot(rx, ry) || 0.01;
     if (n.inside || n.held || !alive(n) || d > R || !inCone(rx, ry, d)) continue;
@@ -1033,6 +1038,7 @@ function doSlam(power) {
   const base = (2 + power * 8) * strength();
   const dmgAt = (d) => Math.max(1, Math.round(base * (1 - 0.75 * d / R)));
   blast(R, () => true, dmgAt);
+  blowFires(R, () => true, 2); // le souffle éteint les flammes
   if (has('storm')) lightningChain(power);
   // au centre, ceux qui sont sous lui sont écrasés ; plus loin ils sont projetés
   const crushR = Math.max(1.3, R * 0.5);
@@ -1394,6 +1400,7 @@ function update(dt) {
   updateHealth(dt);
   updateVillages(dt);
   updateNpcs(dt);
+  updateFires(dt);
   updateWildlife(dt);
   updateWeather(dt);
   updateScent(dt);
@@ -1404,7 +1411,7 @@ function update(dt) {
   for (let i = decals.length - 1; i >= 0; i--) if ((decals[i].age += dt) > 9) decals.splice(i, 1);
   updateMusic(dt, { night: darkness(), danger: dangerLevel(), rain: weather.rain });
   updateAmbience(dt, { night: darkness() > 0.5, water: waterNearby(), height: world.hAt(Math.floor(player.x), Math.floor(player.y)),
-    rain: weather.snow ? 0 : weather.rain, storm: weather.storm });
+    rain: weather.snow ? 0 : weather.rain, storm: weather.storm, fire: fireNear });
   updateFlyers(dt);
   for (let i = fx.length - 1; i >= 0; i--) {
     const f = fx[i];
@@ -1707,6 +1714,7 @@ function lightningChain(power) {
     .sort((a, b) => Math.hypot(a.x - player.x, a.y - player.y) - Math.hypot(b.x - player.x, b.y - player.y)).slice(0, 2 + Math.round(power * 2));
   for (const n of targets) {
     fx.push({ kind: 'bolt', x: n.x, y: n.y, z: n.z, t: 0, seed: Math.random() * 1000 });
+    ignite(Math.floor(n.x), Math.floor(n.y), 2);
     const d = Math.hypot(n.x - player.x, n.y - player.y) || 1;
     hitNpc(n, 3 * strength(), (n.x - player.x) / d, (n.y - player.y) / d, 0.3);
     burst(n.x, n.y, n.z + 10, ['#fff7a8', '#8fd8ff', '#ffffff'], 10, { up: 40, speed: 2, life: 0.4 });
@@ -2134,11 +2142,14 @@ function updateNpcs(dt) {
       if ((n.deadT += dt) > 150) npcs.splice(i, 1);
       continue;
     }
+    if (n.burnT > 0 && burnNpc(n, dt)) continue;
     n.alertT = Math.max(0, n.alertT - dt); n.flash = Math.max(0, n.flash - dt);
     n.cd -= dt; n.waveCd -= dt;
     if (n.inside) {
       // la nuit, ils dorment chez eux ; ils ressortent au matin
       if (!night && weather.rain < 0.4) { n.inside = false; n.fade = 0; n.state = 'wander'; n.wait = 1 + Math.random() * 3; }
+      // « au feu ! » : ils sortent en courant
+      else if (n.kind === 'civ' && fires.size && villageFire(n)) { n.inside = false; n.fade = 0; n.state = 'bucket'; n.bucket = false; n.fillT = 0; n.stuck = 0; }
       continue;
     }
     if (n.air) {
@@ -2179,10 +2190,37 @@ function updateNpcs(dt) {
         steer(n, n.x + (ax * c - ay * sn) / l * 2, n.y + (ax * sn + ay * c) / l * 2, 3.2 * n.speedK, dt);
         if (n.stuck > 0.6) { n.fj = (Math.random() - 0.5) * 3; n.stuck = 0; }
         if ((n.fleeT -= dt) <= 0 && d > 11 && !alarmed(n.v)) { n.state = 'wander'; n.wait = 2; }
+        // assez loin du monstre, on retourne éteindre le feu
+        if (n.kind === 'civ' && !(n.burnT > 0) && n.fleeT < 2 && d > 10 && fires.size && villageFire(n)) { n.state = 'bucket'; n.bucket = false; n.fillT = 0; n.stuck = 0; }
+        break;
+      }
+      case 'bucket': {
+        // la chaîne des seaux : remplir au puits, courir au feu, jeter l'eau, recommencer
+        const fi = villageFire(n), v = world.villages.get(n.v);
+        if (!fi || !v || (alarmed(n.v) && d < 6)) {
+          n.state = 'wander'; n.wait = 1; n.bucket = false;
+          if (v && alarmed(n.v) && d < 6) startFlee(n);
+          break;
+        }
+        if (!n.bucket) {
+          const wx = v.cx + 0.5, wy = v.cy + 1.5; // à côté du puits
+          if (Math.hypot(wx - n.x, wy - n.y) > 0.5 && n.stuck < 2) { anim = 'walk'; steer(n, wx, wy, 2.6 * n.speedK, dt); }
+          else if ((n.fillT += dt) > 0.7) { n.bucket = true; n.fillT = 0; n.stuck = 0; }
+        } else {
+          const [fx0, fy0] = fireCenter(fi);
+          if (Math.hypot(fx0 - n.x, fy0 - n.y) > (fi.bld ? 2.1 : 1.2) && n.stuck < 2) { anim = 'walk'; steer(n, fx0, fy0, 2.2 * n.speedK, dt); }
+          else {
+            anim = 'wave';
+            n.dir = faceDir(fx0 - n.x, fy0 - n.y);
+            if ((n.fillT += dt) > 0.45) { douse(fi, n); n.bucket = false; n.fillT = 0; n.stuck = 0; }
+          }
+        }
         break;
       }
       case 'wander':
       case 'guard':
+        // le feu au village : ils courent chercher de l'eau au puits, même en pleine nuit
+        if (n.kind === 'civ' && fires.size && !(alarmed(n.v) && d < 7) && villageFire(n)) { n.state = 'bucket'; n.bucket = false; n.fillT = 0; n.stuck = 0; break; }
         if (n.state === 'wander' && (night || weather.rain > 0.6) && homeIntact(n.home)) {
           anim = 'walk';
           const [hx, hy] = n.home.door;
@@ -2434,6 +2472,8 @@ function strike() {
   const tx = Math.floor(x), ty = Math.floor(y), info = OBJ_INFO[world.objAt(tx, ty)];
   if (info && info.tree) damage(tx, ty, 99);
   crackTile(tx, ty, 2);
+  ignite(tx, ty, 6, info && info.tree); // la foudre met le feu (la pluie finit souvent par l'éteindre)
+  for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (dx || dy) ignite(tx + dx, ty + dy, 1.5);
   for (const n of npcs) if (alive(n) && !n.inside && Math.hypot(n.x - x, n.y - y) < 1.3) hitNpc(n, 5, 0, 0, 0.5);
   if (d < 1.4) {
     if (has('storm')) { player.hp = Math.min(maxHp(), player.hp + 30); showMsg('FOUDRE ABSORBEE', 2); } // il se nourrit de l'orage
@@ -2491,6 +2531,245 @@ function drawWeather(dt) {
     for (let y = fy0; y < VH; y += fogImg.height) for (let x = fx0; x < VW; x += fogImg.width) ctx.drawImage(fogImg, x, y);
     ctx.globalAlpha = 1;
   }
+}
+
+// ---------------------------------------------------------------- feu
+// Une tuile qui brûle : ses flammes montent, consument son combustible (`fuel` dans OBJ_INFO, ou le
+// toit d'un bâtiment) puis retombent. Bien chaude, elle allume ses voisines selon leur
+// inflammabilité (foin, chaume, blé, buissons, arbres… l'herbe rase à peine). La pluie l'étouffe,
+// une frappe au sol la souffle, les villageois font la chaîne avec des seaux depuis le puits.
+// Consumé : l'arbre reste calciné, l'objet part en cendres, l'herbe noircit, la maison s'effondre.
+const fires = new Map(); // "x,y" -> { x, y, o, t, fuel, heat, bld, tree, tick }
+const MAX_FIRES = 70;
+const BURN_MAT = { thatch: 1, barn: 0.75, tile: 0.3, slate: 0.12, stone: 0 }; // inflammabilité des toits
+const BURN_FUEL = { thatch: 14, barn: 12, tile: 10, slate: 8, stone: 0 };
+const SMOKE_COLS = ['#34343a', '#4a4a50', '#62626a'];
+const EMBER_COLS = ['#ffd23f', '#ffb347', '#ff5a2a'];
+const STEAM_COLS = ['#e8eef4', '#c9d3dc', '#ffffff'];
+let fireNear = 0; // pour le crépitement : à quel point il y a du feu autour de Brainless
+const fireGlows = []; // flammes à raviver après la teinte de nuit
+
+const grassy = (t) => t === T.GRASS || t === T.MEADOW || t === T.FOREST;
+
+function flammability(tx, ty) {
+  if (!world.walkable(tx, ty)) return 0;
+  const info = OBJ_INFO[world.objAt(tx, ty)];
+  if (info && info.building) return info.state < 2 ? BURN_MAT[info.mat] : 0;
+  if (info && info.fuel) return info.prop === 'hay' ? 1 : info.tree ? 0.45 : info.small ? (info.crop ? 0.6 : 0.25) : 0.7;
+  return grassy(world.typeAt(tx, ty)) ? 0.06 : 0;
+}
+
+// Met le feu à une tuile (un bâtiment : à son ancre). `chance` multiplie son inflammabilité ;
+// `force` : de l'huile renversée, ça prend même sur l'herbe rase.
+function ignite(tx, ty, chance = 1, force = false) {
+  const a = world.anchorOf(tx, ty);
+  if (a) [tx, ty] = a;
+  const k = tx + ',' + ty;
+  if (fires.has(k) || fires.size >= MAX_FIRES || !world.walkable(tx, ty)) return false;
+  const fl = Math.max(flammability(tx, ty), force ? 0.06 : 0);
+  if (!fl || (!force && Math.random() >= fl * chance)) return false;
+  const o = world.objAt(tx, ty), info = OBJ_INFO[o], bld = !!(info && info.building);
+  fires.set(k, { x: tx, y: ty, o, t: 0, heat: force ? 0.6 : 0.25, tick: Math.random() * 0.5, bld, tree: !!(info && info.tree),
+    fuel: bld ? BURN_FUEL[info.mat] : (info && info.fuel) || 1.5 });
+  if (Math.hypot(tx + 0.5 - player.x, ty + 0.5 - player.y) < 14) sfx.ignite(bld || (info && info.tree) ? 1 : 0.4);
+  return true;
+}
+
+// Une lanterne qui se brise, une charge en feu qui retombe : l'huile s'enflamme tout autour.
+function oilSplash(tx, ty) {
+  ignite(tx, ty, 9, true);
+  for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (dx || dy) ignite(tx + dx, ty + dy, 3);
+}
+
+// Centre d'un feu au sol (un bâtiment : le coin commun de ses 4 tuiles).
+const fireCenter = (f) => (f.bld ? [f.x, f.y] : [f.x + 0.5, f.y + 0.5]);
+
+function setOnFire(n) {
+  if (n.burnT > 0.5) return;
+  n.burnT = n.kind === 'hero' ? 1.5 : n.kind === 'beast' ? 3 : 4;
+  n.bucket = false;
+  if (n.kind === 'hero' || n.state === 'ko') return;
+  // il court dans tous les sens en hurlant
+  n.state = 'flee'; n.fleeT = 4; n.fj = (Math.random() - 0.5) * 2.5;
+  if (n.kind !== 'beast') sfx.scream(PEOPLE[n.type].voice * 1.3);
+}
+
+function updateFires(dt) {
+  const rain = weather.rain * (weather.snow ? 0.6 : 1);
+  let near = 0;
+  for (const [k, f] of fires) {
+    const [cx, cy] = fireCenter(f), d = Math.hypot(cx - player.x, cy - player.y);
+    if (d > 30) { fires.delete(k); continue; } // trop loin : on l'oublie
+    const o = world.objAt(f.x, f.y);
+    if (o !== f.o) {
+      // l'objet a été cassé, arraché ou s'est effondré : il ne reste presque rien à brûler
+      const info = OBJ_INFO[o];
+      f.o = o; f.tree = !!(info && info.tree);
+      if (!(info && info.building && info.state < 2)) f.fuel = Math.min(f.fuel, f.t + 1.5);
+    }
+    f.t += dt;
+    f.heat = Math.min(1, f.heat + (f.t < f.fuel ? 0.9 : -0.5) * dt) - rain * 0.3 * dt;
+    if (f.heat <= 0) { burnOut(f); fires.delete(k); continue; }
+    near += f.heat * Math.max(0, 1 - d / 12) * (f.bld || f.tree ? 1 : 0.4);
+    if ((f.tick -= dt) <= 0) {
+      f.tick = 0.5;
+      if (f.heat > 0.4) {
+        // il gagne les voisins (un bâtiment : tout autour de ses 4 tuiles)
+        const [x0, x1, y0, y1] = f.bld ? [f.x - 3, f.x + 1, f.y - 3, f.y + 1] : [f.x - 1, f.x + 1, f.y - 1, f.y + 1];
+        for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) if (x !== f.x || y !== f.y) ignite(x, y, f.heat * 0.22 * (1 - rain));
+      }
+      if (f.bld && (f.dmgT = (f.dmgT || 0) + 0.5) >= 1.5) {
+        // la charpente brûle : la maison s'abîme puis s'effondre
+        f.dmgT = 0;
+        damageBuilding(f.x, f.y, 1, true);
+        const info = OBJ_INFO[world.objAt(f.x, f.y)];
+        if (info && info.state === 2) f.fuel = Math.min(f.fuel, f.t + 3);
+      }
+    }
+    // ceux qui sont dans les flammes prennent feu
+    if (f.heat > 0.3) {
+      const r = f.bld ? 1.3 : 0.55;
+      for (const n of npcs) if (alive(n) && !n.inside && !n.held && !n.thrown && Math.hypot(n.x - cx, n.y - cy) < r) setOnFire(n);
+      if (!player.dead && !player.water && player.jz < 12 && Math.hypot(player.x - cx, player.y - cy) < r) player.burnT = Math.max(player.burnT, 1.2);
+    }
+    // fumée et braises qui montent
+    if (particles.length < 330) {
+      const gz = world.hAt(f.x, f.y) * 8, top = gz + (f.bld ? 30 : f.tree ? 28 : 6), k2 = f.bld || f.tree ? 1 : 0.3;
+      if (Math.random() < dt * f.heat * 6 * k2 + dt * 0.6) {
+        particles.push({ x: cx + (Math.random() - 0.5) * (f.bld ? 1.4 : 0.4), y: cy + (Math.random() - 0.5) * 0.4, z: top, vx: 0.3 + Math.random() * 0.2, vy: -0.25, vz: 9 + Math.random() * 8,
+          g: -5, drag: 0.5, life: 1.8 + Math.random() * 1.4, col: SMOKE_COLS[(Math.random() * 3) | 0], size: Math.random() < 0.6 ? 2 : 1 });
+      }
+      if (Math.random() < dt * f.heat * 6 * k2 + dt * 0.8) {
+        particles.push({ x: cx + (Math.random() - 0.5) * 0.6, y: cy + (Math.random() - 0.5) * 0.6, z: top - 4, vx: (Math.random() - 0.5) * 0.8, vy: (Math.random() - 0.5) * 0.8, vz: 25 + Math.random() * 25,
+          g: -4, drag: 1, life: 0.6 + Math.random() * 0.7, col: EMBER_COLS[(Math.random() * 3) | 0], size: 1 });
+      }
+    }
+  }
+  fireNear = Math.min(1, near);
+
+  // Brainless en feu : ça brûle un peu (l'eau l'éteint aussitôt)
+  if (player.burnT > 0) {
+    player.burnT -= dt * (player.water ? 20 : 1 + rain * 2);
+    if (!player.dead) {
+      player.hp -= dt * 4 * [0.6, 1, 1.5][world.p.difficulty] * (has('absorb') ? 0.5 : 1);
+      player.lastHurt = time;
+      if (player.hp <= 0) playerDown();
+    }
+    if (Math.random() < dt * 8) burst(player.x, player.y, player.z + 10 + Math.random() * 20, EMBER_COLS, 1, { up: 30, g: -4, speed: 0.4, life: 0.6, spread: 0 });
+  }
+}
+
+// Habitant ou animal en feu (appelé chaque image tant qu'il brûle). Renvoie true s'il en meurt.
+function burnNpc(n, dt) {
+  n.burnT -= dt * (1 + weather.rain * 2);
+  n.hp -= dt * (n.kind === 'hero' ? 0.6 : 0.35);
+  if (Math.random() < dt * 0.6) ignite(Math.floor(n.x), Math.floor(n.y), 1); // il propage le feu en courant
+  if (Math.random() < dt * 6 && particles.length < 340) burst(n.x, n.y, n.z + 10, Math.random() < 0.5 ? EMBER_COLS : SMOKE_COLS, 1, { up: 25, g: -4, speed: 0.3, life: 0.8, spread: 6 });
+  if (n.kind !== 'beast' && n.kind !== 'hero' && Math.random() < dt * 0.7) sfx.scream(PEOPLE[n.type].voice * 1.3);
+  if (n.hp > 0) return false;
+  n.burnT = 0;
+  killNpc(n, false);
+  return true;
+}
+
+// Fin d'un feu. Assez brûlé (60 % du combustible), il laisse sa marque ; éteint à temps, l'objet est sauvé.
+function burnOut(f) {
+  if (f.t < f.fuel * 0.6) return;
+  const o = world.objAt(f.x, f.y), info = OBJ_INFO[o];
+  if (info && info.building) { if (info.state < 2) damageBuilding(f.x, f.y, 99, true); return; }
+  if (info && info.tree) { world.setObj(f.x, f.y, O.BURNT); stats.trees++; }
+  else if (info && info.fuel) world.setObj(f.x, f.y, O.NONE);
+  const t = world.typeAt(f.x, f.y), h = world.hAt(f.x, f.y);
+  if (grassy(t)) world.setTile(f.x, f.y, T.DIRT, h, stats.play); // l'herbe noircie repoussera
+  bloods.push({ x: f.x + 0.5, y: f.y + 0.5, h, img: ashImgs[(f.x + f.y) & 1], age: 0 });
+  if (bloods.length > 80) bloods.shift();
+}
+
+// Le feu de son village le plus proche de lui (pour la chaîne des seaux).
+function villageFire(n) {
+  const v = world.villages.get(n.v);
+  if (!v || !fires.size) return null;
+  let best = null, bd = 1e9;
+  for (const f of fires.values()) {
+    const [cx, cy] = fireCenter(f);
+    if (Math.hypot(cx - v.cx - 0.5, cy - v.cy - 0.5) > v.R + 3) continue;
+    const d = Math.hypot(cx - n.x, cy - n.y);
+    if (d < bd) { bd = d; best = f; }
+  }
+  return best;
+}
+
+// Un seau d'eau jeté sur le feu : vapeur, sifflement, les flammes baissent.
+function douse(f, from) {
+  f.heat -= 0.5;
+  const [cx, cy] = fireCenter(f), gz = world.hAt(f.x, f.y) * 8;
+  const dx = cx - from.x, dy = cy - from.y, l = Math.hypot(dx, dy) || 1;
+  for (let i = 0; i < 10; i++) {
+    particles.push({ x: from.x + dx / l * 0.3, y: from.y + dy / l * 0.3, z: from.z + 14, vx: dx / l * (2 + Math.random() * 1.5), vy: dy / l * (2 + Math.random() * 1.5), vz: 30 + Math.random() * 20,
+      g: 160, drag: 0.5, life: 0.6, col: WATER_COLS[(Math.random() * 3) | 0], size: 1 });
+  }
+  burst(cx, cy, gz + 8, STEAM_COLS, 8, { up: 25, g: -10, speed: 0.6, life: 1.2, spread: 8 });
+  if (Math.hypot(cx - player.x, cy - player.y) < 14) sfx.extinguish();
+}
+
+// Souffle d'une frappe : les flammes dans la zone sont soufflées (`test(rx, ry, d)` comme `blast`).
+function blowFires(R, test, k) {
+  for (const f of fires.values()) {
+    const [cx, cy] = fireCenter(f), rx = cx - player.x, ry = cy - player.y, d = Math.hypot(rx, ry);
+    if (d > R || !test(rx, ry, d)) continue;
+    f.heat -= k;
+    burst(cx, cy, world.hAt(f.x, f.y) * 8 + 6, SMOKE_COLS, 4, { up: 20, g: -5, speed: 1.5, life: 1, spread: 6 });
+  }
+}
+
+// Flammes d'une tuile en feu : où et de quelle taille, selon ce qui brûle (stables d'une image à l'autre).
+function flamesOf(f) {
+  const big = f.heat > 0.45 ? 1 : 0, j = (i) => hash(f.x, f.y, i) - 0.5;
+  if (f.bld) {
+    const info = OBJ_INFO[f.o] || {}, top = info.state === 2 ? 10 : info.building === 'tower' ? 40 : 22;
+    return [[-12 + j(1) * 4, top * 0.55, 1 + big], [11 + j(2) * 4, top * 0.6, 1 + big], [j(3) * 6, top, 1 + big], [-5 + j(4) * 4, top * 0.85, 1], [6 + j(5) * 4, top * 0.3, 1]];
+  }
+  if (f.tree) return [[j(1) * 3, 30, 1 + big], [-7 + j(2) * 2, 22, 1], [7 + j(3) * 2, 24, 1], [j(4) * 4, 4, 0]];
+  const info = OBJ_INFO[f.o];
+  if (info && !info.small) return [[j(1) * 2, 7, big], [-4 + j(2) * 2, 2, 0], [4 + j(3) * 2, 3, 0]];
+  return [[j(1) * 8, 1, big * 0], [j(2) * 8, 3, 0]].slice(0, f.heat > 0.6 ? 2 : 1);
+}
+
+function drawFire(f, ox, oy) {
+  const [cx, cy] = fireCenter(f), h = world.hAt(f.x, f.y);
+  const sx = ox + Math.round(isoX(cx, cy)), sy = oy + Math.round(isoY(cx, cy)) - h * 8;
+  flamesOf(f).forEach(([dx, up, size], i) => drawFlame(size, sx + Math.round(dx), sy - Math.round(up), i + f.x * 3 + f.y, f.heat));
+}
+
+// Une flamme posée en (x, y) (son pied). Gardée aussi pour la passe lumineuse de nuit.
+function drawFlame(size, x, y, seed, heat = 1) {
+  const img = flameImgs[size][(Math.floor(time * 10) + seed) & 3];
+  const px = x - img.ox, py = y - img.oy;
+  ctx.globalAlpha = Math.min(1, heat * 2);
+  ctx.drawImage(img, px, py);
+  ctx.globalAlpha = 1;
+  fireGlows.push([img, px, py, size, heat]);
+}
+
+// Après la teinte de nuit : les flammes brillent et éclairent autour d'elles.
+function drawFireGlow() {
+  if (!fireGlows.length) return;
+  const dk = darkness();
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (const [img, px, py, size, heat] of fireGlows) {
+    ctx.globalAlpha = (0.12 + dk * 0.6) * Math.min(1, heat * 2);
+    ctx.drawImage(img, px, py);
+    if (size < 1 || dk < 0.1) continue;
+    const hx = px + (img.width >> 1), hy = py + img.height - 4, r = 6 + size * 6;
+    ctx.fillStyle = '#ff8a3c';
+    ctx.globalAlpha = dk * 0.07 * heat;
+    ctx.fillRect(hx - r * 2, hy - r * 0.6, r * 4, r * 1.2); ctx.fillRect(hx - r, hy - r * 1.2, r * 2, r * 2.4);
+    ctx.globalAlpha = dk * 0.06 * heat;
+    ctx.fillRect(hx - r * 1.4, hy - r, r * 2.8, r * 2);
+  }
+  ctx.restore();
+  fireGlows.length = 0;
 }
 
 // ---------------------------------------------------------------- attraper et lancer
@@ -2572,6 +2851,8 @@ function seize() {
   const o = tg ? world.objAt(tg.tx, tg.ty) : 0, info = OBJ_INFO[o];
   if (!info || !info.lift) { sfx.punchAir(); return; }
   const cx = tg.tx + 0.5, cy = tg.ty + 0.5, gz = world.hAt(tg.tx, tg.ty) * 8;
+  const fire = fires.get(tg.tx + ',' + tg.ty), burning = !!(fire && fire.heat > 0.3); // il l'arrache en feu
+  fires.delete(tg.tx + ',' + tg.ty);
   world.setObj(tg.tx, tg.ty, O.NONE);
   hits.delete(tg.tx + ',' + tg.ty);
   if (info.tree) {
@@ -2590,7 +2871,7 @@ function seize() {
     if (info.rock) crackTile(tg.tx, tg.ty, 1);
   }
   if (info.village) crime(info.crime || 0.2, cx, cy);
-  player.held = { o, w: info.lift, tree: !!info.tree };
+  player.held = { o, w: info.lift, tree: !!(info.tree || info.burnt), burning };
 }
 
 // Un appui bref : droit devant, ou vers le stick ; visée aidée sur la proie la plus proche du tir.
@@ -2655,7 +2936,7 @@ function releaseHeld(ux, uy, power, gentle) {
       n.dying = !gentle && power > 0.6 && !tough(n);
       if (n.kind !== 'beast' && !gentle) sfx.scream(PEOPLE[n.type].voice * 1.3);
     }
-  } else thrown.push({ o: h.o, tree: h.tree, x, y, fz, vx: ux * v, vy: uy * v, vz, spin: 0, ...th });
+  } else thrown.push({ o: h.o, tree: h.tree, burning: h.burning, x, y, fz, vx: ux * v, vy: uy * v, vz, spin: 0, ...th });
 }
 
 function dropHeld() {
@@ -2747,6 +3028,7 @@ function updateThrown(dt) {
     const p = thrown[i];
     const ev = flight(p, p, dt);
     p.spin = Math.floor(p.t * 11 / p.w); // il tournoie, d'autant plus lentement qu'il est lourd
+    if (p.burning && Math.random() < dt * 25) burst(p.x, p.y, p.fz + 8, EMBER_COLS.concat(SMOKE_COLS), 1, { up: 10, g: -4, speed: 0.3, life: 0.7, spread: 4 });
     if (Math.random() < dt * 30 && p.power > 0.2) {
       particles.push({ x: p.x, y: p.y, z: p.fz + 6, vx: -p.vx * 0.3, vy: -p.vy * 0.3, vz: 0, g: 0, drag: 3, life: 0.2, col: '#ffffff', size: 1, streak: true });
     }
@@ -2782,7 +3064,12 @@ function shatter(p, ev) {
     if (OBJ_INFO[world.objAt(tx, ty)]?.small) damage(tx, ty, 1); // l'herbe, les fleurs écrasées
   }
   const free = ev.land && world.objAt(tx, ty) === O.NONE;
-  if (p.tree) {
+  if (p.burning || p.o === O.LANTERN) oilSplash(tx, ty); // ce qui brûlait (ou l'huile) met le feu là où ça tombe
+  if (info.burnt) {
+    sfx.rockBreak();
+    burst(p.x, p.y, z + 6, ['#2a201c', '#45362e', '#120d0c'].concat(SMOKE_COLS), 20, { up: 50, speed: 2 });
+    if (free) world.setObj(tx, ty, O.BURNT);
+  } else if (p.tree) {
     sfx.treeCrash();
     windT = Math.max(windT, 1);
     burst(p.x, p.y, z + 8, leafColsFor(p.o), 30, { leaf: true, up: 30, g: 30, life: 1.6, spread: 12 });
@@ -2791,8 +3078,8 @@ function shatter(p, ev) {
     sfx.rockBreak();
     burst(p.x, p.y, z + 4, ROCK_COLS, 18 + p.w * 6, { up: 60, speed: 2.2, big: 0.6 });
     if (free) world.setObj(tx, ty, p.o === O.ROCK_L ? O.ROCK : O.PEBBLES); // il se fend en retombant
-  } else if (p.o === O.LOG) {
-    if (free) { world.setObj(tx, ty, O.LOG); sfx.land(true); } else { sfx.rockBreak(); burst(p.x, p.y, z + 3, WOOD_COLS, 14, { up: 60, speed: 2 }); }
+  } else if (info.wood) {
+    if (free) { world.setObj(tx, ty, p.o); sfx.land(true); } else { sfx.rockBreak(); burst(p.x, p.y, z + 3, WOOD_COLS, 14, { up: 60, speed: 2 }); }
   } else {
     // tonneau, caisse, foin, lanterne : ça éclate
     sfx.propBreak(info.prop);
@@ -2841,6 +3128,7 @@ function flyNpc(n, dt) {
   }
   if (!alive(n)) burst(n.x, n.y, n.z + 2, BLOOD_COLS, 10, { up: 30, speed: 1.4 });
   else if (n.dying) killNpc(n, false);
+  if (n.burnT > 0) ignite(Math.floor(n.x), Math.floor(n.y), 4); // une torche vivante qui retombe
   return 'land';
 }
 
@@ -2869,7 +3157,7 @@ function doHeave() {
       burst(x, y, gz + 2, BLOOD_COLS, 14, { up: 40, speed: 1.6 });
       sfx.splat();
     }
-  } else shatter({ o: h.o, tree: h.tree, w: h.w, x, y, fz: gz, power: 0.6, hit: new Set() }, { land: true, water: !world.walkable(Math.floor(x), Math.floor(y)) });
+  } else shatter({ o: h.o, tree: h.tree, burning: h.burning, w: h.w, x, y, fz: gz, power: 0.6, hit: new Set() }, { land: true, water: !world.walkable(Math.floor(x), Math.floor(y)) });
   // l'onde bouscule ceux qui sont tout près
   for (const n of npcs) {
     const rx = n.x - x, ry = n.y - y, d = Math.hypot(rx, ry);
@@ -3081,6 +3369,13 @@ function render() {
     if (!l) npcRows.set(r, l = []);
     l.push(p);
   }
+  const fireRows = new Map();
+  for (const f of fires.values()) {
+    const r = f.x + f.y;
+    let l = fireRows.get(r);
+    if (!l) fireRows.set(r, l = []);
+    l.push(f);
+  }
   // traces de dérapage rangées par rangée pour être dessinées sur le sol, sous les objets
   const decalRows = new Map();
   for (const m of bloods) {
@@ -3139,6 +3434,8 @@ function render() {
     }
     if (d === pRow && mode === 'play') rowEnts.push({ player: true, mx: player.x, my: player.y, depth: player.x + player.y });
     const rn = npcRows.get(d);
+    const rf = fireRows.get(d);
+    if (rf) for (const f of rf) rowEnts.push({ fire: f, depth: f.bld ? d - 0.45 : d + 1.05 }); // juste devant ce qui brûle
     if (rn) for (const n of rn) rowEnts.push(n.o ? { thrown: n, mx: n.x, my: n.y, depth: n.x + n.y } : { npc: n, mx: n.x, my: n.y, depth: n.x + n.y });
     if (rowEnts.length) {
       // devant ou derrière un bâtiment de la même rangée ?
@@ -3153,6 +3450,7 @@ function render() {
       for (const e of rowEnts) {
         if (e.player) { drawPlayer(ox, oy, 1); playerDrawn = true; } else if (e.npc) drawNpc(e.npc, ox, oy);
         else if (e.thrown) drawThrown(e.thrown, ox, oy);
+        else if (e.fire) drawFire(e.fire, ox, oy);
         else drawObject(e);
       }
     }
@@ -3188,6 +3486,7 @@ function render() {
   drawWeather(Math.min(0.05, time - lastRender)); lastRender = time;
   drawSky();
   drawGlows();
+  drawFireGlow();
   if (weather.flash > 0) {
     ctx.fillStyle = `rgba(235,240,255,${weather.flash * 0.45})`;
     ctx.fillRect(0, 0, VW, VH);
@@ -3262,6 +3561,14 @@ function drawNpc(n, ox, oy) {
     ctx.globalAlpha = 0.7;
     drawTurned(img, sx, sy - jz, n.rot || 0);
     ctx.restore();
+  }
+  if (n.burnT > 0) drawFlame(1, sx + 1, sy - jz - 4, n.x * 7 | 0, Math.min(1, n.burnT));
+  if (n.bucket && n.state === 'bucket') {
+    // son seau d'eau, au bout du bras
+    const bx = sx + 3, by = sy - jz - 10;
+    ctx.fillStyle = '#3a2a1c'; ctx.fillRect(bx - 1, by - 1, 5, 5);
+    ctx.fillStyle = '#7a5a3a'; ctx.fillRect(bx, by, 3, 3);
+    ctx.fillStyle = '#5fa8e0'; ctx.fillRect(bx, by, 3, 1);
   }
   if (n.state === 'ko' && !n.air) {
     // des étoiles qui tournent au-dessus de sa tête
@@ -3393,6 +3700,10 @@ function drawPlayer(ox, oy, withShadow) {
     draw(img, px, py);
     ctx.restore();
   }
+  if (player.burnT > 0 && withShadow) {
+    drawFlame(1, sx - 4, sy - gz - jz - 8, 1);
+    drawFlame(1, sx + 4, sy - gz - jz - 16, 3);
+  }
   if (player.charging && withShadow) {
     // il "chauffe" : son corps s'illumine par pulsations
     const pulse = (Math.sin(time * (8 + player.charge * 14)) + 1) / 2;
@@ -3424,6 +3735,7 @@ function drawHeld(hx, hy, hp) {
   const cy = hy - (g * (hgt / 2 + 1) + (1 - g) * (0.5 - grip) * hgt); // levé : tout entier au-dessus de ses doigts
   if (!h.n && h.tree && !rot) draw(img, Math.round(hx - img.ox), Math.round(hy + 4 - img.oy));
   else drawCentered(img, hx, cy, rot);
+  if (h.burning || (h.n && h.n.burnT > 0)) drawFlame(rot & 1 ? 2 : 1, hx, Math.round(cy - 2), 5);
   if (h.n && h.n.flash > 0) { ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = 0.6; drawCentered(img, hx, cy, rot); ctx.restore(); }
 }
 
@@ -3434,6 +3746,7 @@ function drawThrown(p, ox, oy) {
   ctx.drawImage(sh, sx - sh.ox, sy - Math.round(gz) - sh.oy);
   const img = objSprites[p.o][0];
   drawCentered(img, sx, sy - Math.round(p.fz) - (img.h >> 1) * 0.6, (p.tree ? 1 : 0) + p.spin);
+  if (p.burning) drawFlame(p.tree ? 2 : 1, sx, sy - Math.round(p.fz), 2);
 }
 
 // Visée du lancer : la trajectoire en pointillés et le point de chute, qui s'allongent avec la force.
@@ -3896,7 +4209,7 @@ function updateMenu(dt) {
   if (location.hash === '#debug') {
     window.BRAINLESS = { get world() { return world; }, player, startWorld, createWorld, listWorlds, quitToMenu, get mode() { return mode; }, stats, O, T, decals, particles, npcs, damage, hurtPlayer,
       vstate, crime, killNpc, hitNpc, nearestPrey, get scent() { return scent; },
-      get tod() { return tod; }, set tod(v) { tod = v; }, weather, spawnBeast, gainEvo, has, pages, blockedFor, freeSpot, OBJ_INFO, overlapping, crackTile, craterTile, doSlam, doBigPunch, doRushHit, thrown, startGrab, releaseHeld, grabTarget, holdPts };
+      get tod() { return tod; }, set tod(v) { tod = v; }, weather, spawnBeast, gainEvo, has, pages, blockedFor, freeSpot, OBJ_INFO, overlapping, crackTile, craterTile, doSlam, doBigPunch, doRushHit, fires, ignite, oilSplash, thrown, startGrab, releaseHeld, grabTarget, holdPts };
   }
   await loadAssets();
   loading.style.display = 'none';

@@ -260,6 +260,17 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
   qu'il croise et percute arbres, rochers, murs et maisons (`hitObstacleAt`, dégâts `throwDmg` selon
   poids et force) ; léger, il éclate au premier choc ; lourd (≥ 2.5), il traverse la foule et écrase
   ceux sur qui il retombe. Lancé fort, un habitant meurt en retombant ; à l'eau, il coule.
+- **Feu** (`fires`, `ignite`, `updateFires`) : une tuile en feu chauffe, consume son combustible
+  (`fuel` dans `OBJ_INFO` ; bâtiments selon le toit, `BURN_MAT` / `BURN_FUEL` : chaume > grange >
+  tuiles > ardoise, la pierre ne brûle pas) puis retombe. Bien chaude, elle allume ses voisines selon
+  leur inflammabilité (foin, chaume, blé, buissons, arbres ; l'herbe rase à peine). Ça part d'une
+  lanterne brisée ou lancée (`oilSplash`), de la foudre (orage, alter FOUDRE), d'une charge en feu
+  qu'on lance. La pluie l'étouffe, une frappe au sol ou un gros coup le souffle (`blowFires`), les
+  villageois font la chaîne des seaux depuis le puits (état `bucket`, ils sortent même la nuit).
+  Consumé (60 % du combustible) : arbre calciné (`O.BURNT`), objet en cendres, herbe noircie (terre,
+  elle repousse), maison qui s'abîme puis s'effondre (`damageBuilding(.., quiet)` : pas un méfait).
+  Ceux qui touchent les flammes prennent feu (`burnNpc`) : ils courent en hurlant, propagent le feu
+  et peuvent en mourir ; Brainless brûle un peu, l'eau l'éteint. 70 tuiles en feu au plus.
 - **Flair** (N / R / L1) : il lève la tête et renifle (`sniff`), puis une flèche, la distance et
   des filets d'odeur rouges indiquent pendant 12 s le village le plus proche qui a encore des
   vivants (`nearestPrey`).
@@ -285,6 +296,11 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
   (`LEAF_COLS`, `ROCK_COLS`, `WOOD_COLS`, `DUST_COLS`, `WATER_COLS`…).
 - **Traînées** (`streak: true`) : quelques pixels alignés sur la vitesse, pour le vent et
   l'énergie.
+- **Feu** : flammes pixel (`flameBuffer`, 3 tailles x 4 images, `#c8281e … #fff3b0`, contour 0.45)
+  placées selon ce qui brûle (`flamesOf`), ravivées après la teinte de nuit avec un halo orange
+  (`drawFireGlow`) ; fumée `SMOKE_COLS` et braises `EMBER_COLS` qui montent, vapeur `STEAM_COLS`
+  sous les seaux, cendres au sol (`ashBuffer`). Son : « vouf » à l'allumage, sifflement à
+  l'extinction, crépitement et grondement continus selon le feu autour (`fireNear`).
 - **Énergie de charge** : jaune → orange → rouge
   (`#fff3b0/#ffe28a`, `#ffb347/#ff9a3c`, `#ff5a5a/#ff2e63`). Le corps s'illumine en `lighter`.
 - **Ondes de choc / arcs** : pointillés `#fff6d8` qui s'étendent et s'effacent.

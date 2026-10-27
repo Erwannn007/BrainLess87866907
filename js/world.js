@@ -21,6 +21,8 @@ export const O = {
   WHEAT: 49, CABBAGE: 50, LANTERN: 51, PLANKS: 52, WELL_R: 53,
   // remparts des villes fortifiées (1 tuile chacun)
   WALL: 54, WALL_D: 55, WALL_R: 56, WALL_TOWER: 57, WALL_TOWER_D: 58,
+  // ce que laisse le feu
+  BURNT: 59,
 };
 
 // Résistance des bâtiments : points de vie avant d'être abîmé, puis avant de s'effondrer.
@@ -35,32 +37,34 @@ export const BUILDINGS = {
 // Collision (rayon en tuiles) et résistance aux coups. `tall` = hauteur en pixels (une marche = 8) :
 // en sautant, Brainless passe par-dessus quand ses pieds sont plus hauts (saut normal ≈ 23,
 // super saut BOND ≈ 60). `lift` = Brainless peut l'arracher et le lancer (le poids : 1 léger, 3 un arbre).
+// `fuel` = ça brûle (secondes de combustible ; les bâtiments brûlent selon leur toit, voir `BURN_MAT`).
 export const OBJ_INFO = {
-  [O.OAK_S]: { solid: 0.28, tall: 26, hp: 2, tree: true, lift: 2.5 }, [O.OAK_M]: { solid: 0.3, tall: 32, hp: 3, tree: true, lift: 3 },
-  [O.OAK_L]: { solid: 0.34, tall: 38, hp: 4, tree: true, lift: 3 }, [O.PINE]: { solid: 0.28, tall: 30, hp: 3, tree: true, lift: 3 },
-  [O.PINE_L]: { solid: 0.32, tall: 38, hp: 4, tree: true, lift: 3 }, [O.SNOW_PINE]: { solid: 0.3, tall: 31, hp: 3, tree: true, lift: 3 },
-  [O.CHERRY]: { solid: 0.3, tall: 35, hp: 3, tree: true, petals: true, lift: 3 },
-  [O.BUSH]: { solid: 0.3, tall: 11, hp: 1, leafy: true }, [O.BERRY]: { solid: 0.3, tall: 11, hp: 1, leafy: true },
+  [O.OAK_S]: { solid: 0.28, tall: 26, hp: 2, tree: true, lift: 2.5, fuel: 12 }, [O.OAK_M]: { solid: 0.3, tall: 32, hp: 3, tree: true, lift: 3, fuel: 14 },
+  [O.OAK_L]: { solid: 0.34, tall: 38, hp: 4, tree: true, lift: 3, fuel: 16 }, [O.PINE]: { solid: 0.28, tall: 30, hp: 3, tree: true, lift: 3, fuel: 12 },
+  [O.PINE_L]: { solid: 0.32, tall: 38, hp: 4, tree: true, lift: 3, fuel: 14 }, [O.SNOW_PINE]: { solid: 0.3, tall: 31, hp: 3, tree: true, lift: 3, fuel: 8 },
+  [O.CHERRY]: { solid: 0.3, tall: 35, hp: 3, tree: true, petals: true, lift: 3, fuel: 12 },
+  [O.BUSH]: { solid: 0.3, tall: 11, hp: 1, leafy: true, fuel: 5 }, [O.BERRY]: { solid: 0.3, tall: 11, hp: 1, leafy: true, fuel: 5 },
   [O.ROCK]: { solid: 0.3, tall: 8, hp: 2, rock: true, lift: 1.5 }, [O.ROCK_L]: { solid: 0.38, tall: 14, hp: 4, rock: true, lift: 2.5 },
   [O.ROCK_MOSS]: { solid: 0.32, tall: 9, hp: 3, rock: true, lift: 1.5 },
-  [O.STUMP]: { solid: 0.25, tall: 7, hp: 2, wood: true }, [O.LOG]: { solid: 0.3, tall: 7, hp: 2, wood: true, lift: 2 },
-  [O.GRASS]: { hp: 0, small: true }, [O.FLOWER_R]: { hp: 0, small: true }, [O.FLOWER_Y]: { hp: 0, small: true },
-  [O.FLOWER_B]: { hp: 0, small: true }, [O.FLOWER_W]: { hp: 0, small: true }, [O.MUSHROOM]: { hp: 0, small: true },
-  [O.PEBBLES]: { hp: 0, small: true }, [O.LILY]: { hp: 0, small: true }, [O.REEDS]: { hp: 0, small: true },
+  [O.STUMP]: { solid: 0.25, tall: 7, hp: 2, wood: true, fuel: 7 }, [O.LOG]: { solid: 0.3, tall: 7, hp: 2, wood: true, lift: 2, fuel: 9 },
+  [O.GRASS]: { hp: 0, small: true, fuel: 1.5 }, [O.FLOWER_R]: { hp: 0, small: true, fuel: 1.5 }, [O.FLOWER_Y]: { hp: 0, small: true, fuel: 1.5 },
+  [O.FLOWER_B]: { hp: 0, small: true, fuel: 1.5 }, [O.FLOWER_W]: { hp: 0, small: true, fuel: 1.5 }, [O.MUSHROOM]: { hp: 0, small: true },
+  [O.PEBBLES]: { hp: 0, small: true }, [O.LILY]: { hp: 0, small: true }, [O.REEDS]: { hp: 0, small: true, fuel: 1.5 },
   [O.PART_W]: { part: [1, 0] }, [O.PART_N]: { part: [0, 1] }, [O.PART_NW]: { part: [1, 1] },
   // village : `crime` = combien ça énerve les villageois quand on le casse
   [O.WELL]: { solid: 0.36, tall: 22, hp: 5, prop: 'stone', village: true, crime: 1.5, next: O.WELL_R },
   [O.WELL_R]: { solid: 0.3, tall: 11, hp: 3, prop: 'stone', village: true, crime: 0.3, next: O.PEBBLES },
-  [O.STALL]: { solid: 0.34, tall: 18, hp: 2, prop: 'stall', village: true, crime: 1, next: O.PLANKS },
-  [O.FENCE_X]: { solid: 0.22, tall: 11, hp: 1, prop: 'wood', village: true, crime: 0.2, next: O.PLANKS },
-  [O.FENCE_Y]: { solid: 0.22, tall: 11, hp: 1, prop: 'wood', village: true, crime: 0.2, next: O.PLANKS },
-  [O.BARREL]: { solid: 0.24, tall: 10, hp: 1, prop: 'barrel', village: true, crime: 0.3, lift: 1 },
-  [O.CRATE]: { solid: 0.24, tall: 10, hp: 1, prop: 'wood', village: true, crime: 0.3, next: O.PLANKS, lift: 1 },
-  [O.HAY]: { solid: 0.3, tall: 9, hp: 1, prop: 'hay', village: true, crime: 0.2, lift: 1 },
-  [O.LANTERN]: { solid: 0.14, tall: 20, hp: 1, prop: 'lantern', village: true, crime: 0.5, lift: 1 },
-  [O.WHEAT]: { hp: 0, small: true, crop: true, village: true, crime: 0.1 },
-  [O.CABBAGE]: { hp: 0, small: true, crop: true, village: true, crime: 0.1 },
-  [O.PLANKS]: { hp: 0, small: true },
+  [O.STALL]: { solid: 0.34, tall: 18, hp: 2, prop: 'stall', village: true, crime: 1, next: O.PLANKS, fuel: 7 },
+  [O.FENCE_X]: { solid: 0.22, tall: 11, hp: 1, prop: 'wood', village: true, crime: 0.2, next: O.PLANKS, fuel: 4 },
+  [O.FENCE_Y]: { solid: 0.22, tall: 11, hp: 1, prop: 'wood', village: true, crime: 0.2, next: O.PLANKS, fuel: 4 },
+  [O.BARREL]: { solid: 0.24, tall: 10, hp: 1, prop: 'barrel', village: true, crime: 0.3, lift: 1, fuel: 7 },
+  [O.CRATE]: { solid: 0.24, tall: 10, hp: 1, prop: 'wood', village: true, crime: 0.3, next: O.PLANKS, lift: 1, fuel: 6 },
+  [O.HAY]: { solid: 0.3, tall: 9, hp: 1, prop: 'hay', village: true, crime: 0.2, lift: 1, fuel: 7 },
+  [O.LANTERN]: { solid: 0.14, tall: 20, hp: 1, prop: 'lantern', village: true, crime: 0.5, lift: 1, fuel: 3 },
+  [O.WHEAT]: { hp: 0, small: true, crop: true, village: true, crime: 0.1, fuel: 2.5 },
+  [O.CABBAGE]: { hp: 0, small: true, crop: true, village: true, crime: 0.1, fuel: 1.5 },
+  [O.PLANKS]: { hp: 0, small: true, fuel: 4 },
+  [O.BURNT]: { solid: 0.25, tall: 20, hp: 1, wood: true, burnt: true, lift: 2 },
   // `tilebox` : bloque toute la tuile (un mur continu, pas un tronc rond)
   [O.WALL]: { tilebox: true, tall: 28, hp: 8, prop: 'stone', village: true, crime: 1, next: O.WALL_D },
   [O.WALL_D]: { tilebox: true, tall: 20, hp: 8, prop: 'stone', village: true, crime: 1, next: O.WALL_R },

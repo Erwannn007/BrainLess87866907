@@ -13,6 +13,7 @@ const MOSS = ramp('#2b4a23', '#3f6b2e', '#5d8e3c', '#86b356');
 const BUSH = ramp('#1a4424', '#28622f', '#3f8a3a', '#69b14f');
 const STEM = ramp('#a69b86', '#cfc6b2', '#ece6d8', '#ffffff');
 const MUSH = ramp('#6e1414', '#a8221f', '#d9412f', '#f2735a');
+const CHAR = ramp('#120d0c', '#2a201c', '#45362e', '#62503f'); // bois calciné
 const WOOD_TOP = hex('#c9a06a');
 
 export const TREE_W = 60, TREE_H = 78, TREE_OX = 30, TREE_OY = 70;
@@ -121,6 +122,17 @@ export function buildObjectSprites() {
     { a: [-7, 1, 2.6], b: [7, -1, 2.6], r1: 3, ramp: BARK, group: 1,
       tex: (p) => ((p.x % 4 === 0) && p.shade > 0 ? p.shade - 1 : p.shade) },
   ], 34, 20, 17, 15, 1, [0.7, 0.7])];
+  // arbre calciné : tronc noirci, branches nues, écorce craquelée
+  S[O.BURNT] = [bake([
+    { a: [0, 0, 0], b: [0.5, 0, 16], r1: 3, r2: 1.5, ramp: CHAR, group: 1,
+      tex: (p) => (hash(p.x, p.y, 11) < 0.2 ? Math.max(0, p.shade - 1) : (p.x + p.y) % 4 === 0 && p.shade > 1 ? p.shade - 1 : p.shade) },
+    { a: [-2.4, 1, 0.5], r1: 1.8, ramp: CHAR, group: 1 },
+    { a: [2.2, -1, 0.5], r1: 1.7, ramp: CHAR, group: 1 },
+    { a: [0.3, 0, 10], b: [-6, 1, 18], r1: 1.3, r2: 0.5, ramp: CHAR, group: 2 },
+    { a: [0.4, 0, 12], b: [5.5, -1, 20], r1: 1.2, r2: 0.5, ramp: CHAR, group: 3 },
+    { a: [0.5, 0, 15], b: [1.5, 1, 23], r1: 1, r2: 0.45, ramp: CHAR, group: 4 },
+    { a: [-3, 0.6, 15], b: [-5.5, 0, 18.5], r1: 0.7, r2: 0.4, ramp: CHAR, group: 5 },
+  ], 52, 56, 26, 49, 1.4)];
   S[O.MUSHROOM] = [bake([
     { a: [0, 0, 0], b: [0, 0, 3], r1: 1.2, ramp: STEM, group: 1 },
     { a: [0, 0, 4], r1: 2.8, ramp: MUSH, group: 2, tex: (p) => (hash(p.x, p.y, 7) < 0.18 && p.ny < 0.3 ? STEM[3] : p.shade) },
@@ -408,6 +420,47 @@ export function bloodBuffer(rw, seed) {
     b.set(Math.round(w / 2 + Math.cos(a) * r), Math.round(h / 2 + Math.sin(a) * r * 0.5), B[1]);
   }
   return Object.assign(b, { ox: w / 2, oy: h / 2 });
+}
+
+// Cendres au sol après un feu : flaque grise irrégulière, quelques braises.
+export function ashBuffer(rw, seed) {
+  const A = ramp('#1a1716', '#2c2826', '#3e3935', '#57514a');
+  const w = rw * 2 + 8, h = rw + 6;
+  const b = makeBuffer(w, h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const dx = (x + 0.5 - w / 2) / rw, dy = (y + 0.5 - h / 2) / (rw / 2);
+    const d = dx * dx + dy * dy, edge = 0.65 + hash(x >> 1, y, seed) * 0.5;
+    if (d > edge) continue;
+    const r = hash(x, y, seed + 5);
+    if (d > edge - 0.3 && r < 0.4) continue; // bord poudreux
+    b.set(x, y, r > 0.985 ? hex('#c8401c') : A[r > 0.9 ? 3 : r < 0.35 ? 0 : r < 0.7 ? 1 : 2]);
+  }
+  return Object.assign(b, { ox: w / 2, oy: h / 2 });
+}
+
+// Flamme : langue de feu pixel, du cœur blanc-jaune aux bords rouges, qui ondule sur 4 images.
+// size 0 (herbe), 1 (objet, habitant), 2 (arbre, toit).
+const FIRE = ['#c8281e', '#ff5a2a', '#ff9a3c', '#ffd23f', '#fff3b0'].map(hex);
+export function flameBuffer(size, frame) {
+  const W = [7, 11, 15][size], H = [10, 16, 23][size];
+  const b = makeBuffer(W + 4, H + 5);
+  const ph = frame / 4 * Math.PI * 2;
+  for (let y = 0; y < H; y++) {
+    const u = (H - 1 - y) / (H - 1); // 0 au pied, 1 à la pointe
+    const hw = W / 2 * (1 - Math.pow(u, 1.3)) * (0.88 + 0.12 * Math.sin(ph + u * 5));
+    const cx = W / 2 + 2 + Math.sin(u * 3.2 + ph) * u * W * 0.2;
+    for (let x = 0; x < W + 4; x++) {
+      const dx = Math.abs(x + 0.5 - cx) / Math.max(0.6, hw);
+      if (dx > 1) continue;
+      if (u > 0.5 && hash(x, y + frame * 13, size) < (u - 0.5) * 1.5) continue; // la pointe se déchire
+      const heat = (1 - dx) * (1.05 - u * 0.85) + (hash(x, y, frame + 7) - 0.5) * 0.18;
+      b.set(x, y + 3, FIRE[heat > 0.72 ? 4 : heat > 0.52 ? 3 : heat > 0.34 ? 2 : heat > 0.16 ? 1 : 0]);
+    }
+  }
+  // étincelles qui s'échappent au-dessus
+  for (let i = 0; i < 1 + size; i++) b.set(2 + Math.floor(hash(i, frame, size + 3) * W), Math.floor(hash(frame, i, size + 9) * 4), FIRE[2 + (i & 1)]);
+  outlineBuffer(b, 0.45);
+  return Object.assign(b, { ox: (W >> 1) + 2, oy: H + 3 });
 }
 
 // Lignes de bord : 0 haut-gauche, 1 haut-droite, 2 bas-droite, 3 bas-gauche.
