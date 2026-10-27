@@ -111,23 +111,27 @@ export function poseFor(anim, t) {
     return p;
   }
   if (anim === 'jog') {
-    // Course debout : buste penché, grandes foulées, genoux hauts, temps de suspension ;
-    // les longs bras pompent loin devant et derrière, la gueule entrouverte.
+    // Vraie course : le buste bascule franchement en avant (on le voit pencher), les bras pliés
+    // à angle droit pompent devant la poitrine (coude derrière quand le poing est devant),
+    // genoux hauts, talon qui remonte derrière, temps de suspension, tête relevée vers l'avant.
     const ph = t * TAU, s = Math.sin(ph), c = Math.cos(ph);
     const p = basePose();
-    // le pied se lève juste après la poussée (talon qui remonte derrière), puis le genou passe devant
-    const lift = (o) => Math.max(0, Math.cos(ph + o - 0.7)) * 6.5;
-    p.fL = [-4.3, s * 9, lift(0)];
-    p.fR = [4.3, -s * 9, lift(Math.PI)];
-    p.hL = [-10.5, 3 - s * 11, 18 + Math.max(0, -s) * 8];
-    p.hR = [10.5, 3 + s * 11, 18 + Math.max(0, s) * 8];
-    p.bob = Math.abs(s) * 1.6 - 0.6; // plus haut entre deux appuis
-    p.crouch = 1.8;
-    p.lean = 4.5;
-    p.twist = s * 0.18;
-    p.hipTwist = -s * 0.12;
-    p.nod = c * 0.6;
-    p.jaw = 0.6;
+    const lift = (o) => Math.max(0, Math.cos(ph + o - 0.7)) * 8;
+    p.fL = [-4.3, s * 10, lift(0)];
+    p.fR = [4.3, -s * 10, lift(Math.PI)];
+    // poings à hauteur de poitrine : devant et haut, ou ramenés derrière la hanche
+    const fist = (k) => [7, 2 + k * 8, 31 + k * 5];
+    p.hL = fist(-s); p.hL[0] = -7.5;
+    p.hR = fist(s);
+    p.pitch = 0.38; // buste penché en avant
+    p.headUp = 2.5; // il regarde devant lui, pas ses pieds
+    p.bob = Math.abs(s) * 1.8 - 0.8; // plus haut entre deux appuis
+    p.crouch = 2.5;
+    p.lean = 3;
+    p.twist = s * 0.22;
+    p.hipTwist = -s * 0.14;
+    p.nod = c * 0.5;
+    p.jaw = 0.8;
     return p;
   }
   if (anim === 'stride') return blend(poseFor('walk', t), poseFor('jog', t), 0.5);
