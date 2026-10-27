@@ -160,7 +160,7 @@ function bakeHoldPts(M) {
 const lookKey = (M) => Object.keys(M).sort().join(',');
 // Après une mutation visible (ou au chargement d'un monde) : on recuit Brainless, par petits bouts.
 async function rebakeNomu() {
-  const M = looks(player.muts), key = lookKey(M);
+  const M = shownMuts(), key = lookKey(M);
   if (key === nomuKey || baking) return;
   baking = { p: 0 };
   resetAtlas(atlasNomu);
@@ -172,7 +172,7 @@ async function rebakeNomu() {
   bakeHoldPts(M);
   nomuKey = key;
   baking = null;
-  if (lookKey(looks(player.muts)) !== key) rebakeNomu(); // muté encore pendant la cuisson
+  if (lookKey(shownMuts()) !== key) rebakeNomu(); // muté encore pendant la cuisson
 }
 
 async function loadAssets() {
@@ -289,7 +289,7 @@ const player = { x: 0, y: 0, z: 0, dir: 2, anim: 'idle', t: 0, spd: 0, phase: 0,
   burnT: 0, // en feu
   // mutations choisies, alters (niveau, équipés : 3 emplacements), choix de mutation en attente,
   // inventaire (36 cases, les 9 premières = la barre), case choisie, nid où il se réveille
-  muts: [], alterLv: {}, equip: [], pendingLv: 0, inv: Array(36).fill(null), sel: 0, spawn: null, meatAcc: 0, sleep: null, spikeT: 0,
+  muts: [], mutOff: [], lookOff: [], alterLv: {}, equip: [], pendingLv: 0, inv: Array(36).fill(null), sel: 0, spawn: null, meatAcc: 0, sleep: null, spikeT: 0,
   held: null, grabTarget: null, grabArm: false, grabHoldT: 0, aiming: false, throwPow: 0, throwPower: 0 };
 const npcs = []; // villageois et chevaliers autour de Brainless
 const vstate = new Map(); // id du village -> { populated, anger, alarm }
@@ -352,7 +352,7 @@ function load(s) {
       tod = s.tod ?? tod;
       player.x = s.x; player.y = s.y;
       player.hunger = s.hunger ?? 100; player.xp = s.xp ?? 0; player.level = s.level ?? 1; player.alters = s.alters || [];
-      player.muts = s.muts || []; player.alterLv = s.alterLv || {}; player.equip = s.equip || player.alters.slice(0, 3);
+      player.muts = s.muts || []; player.mutOff = s.mutOff || []; player.lookOff = s.lookOff || []; player.alterLv = s.alterLv || {}; player.equip = s.equip || player.alters.slice(0, 3);
       player.pendingLv = s.pendingLv || 0; player.spawn = s.spawn || null; player.meatAcc = s.meatAcc || 0;
       if (Array.isArray(s.inv)) player.inv = Array.from({ length: INV }, (_, i) => (s.inv[i] && ITEMS[s.inv[i].id] ? s.inv[i] : null));
       world.chests = new Map(s.chests || []);
@@ -368,7 +368,7 @@ function save() {
   if (mode !== 'play' || !current) return;
   saveWorldData(current.id, {
     x: player.x, y: player.y, hp: player.hp, hunger: player.hunger, xp: player.xp, level: player.level, alters: player.alters, tod,
-    muts: player.muts, alterLv: player.alterLv, equip: player.equip, pendingLv: player.pendingLv, spawn: player.spawn, meatAcc: player.meatAcc,
+    muts: player.muts, mutOff: player.mutOff, lookOff: player.lookOff, alterLv: player.alterLv, equip: player.equip, pendingLv: player.pendingLv, spawn: player.spawn, meatAcc: player.meatAcc,
     inv: player.inv, chests: [...world.chests], stats, mods: [...world.mods], terr: [...world.terr], wear: [...world.wear], deaths: [...world.deaths],
   });
 }
@@ -1736,7 +1736,9 @@ const ALTERS = {
 // un alter compte s'il est équipé (3 emplacements) ; dévorer un autre héros du même type le monte (niveau 1 à 3)
 const has = (a) => player.equip.includes(a);
 const alterLv = (a) => (has(a) ? player.alterLv[a] || 1 : 0);
-const mut = (id) => player.muts.includes(id);
+// une mutation acquise peut être désactivée (mutOff) ; active, son apparence peut être cachée (lookOff)
+const mut = (id) => player.muts.includes(id) && !player.mutOff.includes(id);
+const shownMuts = () => looks(player.muts.filter((id) => mut(id) && !player.lookOff.includes(id)));
 const maxHp = () => 100 + 15 * (player.level - 1) + (mut('mass') ? 40 : 0);
 const strength = () => (1 + 0.12 * (player.level - 1)) * (has('iron') ? 1.3 + 0.2 * alterLv('iron') : 1) * (mut('arms') ? 1.25 : 1) * (mut('claws') ? 1.15 : 1);
 const fighter = (n) => n.kind === 'knight' || n.kind === 'hero';
@@ -3244,7 +3246,7 @@ function drawBagTab(px, py) {
   ink('NIVEAU ' + player.level, x, py + 16);
   ink('VIE ' + Math.round(player.hp) + '/' + maxHp(), x, py + 23);
   ink('FORCE X' + strength().toFixed(1), x, py + 30);
-  ink('MUTATIONS ' + player.muts.length + '/' + Object.keys(MUTATIONS).length, x, py + 37);
+  ink('MUTATIONS ' + player.muts.filter((id) => mut(id)).length + '/' + Object.keys(MUTATIONS).length, x, py + 37);
   ink('ALTERS VOLES', x, py + 47);
   for (let i = 0; i < 5; i++) slotUI('bank', i, x + i * 17 - 1, py + 54);
   drawPlayerInv(px, py, py + 75);
@@ -3309,9 +3311,17 @@ function drawCraftTab(px, py) {
 
 // Onglet MUTATIONS : comme l'écran des progrès de Minecraft, des cases reliées entre elles.
 function mutState(id) {
-  if (mut(id)) return 'own';
+  if (player.muts.includes(id)) return player.mutOff.includes(id) ? 'off' : 'own';
   const r = MUTATIONS[id].req;
-  return !r || r.some((q) => mut(q)) ? 'open' : 'lock';
+  return !r || r.some((q) => player.muts.includes(q)) ? 'open' : 'lock'; // désactivée, elle compte quand même pour l'arbre
+}
+// Activer / désactiver une mutation acquise, ou montrer / cacher son apparence.
+function toggleMut(id, look) {
+  const L = look ? player.lookOff : player.mutOff, i = L.indexOf(id);
+  if (i >= 0) L.splice(i, 1); else L.push(id);
+  player.hp = Math.min(player.hp, maxHp()); // MASSE retirée : moins de vie
+  sfx.mutate();
+  if (MUTATIONS[id].look) rebakeNomu();
 }
 function mutPos(px, py) {
   const pos = {}, cw = (PW - 10) / 3;
@@ -3328,7 +3338,7 @@ function drawTreeTab(px, py) {
   Object.keys(BRANCHES).forEach((b, c) => { const B = BRANCHES[b]; textC(B.name, px + 5 + cw * c + cw / 2, py + 6, B.dark, null); });
   // les liens : de chaque prérequis vers la mutation qu'il débloque
   for (const id in MUTATIONS) for (const q of MUTATIONS[id].req || []) {
-    const [x1, y1] = pos[q], [x2, y2] = pos[id], on = mut(q);
+    const [x1, y1] = pos[q], [x2, y2] = pos[id], on = player.muts.includes(q);
     ctx.fillStyle = on ? BRANCHES[MUTATIONS[id].branch].dark : '#8b8b8b';
     const my = y1 + 22;
     ctx.fillRect(x1 + 9, y1 + 18, 1, my - y1 - 18);
@@ -3338,10 +3348,12 @@ function drawTreeTab(px, py) {
   ctx.imageSmoothingEnabled = false;
   for (const id in MUTATIONS) {
     const [x, y] = pos[id], st = mutState(id), B = BRANCHES[MUTATIONS[id].branch], sel = U.mut === id;
-    mcSlot(x, y, 18, st === 'own' ? B.col : st === 'open' ? '#b8b8b8' : '#6a6a6a');
-    ctx.globalAlpha = st === 'lock' ? 0.35 : 1;
+    mcSlot(x, y, 18, st === 'own' ? B.col : st === 'off' ? B.dark : st === 'open' ? '#b8b8b8' : '#6a6a6a');
+    ctx.globalAlpha = st === 'lock' ? 0.35 : st === 'off' ? 0.55 : 1;
     ctx.drawImage(icons['m:' + id], x + 3, y + 3);
     ctx.globalAlpha = 1;
+    if (st === 'off') { ctx.fillStyle = '#ff5a5e'; for (let i = 0; i < 5; i++) { ctx.fillRect(x + 12 + i, y + 2 + i, 1, 1); ctx.fillRect(x + 16 - i, y + 2 + i, 1, 1); } } // désactivée
+    else if (st === 'own' && MUTATIONS[id].look && player.lookOff.includes(id)) { ctx.fillStyle = '#3f3f3f'; ctx.fillRect(x + 12, y + 3, 4, 1); ctx.fillRect(x + 13, y + 2, 2, 3); } // apparence cachée
     if (sel) { ctx.fillStyle = '#ffffff'; ctx.fillRect(x - 1, y - 1, 20, 1); ctx.fillRect(x - 1, y + 18, 20, 1); ctx.fillRect(x - 1, y, 1, 18); ctx.fillRect(x + 18, y, 1, 18); }
     hit(x, y, 18, 18, () => { U.mut = id; sfx.ui(); });
   }
@@ -3350,10 +3362,16 @@ function drawTreeTab(px, py) {
   ctx.fillStyle = '#000000'; ctx.fillRect(px + 6, y - 2, PW - 12, PH - (y - py) - 4);
   ctx.fillStyle = '#1a1a24'; ctx.fillRect(px + 7, y - 1, PW - 14, PH - (y - py) - 6);
   drawText(ctx, M.name, px + 10, y + 2, BRANCHES[M.branch].col);
-  drawText(ctx, st === 'own' ? 'ACQUISE' : st === 'open' ? 'DISPONIBLE' : 'DEMANDE ' + M.req.map((q) => MUTATIONS[q].name).join(' OU '), px + 10, y + 10, st === 'own' ? '#7ee08a' : st === 'open' ? '#8fb4ff' : '#ff7a7a');
-  M.desc.forEach((d, i) => drawText(ctx, d, px + 10, y + 19 + i * 7, '#aaaaaa'));
-  drawText(ctx, M.look ? 'SE VOIT SUR LUI' : 'INVISIBLE', px + 10, y + 35, M.look ? '#c9a0ff' : '#6a6a6a');
-  if (player.pendingLv > 0) mcButton(px + PW - 76, y + 31, 68, 13, 'CHOISIR (' + player.pendingLv + ')', true, () => { invUI = null; openMutChoice(); });
+  drawText(ctx, st === 'own' ? 'ACQUISE' : st === 'off' ? 'ACQUISE - DESACTIVEE' : st === 'open' ? 'DISPONIBLE' : 'DEMANDE ' + M.req.map((q) => MUTATIONS[q].name).join(' OU '), px + 10, y + 10, st === 'own' ? '#7ee08a' : st === 'off' ? '#ffb347' : st === 'open' ? '#8fb4ff' : '#ff7a7a');
+  M.desc.forEach((d, i) => drawText(ctx, d, px + 10, y + 18 + i * 7, '#aaaaaa'));
+  if (player.pendingLv > 0) mcButton(px + PW - 76, y + 18, 68, 13, 'CHOISIR (' + player.pendingLv + ')', true, () => { invUI = null; openMutChoice(); });
+  if (st === 'own' || st === 'off') {
+    // activer / désactiver ; et, active et visible, montrer ou cacher son apparence
+    const on = st === 'own', id = U.mut;
+    mcButton(px + 8, y + 40, 66, 14, on ? 'ACTIVE : OUI' : 'ACTIVE : NON', true, () => toggleMut(id, false));
+    if (M.look) mcButton(px + 77, y + 40, 91, 14, player.lookOff.includes(id) ? 'APPARENCE : NON' : 'APPARENCE : OUI', on, () => toggleMut(id, true));
+    else drawText(ctx, 'INVISIBLE', px + 80, y + 44, '#6a6a6a');
+  } else drawText(ctx, M.look ? 'SE VOIT SUR LUI' : 'INVISIBLE', px + 10, y + 44, M.look ? '#c9a0ff' : '#6a6a6a');
 }
 
 // --- commandes des écrans

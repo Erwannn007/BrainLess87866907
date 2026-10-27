@@ -135,6 +135,9 @@ rouges sont **peu nombreuses mais épaisses** (épaule, dos, un avant-bras).
   `nomuParts(P, M)` lit le même nom (bras de titan, griffes d'acier, poings-masses, dos d'épines,
   pattes rayées, bec béant, yeux rouges `EYE_RED`, queue, carapace d'os, gros cerveau, peau cramoisie
   `SKIN_FIRE`, masse = taille x1.13 `sizeOf`). Les effets de jeu sont lus par `mut(id)` dans `main.js`.
+  Dans l'onglet MUTATIONS, une mutation acquise peut être désactivée (`player.mutOff` : plus d'effet ni
+  d'apparence, elle compte toujours pour l'arbre) et, active, son apparence cachée (`player.lookOff` :
+  l'effet reste). `mut(id)` = acquise et active ; Brainless est cuit avec `shownMuts()`.
 - **Alters** : dévorés = possédés (`player.alters`), 3 emplacements équipés (`player.equip`, onglet
   ALTERS du sac), niveau 1 à 3 en dévorant un autre héros du même type (`alterLv`).
 
