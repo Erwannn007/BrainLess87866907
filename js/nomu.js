@@ -111,27 +111,42 @@ export function poseFor(anim, t) {
     return p;
   }
   if (anim === 'jog') {
-    // Vraie course : le buste bascule franchement en avant (on le voit pencher), les bras pliés
-    // à angle droit pompent devant la poitrine (coude derrière quand le poing est devant),
-    // genoux hauts, talon qui remonte derrière, temps de suspension, tête relevée vers l'avant.
-    const ph = t * TAU, s = Math.sin(ph), c = Math.cos(ph);
+    // Course de bête, organique : pas de sinusoïdes synchronisées, mais la mécanique d'une course.
+    // Chaque pied : un appui (il pousse le sol vers l'arrière) puis un retour en l'air, avec un
+    // temps de suspension. Le poids écrase le corps à chaque réception ; les bras, longs et souples,
+    // suivent avec un temps de retard et balancent en arc vers l'intérieur ; la tête encaisse le
+    // choc après le corps ; la gueule souffle au rythme des appuis. Pied gauche posé à t = 0.25
+    // (comme la marche : le grand pas `stride` mélange les deux sans décalage).
+    const STANCE = 0.42;
+    const leg = (u) => {
+      u = ((u % 1) + 1) % 1;
+      if (u < STANCE) { const k = u / STANCE; return { f: 9.5 - 19 * k, z: 0, press: Math.sin(Math.PI * k) }; }
+      const v = (u - STANCE) / (1 - STANCE);
+      return { f: -9.5 + 19 * smooth(v), z: 7.5 * Math.sin(Math.PI * Math.pow(v, 0.75)), press: 0 };
+    };
+    const uL = t - 0.25, uR = t - 0.75;
+    const L = leg(uL), R = leg(uR);
+    const press = L.press + R.press; // 0 en suspension, 1 au milieu d'un appui
+    const lag = leg(t - 0.33).press + leg(t - 0.83).press; // le même choc, encaissé un peu plus tard (tête)
     const p = basePose();
-    const lift = (o) => Math.max(0, Math.cos(ph + o - 0.7)) * 8;
-    p.fL = [-4.3, s * 10, lift(0)];
-    p.fR = [4.3, -s * 10, lift(Math.PI)];
-    // poings à hauteur de poitrine : devant et haut, ou ramenés derrière la hanche
-    const fist = (k) => [7, 2 + k * 8, 31 + k * 5];
-    p.hL = fist(-s); p.hL[0] = -7.5;
-    p.hR = fist(s);
-    p.pitch = 0.38; // buste penché en avant
-    p.headUp = 2.5; // il regarde devant lui, pas ses pieds
-    p.bob = Math.abs(s) * 1.8 - 0.8; // plus haut entre deux appuis
-    p.crouch = 2.5;
+    p.fL = [-4.4, L.f, L.z];
+    p.fR = [4.4, R.f, R.z];
+    // bras : l'opposé de la jambe, avec retard ; aller rapide, retour plus mou
+    const swing = (u, amp) => { const c = Math.cos(TAU * (u - 0.06)); return Math.sign(c) * Math.pow(Math.abs(c), 0.7) * amp; };
+    const aL = swing(uL + 0.5, 1), aR = swing(uR + 0.5, 0.88);
+    p.hL = [-(9.5 - aL * 2.5), 3 + aL * 9, 22 + Math.max(0, aL) * 7 - Math.max(0, -aL) * 2];
+    p.hR = [9.8 - aR * 2.5, 3 + aR * 9, 23 + Math.max(0, aR) * 7 - Math.max(0, -aR) * 2];
+    p.twist = -(aL - aR) * 0.1; // l'épaule suit le bras qui part devant
+    p.hipTwist = -(L.f - R.f) / 19 * 0.13; // la hanche suit la jambe qui part devant
+    p.bob = 0.9 - press * 2.2;
+    p.crouch = 2 + press * 1.2;
+    p.pitch = 0.22 + press * 0.05;
     p.lean = 3;
-    p.twist = s * 0.22;
-    p.hipTwist = -s * 0.14;
-    p.nod = c * 0.5;
-    p.jaw = 0.8;
+    p.headUp = 1.5;
+    p.nod = -lag * 0.9;
+    p.breathe = press * 0.8;
+    p.jaw = 0.45 + lag * 0.45;
+    p.curl = 0.4;
     return p;
   }
   if (anim === 'stride') return blend(poseFor('walk', t), poseFor('jog', t), 0.5);
